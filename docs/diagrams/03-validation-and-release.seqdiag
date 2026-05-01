@@ -1,0 +1,47 @@
+title Validation and release mapping after mutation
+
+participantspacing equal
+autonumber 1
+
+control "Agent\nArchitect" as AA
+entity Artifact
+control "Structure\nValidator" as Struct
+control "Process\nValidator" as Process
+control "Response\nAssessor" as Assess
+boundary "regression-protocol\nSKILL" as Regression
+boundary "epistemic-test-writing\nSKILL" as TestSkill
+control "Release\nGate" as Release
+actor User
+
+AA->Artifact: re-read after claimed mutation
+Artifact-->AA: verified file state or missing evidence
+AA->Struct: validate 0-12 structure\nand frontmatter
+Struct-->AA: PASS or FAIL
+AA->Process: validate required gates\nand evidence chain
+Process-->AA: PASS or FAIL
+AA->Regression: define repeated runs\nand relevant boundary checks
+Regression-->AA: regression expectations
+AA->TestSkill: keep probes epistemic\nnot prompt-leading
+TestSkill-->AA: test-writing constraints
+loop at least two varied behavioral runs
+  AA->Assess: run behavioral probe\nand assess response
+  Assess-->AA: run evidence
+end
+AA->Release: combine verified evidence
+Release-->AA: mapped release state
+
+alt mutation not verified
+  note over Release: BLOCKED
+else structure or process FAIL
+  note over Release: BLOCKED
+else repeated validation evidence missing
+  note over Release: DEGRADED
+else behavioral FAIL
+  note over Release: BLOCKED
+else assessor INCONCLUSIVE but no hard fail
+  note over Release: DEGRADED
+else all required evidence PASS
+  note over Release: READY
+end
+
+AA-->User: release state with evidence\nnot just a narrative claim

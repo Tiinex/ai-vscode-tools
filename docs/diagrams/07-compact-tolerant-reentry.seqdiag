@@ -1,0 +1,38 @@
+title Compact-tolerant re-entry before risky main-thread work
+
+participantspacing equal
+
+actor User
+control "Agent\nArchitect" as AA
+entity "Current\nMessage" as Msg
+entity "Support\nArtifacts" as Support
+control "Read-Only\nHelper" as Helper
+control Mutator
+
+note over AA: Treat felt continuity as helpful but non-authoritative.
+note over AA: Before risky work, re-ground from artifacts.
+
+User->AA: request after time, compaction, or uncertain continuity
+AA->Msg: inspect latest visible request
+Msg-->AA: current intent
+
+alt task remains read-only
+  AA->Helper: inspect only what is needed
+  Helper->Support: read relevant support artifacts
+  Support-->Helper: artifact-backed state
+  Helper-->AA: bounded evidence
+  AA-->User: read-only answer with provenance
+else task may mutate or rely on old context
+  AA->Helper: re-ground from support artifacts
+  Helper->Support: read CO-DESIGNER, ROADMAP, and target inputs as needed
+  Support-->Helper: artifact-backed state
+  Helper-->AA: recovered working state
+
+  alt artifact-backed state is sufficient
+    AA->Mutator: mutate minimally
+    Mutator-->AA: read-after-write evidence
+    AA-->User: verified outcome only
+  else state remains missing or conflicting
+    AA-->User: stop, downgrade confidence, or request narrower input
+  end
+end

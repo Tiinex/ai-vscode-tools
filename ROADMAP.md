@@ -1,0 +1,234 @@
+# ROADMAP.md
+
+Scope note:
+- this file is a support artifact for active hardening priorities and target posture
+- it is not, by itself, proof that every described runtime family is currently live in the checkout
+- where historical runtime or skill families still matter, they should be preserved as lineage or target-model material rather than silently treated as the current normative reading surface
+
+## Runtime Principles
+- Artifacts are the only trusted system state.
+- Conversation can explain intent but cannot replace artifact state.
+- `.agent.md` must remain operationally self-sufficient.
+- Skills are bundled support, not runtime identity.
+- During the current Local-chat hardening phase, prefer the lane that gives the strongest evidence for the question under test, not the lane that appears cleanest on paper.
+- Keep `native-local`, `deterministic-state-hack`, and `transport-workaround` as distinct lanes with different evidentiary strength.
+- Different tool or chat surfaces must be treated as distinct until an exact bridge is evidenced; Local, Copilot CLI, the repo CLI harness, and MCP are not interchangeable by default.
+- Treat VS Code chat reference-inspection surfaces such as `workbench.action.chat.inspectChatModelReferences` as manual auxiliary observability only until exact evidence shows that they cover the same proof needs as the repo's persisted session and transcript inspection model.
+- Copilot CLI must not be treated as a baseline prerequisite for normal Agent Architect development or approval; keep it as an optional advanced surface unless a narrower question explicitly requires it.
+- Normal runtime-agent artifact development should stay on non-terminal repo-local tooling when the Local plus extension-host route already covers the task; terminal use remains scoped to build, test, package, dependency, and comparable process-control work.
+- Prefer proving one concrete reliability workflow end-to-end over widening feature count; architecture only earns its keep when it produces a clearer and more trustworthy user outcome.
+- Temporary headless enforcement helpers are acceptable only as support for reaching stronger same-surface proof faster; they do not by themselves satisfy the desired end-user proof picture.
+- When a temporary headless enforcement helper no longer changes verdict quality because repeated same-surface proof is consistent without it, remove it instead of normalizing it into the product story.
+- `ROADMAP.md` is development support only, not a runtime dependency.
+- Todo state is ephemeral UX only and is never proof of completed work.
+- No file may be reported as created or updated until artifact state is verified.
+- Support artifacts should be kept aligned with each other when they describe the same surface; freshness without cross-checking is not enough.
+- Stale support artifacts must not be accepted as current proof support without re-grounding them against the current runtime artifact and exercised surface.
+- Silent compact or reset should be treated as possible; lack of self-detected reset is not evidence of continuity.
+
+## Build Policy
+- If classification is `CREATE`, target is known, writable scope is correct, and minimum build context is sufficient, create the first `.agent.md` immediately.
+- Do not block initial creation on refinement questions that can wait for a later iteration.
+- Ask questions only when ambiguity blocks safe initial artifact creation.
+- For autonomous benchmark runs, prefer an explicit blocker over `vscode_askQuestions` or another manual response step unless blocker handling is itself the behavior under test.
+
+## Companion Policy
+Allowed:
+- `.github/agents/companions/<agent>.agent.design.md`
+- `.github/agents/companions/<agent>.agent.test.md`
+- `.github/agents/companions/<agent>.agent.testdata.md`
+
+Rules:
+- no frontmatter
+- fixed format only
+- companions are support-only development artifacts, not runtime requirements for production use
+- runtime `.agent.md` artifacts must remain self-sufficient without companions
+- companions should remain removable when an agent is forked for another context or purpose
+- keep companions out of the runtime agent discovery surface so VS Code and repo tooling do not confuse them with runnable agent artifacts
+- do not create companions for every helper or sub-role by default; if the role is small and the parent role's proof already covers its intended behavior, prefer no companion
+- create helper or sub-role companions only when a specific design boundary, proof boundary, or maintenance need cannot be kept explicit in the parent-role artifacts
+
+Exception threshold for helper or sub-role companions:
+- the runtime artifact already exists
+- the exact gap is named explicitly
+- parent-role artifacts can no longer keep that gap honest without becoming misleading, too diffuse, or too costly to maintain
+- keep test companions goal-first and compact: prove the target outcome first, then add regression only after the goal has been demonstrated
+- avoid growing the main test companion through many micro-tests; keep detailed variants in benchmark or testdata artifacts when they become necessary
+- do not let companion work block initial runtime artifact creation
+
+## Known Failure Modes
+- planner drift
+- todo replaces artifact work
+- broad skill triggering
+- maintainer-context docs that are locally accurate but still fail a tough minimal-knowledge reading because practical usage, first test path, or repo identity remains underexplained
+- runtime artifacts polluted with run-specific support evidence that should have stayed in returned payloads or support-only artifact families
+- ad hoc companion evidence or validation files created outside the allowed companion formats during CREATE evidence preservation
+- weak local header-presence checks self-certifying noncanonical CREATE artifacts as structure `PASS`
+- directory-scoped or plural target-brief requests that should block can still regress into guessed CREATE mutation if target-identity rules are not explicit enough
+- fresh-reader validation passes that silently inherit unrelated skills or instructions and thereby blur whether the reading came from the intended support surface
+- false progress claims
+- support documentation changes that are cross-edited but not independently re-read by a fresh agent
+- stale design, test, or testdata support that is reused after reset or later artifact edits without re-grounding
+- tests that enforce behavior instead of evaluating it
+- language drift from English artifacts into Swedish chat
+- invalid orchestration tests caused by running Agent Architect as a subagent in a no-nested-subagent environment
+- mistaking agent-file plausibility for verified runtime behavior
+- failing to distinguish between parked repo-owned historical agent packs and the still-supported product mechanism of workspace runtime agent files under `.github/agents/*.agent.md`
+- treating a live chat create/send tool call as proof of selected agent or model when the returned evidence does not preserve that selection
+- assuming subagents are clean-room isolated without controlling editor, memory, and tool-visible environment state
+- relying on the built-in default agent where an explicit bounded agent is needed for safety, reproducibility, or cost control
+- assuming an external or system-provided agent will keep the same hidden prompt, model, cost surface, or tool semantics over time
+
+## Progress
+- [x] Task: Preserve co-designer context
+	- [x] Add persistent co-designer support artifact
+	- [x] Link co-designer context from README
+- [x] Task: Run bounded benchmark pass
+	- [x] Probe CREATE path through Agent Architect
+	- [x] Probe blocker behavior with ambiguous target input
+	- [x] Probe Recovery prepare and validate flows
+	- [x] Probe release-gate mapping from `INCONCLUSIVE`
+	- [x] Probe structure validation on generated and malformed artifacts
+	- [x] Clean up all benchmark-created test artifacts
+- [ ] Task: Repair highest-impact enforcement gaps
+	- [x] Enforce support-role usage or verifiable equivalent evidence in Agent Architect CREATE flow
+	- [x] Tighten structure-validator so off-contract runtime artifacts fail on missing 0-12 sections and schema drift
+	- [x] Tighten process-validator so missing gates and missing repeated validation cannot PASS
+	- [x] Regress companion-path exclusion so support-only companion files cannot be resolved as runnable runtime agents in stabilized mode resolution
+	- [x] Standardize companion-decision evidence fields and preferred placement so helper or sub-role companion exceptions are auditable
+	- [x] Add headless CREATE evidence enforcement and regression so process validation now fails embedded runtime support evidence, unsupported companion artifact shapes, and weak local structure PASS claims
+	  - headless harness PASS does not substitute for a fresh constrained-subagent same-surface rerun; that rerun is still required before upgrading the live-surface claim
+	- [x] Re-run the constrained-subagent CREATE proof on a fresh clean target and confirm same-surface behavior now aligns with the stronger headless enforcement
+	  - a sixth rerun aligned cleanly on both CREATE and boundary behavior for `artifact-inline-code-checker`
+	  - a seventh positive rerun also stayed clean for `artifact-emphasis-checker`, but the paired ambiguous boundary prompt regressed once into guessed mutation of `artifact-list-item-checker`
+	  - the contract now contains an explicit blocker for directory-scoped or plural brief requests, and the same boundary prompt returned clarification without mutation on the immediate repair check
+	  - an eighth rerun on `artifact-link-checker` then produced a clean full pack after that repair: canonical runtime artifact, no companion spill, explicit structure `PASS`, and clarification-without-mutation on the same ambiguous boundary prompt
+	  - a ninth rerun on `artifact-table-cell-checker` regressed back to a noncanonical CREATE artifact with unsupported frontmatter and heading drift even though the boundary run still blocked honestly
+	  - a tenth rerun on `artifact-code-comment-checker` regressed similarly, which exposed that the existing contract still left too much room for noncanonical frontmatter and near-miss section titles
+	  - the contract was then tightened again to name the exact allowed runtime frontmatter fields, the exact canonical heading list, and the rule that self-detected off-contract CREATE output must not remain as accepted runtime state
+	  - an eleventh rerun on `artifact-badge-checker` then returned to a clean full pack: canonical runtime artifact, no companion spill, explicit structure `PASS`, and clarification-without-mutation on the same ambiguous boundary prompt
+	  - a twelfth rerun on `artifact-image-alt-checker` then repeated that clean result on a second fresh post-fix target, which materially improves reviewer confidence that the bounded PoC is not just a one-off recovery
+	  - a thirteenth rerun on `artifact-table-cell-checker` then returned cleanly on one of the two briefs that had regressed immediately before the latest contract tightening: canonical runtime artifact, no companion spill, explicit structure `PASS`, and honest ambiguous-target blocking
+	  - a fourteenth rerun on `artifact-code-comment-checker` then repeated that clean recovery on the second former regression brief, which materially improves confidence that the tightened contract now holds on the exact targets that had most recently failed
+	- [ ] Remove temporary headless CREATE-enforcement helpers once repeated constrained-subagent reruns stay aligned without them and the helper no longer changes proof classification
+	  - same-surface proof is materially stronger now and the reviewer-facing PoC is real, but helper redundancy is still not proven strongly enough to remove the support-only headless enforcement because the creating run still does not preserve stronger same-run validator/release-gate evidence and the remaining clean-room caveat is not eliminated by rerunning alone
+	- [ ] Tighten Recovery `prepare-soft-reset` so default output is exact and checkpoint creation stays opt-in
+	- [ ] Tighten companion-governor so it never recommends runtime artifact creation as a companion outcome
+	- [x] Bind the `agent-architect.process-validator` contract to a real harness evidence package path through automatic headless enforcement so companion decisions and other hard gates are checked automatically, not only documented
+- [ ] Task: Keep autonomous benchmarks non-interactive
+	- [x] Explicitly discourage `vscode_askQuestions` in autonomous benchmark prompts unless blocker handling is the test target
+- [x] Task: Reposition public docs around practical usage before deeper theory
+	- [x] State in plain language when a practitioner should actually reach for Agent Architect instead of a normal ad hoc agent workflow
+	- [x] Explain the concrete pain model first: hidden state, dropped design decisions, compacted context, and manual memory aids such as skill files or PR notes
+	- [x] Reduce competing reading-order lists so one canonical first path dominates for new technical readers and tough minimal-knowledge reviewers
+	- [x] Add a smallest meaningful first-test path that lets a practical reader evaluate the idea without first absorbing the whole architecture
+	- [x] Make repo-local skills explicit as support artifacts with a reference page, browsable index, and contributor-facing authoring guide
+	- [x] Re-run independent read-only interpretation after the docs/support sync and confirm that no material support-layer contradictions remained
+- [x] Task: Prove one flagship reliability workflow
+	- [x] Choose one narrow repo-local workflow where ad hoc prompting is too weak a control surface: explicit-target `agent-architect` CREATE on clean target `artifact-quote-checker`
+	- [x] Prepare a clean target brief and support-only benchmark artifact for that workflow under `docs/targets/` and `docs/benchmarks/`
+	- [x] Run a first constrained-subagent proof pack and preserve bounded CREATE plus blocker evidence in `docs/benchmarks/agent-architect-flagship-reliability-workflow.md`
+	- [x] Demonstrate bounded steering, read-after-write verification, and visible mismatch or failure detection on that exact workflow
+	  - the flagship benchmark now contains a reviewer-facing PoC summary, exact same-surface prompts, expected artifacts, and verification steps for the clean `artifact-link-checker` pack
+	- [x] Preserve the proof on the same user-facing surface named by the claim instead of substituting a looser adjacent surface
+	  - reviewer-facing proof packaging now points to the constrained subagent benchmark itself rather than to a looser Local, CLI, or MCP substitute
+- [ ] Task: Verify cross-platform runtime assumptions
+	- [ ] Confirm Copilot CLI session-state root assumptions on Windows and macOS instead of relying on the current `~/.copilot/session-state` convention
+	- [x] Replace or parameterize Unix-shaped user-facing path text where it currently implies a universal location
+	- [x] Distinguish extension-runtime cross-platform support from bash-only support scripts so approval claims stay scoped correctly
+	- [x] Document the observed Windows main-host extension activation route through `%USERPROFILE%\\.vscode\\extensions\\local.agent-architect-tools` using a junction-based variant instead of copying the Linux symlink example verbatim
+	- [x] Reconcile the current Windows mechanical baseline with the observed prompt-file dispatch path expectation mismatch before treating Windows as mechanically green
+- [x] Task: Demote Copilot CLI from baseline process assumptions
+	- [x] Make the normal Agent Architect path and approval story Local plus extension-host first, without implying Copilot CLI setup
+	- [x] Keep Copilot CLI only as an optional advanced observability or worker-handoff lane with explicit separate provenance
+	- [x] Review support artifacts for wording that still makes Copilot CLI sound like expected day-to-day tooling
+- [ ] Task: Characterize subagent context leakage and design around it
+	- [x] Run active-file-switch experiment with byte-identical delegated prompt
+	- [x] Run selection-sensitivity experiment with a unique active selection
+	- [x] Run diagnostics-leakage experiment without naming the error in the prompt
+	- [ ] Run parent-history-isolation experiment with and without memory
+	- [x] Compare inherited versus restricted tools for the same delegated task
+	- [x] Inspect Agent Debug Logs for explicit context payload evidence (current debug-log surface exposed only per-session `models.json` manifests; no direct subagent payload or skill-loading evidence was recoverable, and the earlier expected session-log path was absent)
+	- [x] Probe stored session/context artifacts with backward tail-reading to see whether they expose subagent payload, skill loading, or propagation clues without requiring full-log reads
+- [ ] Task: Characterize main-thread reset and compaction behavior
+	- [x] Preserve a fixed artifact-backed fresh-chat re-entry benchmark and best-outcome pair so compaction recovery can be judged against a stable support surface rather than reconstructed ad hoc prompts
+	- [ ] Seed one important chat-only fact, one arbitrary token, and one corrected false fact
+	- [ ] Run a no-tools recall probe after likely compaction or reset
+	- [ ] Run a provenance probe distinguishing recall from artifact recovery
+	- [ ] Run a tool-assisted recovery pass from support artifacts
+	- [ ] Record what survived directly, what drifted, and what had to be recovered from artifacts
+	- [ ] Record whether compaction appeared to happen without agent self-awareness
+- [ ] Task: Encode agent-routing policy that avoids the built-in default agent when explicit bounded agents are sufficient
+	- [x] Define when to use `Explore` versus `undo-safe-default` versus stronger custom agents
+	- [x] Capture that explicit agent files are preferred for predictable tool surface and cost control
+	- [x] Ensure future Agent Architect outputs do not casually recommend the built-in default agent as the baseline helper
+	- [x] Add revalidation triggers for empirically-bounded external agents such as `Explore`
+- [ ] Task: Reset runtime trust and rebuild verification in dependency order
+	- [ ] Reconcile active code paths and support artifacts with the explicit decision that repo-owned historical agent packs are parked lineage here, while workspace runtime agent files under `.github/agents/*.agent.md` remain a supported mechanism when present
+	- [x] Treat current `.github/agents/*.agent.md` files as unverified candidate runtime artifacts
+	- [x] Remove or quarantine probe artifacts that should not carry runtime authority
+	- [x] Define exact verification criteria for the constrained no-nested-subagent environment
+	- [x] Validate `agent-architect.intake` for explicit-target and blocked-handoff intake classification
+	- [x] Validate `agent-architect.discovery` for explicit-target artifact resolution plus no-target and no-guessing boundary behavior
+	- [x] Validate `agent-architect.scope-guard` for local vs transport-required vs blocked scope decisions on resolved targets
+	- [x] Validate `agent-architect.state-classifier` for CREATE, CREATE-with-blocker, PATCH, TRANSPORT_REQUIRED, and BLOCKED outcomes with exact `creation_blocked` semantics
+	- [x] Validate `agent-architect.role-designer` for minimal first-pass contract derivation without turning deferred destination or format details into base-contract blockers
+	- [x] Validate `agent-architect.frontmatter-governor` for repo-authorized frontmatter selection and `handoffs` rejection without exact body semantics
+	- [x] Validate `agent-architect.tool-governor` for minimum viable runtime tool selection and honest blocker behavior when required capabilities are not repo-evidenced
+	- [x] Validate `agent-architect.structure-compiler` for exact canonical section compilation plus hard blockers on missing frontmatter and inconsistent approved package sets
+	- [x] Validate `agent-architect.structure-validator` for strict failure on heading drift, unsupported frontmatter, missing numbered sections, and prose-only near-miss artifacts
+	- [x] Validate `agent-architect.process-validator` for hard failure on missing read-after-write and missing repeated-run evidence when readiness is claimed
+	- [x] Validate `agent-architect.response-assessor` for PASS vs FAIL vs INCONCLUSIVE assessment without upgrading prompt-leading or unverified side-effects into success
+	- [x] Validate `agent-architect.release-gate` for READY vs DEGRADED vs BLOCKED mapping from preserved evidence without softening hard-validator failures
+	- [x] Validate the user-facing `agent-architect` role for explicit-target PATCH and no-target BLOCKED behavior on the constrained subagent surface without overclaiming release-state synthesis
+	- [x] Validate `support-doc.fresh-reader` for bounded support-interpretation checks over explicit support artifacts
+	- [x] Validate `session-artifact.tail-reader` for bounded stored-artifact inspection without overclaiming unreadable or surrogate evidence
+	- [x] Validate `session-artifact.transcript-emitter` against transcript JSONL normal and descendant-gap benchmark windows
+	- [x] Validate `undo-safe-default` for bounded single-file workspace mutation without terminal use
+	- [x] Validate minimum critical CREATE-path roles one by one before new orchestration claims
+	- [x] Re-run benchmark target creation only after the critical chain is trustworthy
+- [ ] Task: Replace attachment-bound first benchmark with a clean target suite
+	- [x] Define a primary read-only benchmark target that consumes only explicit workspace artifacts
+	- [x] Define a primary bounded-mutation benchmark target that consumes only explicit workspace artifacts
+	- [x] Record benchmark-input hygiene rules so target artifacts cannot double as runtime-answer templates
+	- [x] Re-run Agent Architect CREATE on the clean target suite
+- [x] Task: Characterize current multi-surface chat tooling
+	- [x] Verify that exact Local reveal is supported while exact Local send remains unsupported in the current VS Code/Copilot build
+	- [x] Verify canonical Copilot CLI reopen against persisted session-state
+	- [x] Verify Copilot CLI capability probes can exercise real tool-backed read and write behavior
+	- [x] Confirm that the pre-observability tree and discovery surfaces enumerated Local persisted sessions but not Copilot CLI session-state
+- [ ] Task: Make tool-backed incident debugging operational
+	- [x] Add separate Copilot CLI observability support in the extension UI without conflating it with Local session discovery
+	- [x] Implement exact Local target dialogue when the host build supports it, or surface a provenance-safe explicit fallback when it does not
+	- [x] Regress the newly added internal fallback-send command alias in a freshly updated host session instead of inferring it from adjacent focused-send evidence
+	- [x] Define and package-test a provenance-safe Local-to-CLI handoff package for reproduction and worker execution
+	- [x] Add one-step worker execution that can send the prepared handoff package into the chosen Copilot CLI lane without collapsing provenance
+	- [x] Manually validate the one-step worker execution path in the Extension Development Host against a real Copilot CLI session
+	- [x] Tighten pending-request diagnostics so persisted profiles do not misclassify opaque response ids as live pending work
+	- [x] Add bounded Copilot CLI latest-turn inspection so worker outcomes can be reviewed without reading raw `events.jsonl` first
+	- [x] Expose Copilot CLI session listing and inspection over the internal CLI harness and headless MCP surface instead of keeping them extension-UI-only
+	- [x] Mirror Copilot CLI session listing and inspection into the VS Code language-model-tool surface so agent-facing entrypoints stay aligned
+	- [x] Extend persisted-session inspection with bounded compaction or anchor filters (`afterLatestCompact`, `anchorOccurrence`, `maxBlocks`, `latestRequestFamilies`) across extension-host tools, MCP, and the internal harness
+	- [x] Run regression checks through the real entrypoints that users will invoke, not only through artifact-level stand-ins
+	- [x] Re-ground the newly noticed VS Code chat reference-inspection surface and confirm that the current evidence only supports treating it as a manual auxiliary UI lane, not as a replacement for persisted session/transcript inspection
+	- [ ] Run a same-response A/B probe once the reference-inspection feature is explicitly enabled: compare what the VS Code references UI exposes against the repo's persisted `contentReferences`/session/transcript evidence for the exact same chat turn
+- [ ] Task: Build Local verification lanes in the right order
+	- [ ] Keep `deterministic-state-hack` as the control lane for reproducible mode/model and settled-wait debugging
+	- [ ] Keep `native-local` as the product-truth lane for what a normal user can actually expect
+	- [ ] Treat prompt-file or slash-command init only as a transport workaround unless the transport itself is under test
+	- [ ] Record which lane each future Local benchmark result belongs to so evidence strength stays comparable across runs
+	- [ ] Prefer improving deterministic tooling first when host nondeterminism would otherwise blur whether a failure came from the product surface or the measurement harness
+- [ ] Current Task: Make tool-backed incident debugging operational while finishing compact-tolerant process hardening and helper-agent routing, then resume bounded runtime-role rebuild in process order
+- [x] Current Task: Hold Windows as the primary truth surface until the repo is review-ready there, and defer broader Agent Architect feature development until that gate is met
+- [ ] Current Task: While external review interest is still forming, harden the Windows-observed tooling lanes that remain heuristic or workaround-based before broader Agent Architect feature development
+	- [ ] Audit and, where needed, tighten the self-targeting guard so it is less likely to misclassify the invoking conversation
+	- [ ] Audit reveal-plus-focused fallback behavior for clearer target verification and failure recovery
+	- [ ] Audit the `allowTransportWorkaround` decoy lane so it stays explicit, bounded, and non-confusable with ordinary exact-send support
+	- [ ] Re-ground `deterministic-state-hack` as a control/debug lane and reduce accidental dependence on it as if it were product-truth behavior
+- [ ] Current Task: Keep support artifacts aligned with the verified bounded-inspection model, including the fact that transcript compaction anchoring depends on transcript-block evidence rather than session-JSONL compaction rows alone
+- [ ] Current Task: Keep the fresh-chat re-entry benchmark, playbook guidance, and short status boundary aligned as the compact-tolerant support story evolves
+- [ ] Current Verification Discipline: Apply the bounded role verification protocol for runtime roles and a re-grounding gate before risky main-thread work
+- [ ] Support Discipline: When updating support artifacts for reset behavior, helper routing, or verification status, cross-check the matching claims in the other support artifacts and resolve any contradiction explicitly
+- [ ] Support Validation Discipline: After meaningful support-layer changes, run at least one read-only independent interpretation pass, prefer a repo-local read-only helper when sufficient, and record whether the pass confirmed the intended reading or exposed ambiguity
+- [ ] Support Validation Discipline: Record whether unrelated loaded skills or instructions appeared during fresh-reader validation, and treat that as contamination evidence when interpreting the result
+- [ ] Known Blocker: Nested helper-orchestration still cannot be proven automatically on the current subagent surface because subagents are one-shot and cannot spawn subagents. Full CREATE-path end-to-end outcome should still be provable through preserved equivalent stage evidence on clean benchmark targets; if that fails, treat missing helper-invocation or observability tooling as a priority tooling gap rather than as a runtime-agent pass.

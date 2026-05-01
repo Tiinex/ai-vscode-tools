@@ -1,0 +1,9 @@
+{"type":"session.start","id":"session-start-010","timestamp":"2026-04-08T12:00:00.000Z","data":{"sessionId":"session-demo-010"}}
+{"type":"user.message","id":"msg-user-010","timestamp":"2026-04-08T12:00:05.000Z","parentId":null,"data":{"content":"Börja med en snabb kontroll."}}
+{"type":"assistant.message","id":"msg-assistant-010","timestamp":"2026-04-08T12:00:06.000Z","parentId":"msg-user-010","data":{"content":"Jag gör först en snabb kontroll och återkommer sedan med nästa steg."}}
+{"type":"user.message","id":"msg-user-011","timestamp":"2026-04-08T12:01:00.000Z","parentId":null,"data":{"content":"Fortsätt, men ta bara med det som är säkert evidensierat."}}
+{"type":"assistant.turn_start","id":"turn-011-start","timestamp":"2026-04-08T12:01:01.000Z","parentId":"msg-user-011","data":{"turnId":"turn-011"}}
+{"type":"assistant.message","id":"msg-assistant-011","timestamp":"2026-04-08T12:01:02.000Z","parentId":"msg-user-011","data":{"content":"Ja. Jag fortsätter bara med det som går att binda direkt till transcriptets egna fält.","reasoningText":"Jag undviker att gissa fram parenteser eller descendantresultat som inte är explicit lagrade.","toolRequests":[{"toolCallId":"toolcall-011","toolName":"read_file","arguments":{"filePath":"docs/targets/transcript-evidence-export-brief.md"}}]}}
+{"type":"tool.execution_start","id":"tool-start-011","timestamp":"2026-04-08T12:01:03.000Z","parentId":"msg-assistant-011","data":{"toolCallId":"toolcall-011","toolName":"read_file","arguments":{"filePath":"docs/targets/transcript-evidence-export-brief.md"}}}
+{"type":"assistant.turn_end","id":"turn-011-end","timestamp":"2026-04-08T12:01:04.000Z","parentId":"msg-assistant-011","data":{"turnId":"turn-011"}}
+{"type":"user.message","id":"msg-user-012","timestamp":"2026-04-08T12:02:00.000Z","parentId":null,"data":{"content":"Det räcker för den här kontrollen."}}

@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "agentArchitectTools": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/dist/tooling/mcp-server.js"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}

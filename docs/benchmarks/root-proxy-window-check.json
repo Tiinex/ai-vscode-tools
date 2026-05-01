@@ -1,0 +1,22 @@
+[
+  {
+    "dataset": "historical",
+    "latestFamily": 46,
+    "latestCompaction": 30,
+    "activeFamilies": 17,
+    "promptActive": 4042,
+    "prompt16": 4042,
+    "slashActive": 395,
+    "slash16": 395
+  },
+  {
+    "dataset": "current",
+    "latestFamily": 53,
+    "latestCompaction": 48,
+    "activeFamilies": 6,
+    "promptActive": 2026,
+    "prompt16": 4042,
+    "slashActive": 395,
+    "slash16": 395
+  }
+]

@@ -1,0 +1,44 @@
+title Agent Architect process overview
+
+participantspacing equal
+autonumber 1
+
+actor User
+control "Agent\nArchitect" as AA
+control Intake
+control Discovery
+control "Scope\nGuard" as Scope
+control Classifier
+control Designer
+control Mutator
+control "Companion\nGovernor" as Companion
+control Validator
+control "Release\nGate" as Release
+
+note over AA: Artifact state is authoritative.\nConversation may trigger work but never replace verification.
+
+User->AA: request or exact handoff
+AA->Intake: classify incoming request shape
+Intake-->AA: request shape classified
+AA->Discovery: resolve target facts\nand inspect explicit artifacts
+Discovery-->AA: target and artifact facts
+AA->Scope: resolve whether direct work\nis allowed in this scope
+Scope-->AA: local work allowed\nor transport/block required
+AA->Classifier: choose lifecycle\n+ creation_blocked
+Classifier-->AA: lifecycle decision
+
+alt target unresolved or unsafe to continue
+  AA-->User: stop direct mutation\nreport blocker or transport package
+else work allowed in current scope
+  AA->Designer: derive target design\nand runtime shape
+  Designer-->AA: design package
+  AA->Mutator: CREATE / PATCH / REPAIR
+  Mutator-->AA: mutation attempted\nand read-after-write evidence
+  AA->Companion: decide whether companions\nare warranted now
+  Companion-->AA: no companion\nor allowed companion set
+  AA->Validator: structure + process + behavior
+  Validator-->AA: validation evidence
+  AA->Release: map evidence to\nREADY / DEGRADED / BLOCKED
+  Release-->AA: final release state
+  AA-->User: verified outcome only
+end

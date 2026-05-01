@@ -1,0 +1,58 @@
+title CREATE path from request to first runtime artifact
+
+participantspacing equal
+autonumber 1
+
+actor User
+control "Agent\nArchitect" as AA
+control Intake
+control "Artifact\nDiscovery" as Discovery
+boundary "target-resolution\nSKILL" as TargetSkill
+control "Scope\nGuard" as Scope
+control "State\nClassifier" as Classifier
+control "Role\nDesigner" as Designer
+control "Tool\nGovernor" as ToolGov
+control "Frontmatter\nGovernor" as FrontGov
+boundary "frontmatter-rules\nSKILL" as FrontSkill
+control "Structure\nCompiler" as Compiler
+control "Structure\nValidator" as Struct
+control Writer
+
+User->AA: create or improve a specific target agent
+AA->Intake: is there a specific target?\nor must we block already here?
+Intake-->AA: request is targetable\nor blocked
+AA->Discovery: does target artifact exist?\nis there a trusted brief?
+Discovery-->AA: artifact existence\nand brief facts
+AA->TargetSkill: resolve target, path,\nexistence, scope, build context
+TargetSkill-->AA: target facts only\nno invented state
+AA->Scope: can this path be mutated here?
+Scope-->AA: local CREATE allowed\nor must stop
+AA->Classifier: classify lifecycle\nand creation_blocked
+Classifier-->AA: CREATE / non-CREATE\n+ blocker semantics
+
+alt target ambiguous, blocked, or cross-scope
+  AA-->User: no direct CREATE\nreturn exact blocker or transport need
+else CREATE is legitimate
+  AA->Designer: derive purpose, scope,\nnon-goals, and process needs
+  Designer-->AA: role design
+  AA->ToolGov: choose minimum viable tools
+  ToolGov-->AA: tool set
+  AA->FrontGov: propose runtime frontmatter
+  FrontGov-->AA: proposed frontmatter
+  AA->FrontSkill: validate allowed fields
+  FrontSkill-->AA: allowed fields only
+  AA->Compiler: compile first 0-12 runtime body
+  Compiler-->AA: compiled runtime body
+  note over AA,Compiler: If the current surface cannot actually invoke
+  the bounded helper roles for these CREATE stages,
+  AA must preserve verifiable equivalent stage evidence
+  instead of implying helper execution.
+  AA->Writer: create initial .agent.md
+  Writer-->AA: artifact exists\nread-after-write verified
+  AA->Struct: validate created structure\nand frontmatter
+  Struct-->AA: PASS or FAIL
+  AA-->User: first runtime artifact now exists
+end
+
+note over AA: Forbidden before legitimate CREATE:\ntodo-first, question-first,\nnon-essential skill drift.
+note over AA: Ask a direct question only if an exact blocker\nstill prevents safe initial artifact creation.

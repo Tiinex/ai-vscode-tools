@@ -1,0 +1,287 @@
+import * as vscode from "vscode";
+import type { ExactSessionInteropSupport, FocusedChatInteropSupport } from "./capabilities";
+
+export type ChatModelSelector = {
+  id: string;
+  vendor?: string;
+};
+
+export type ChatSelectionStatus = "not-requested" | "verified" | "mismatch" | "unverified" | "dispatched-via-artifact";
+
+export type ChatDispatchSurface = "chat-open" | "prompt-file-slash-command" | "focused-chat-submit";
+
+export interface ChatSelectionCheck {
+  status: ChatSelectionStatus;
+  requested?: string;
+  observed?: string;
+}
+
+export interface ChatDispatchInfo {
+  surface: ChatDispatchSurface;
+  dispatchedPrompt: string;
+  slashCommand?: string;
+}
+
+export interface ChatSelectionVerification {
+  mode: ChatSelectionCheck;
+  model: ChatSelectionCheck;
+  agent: ChatSelectionCheck;
+  dispatchedPrompt: string;
+  dispatchSurface: ChatDispatchSurface;
+  dispatchedSlashCommand?: string;
+  allRequestedVerified: boolean;
+}
+
+export interface ChatRevealLifecycle {
+  closedMatchingVisibleTabs: number;
+  closedTabLabels: string[];
+}
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  lastUpdated: string;
+  mode?: string;
+  agent?: string;
+  model?: string;
+  hasPendingEdits?: boolean;
+  pendingRequestCount?: number;
+  lastRequestCompleted?: boolean;
+  archived: boolean;
+  provider: "workspaceStorage" | "emptyWindow";
+  workspaceId?: string;
+  sessionFile: string;
+}
+
+export interface CreateChatRequest {
+  prompt: string;
+  agentName?: string;
+  mode?: string;
+  modelSelector?: ChatModelSelector;
+  partialQuery?: boolean;
+  blockOnResponse?: boolean;
+  requireSelectionEvidence?: boolean;
+  // If false, the focused-send call will return immediately after dispatch
+  // without waiting for a persisted session mutation. Default: true (wait).
+  waitForPersisted?: boolean;
+}
+
+export interface SendChatMessageRequest extends CreateChatRequest {
+  sessionId: string;
+  allowTransportWorkaround?: boolean;
+}
+
+export interface ChatInteropOptions {
+  workspaceStorageRoots?: string[];
+  emptyWindowChatRoots?: string[];
+  openDelayMs?: number;
+  postCreateDelayMs?: number;
+  postCreateTimeoutMs?: number;
+  promptRegistrationDelayMs?: number;
+  // Configure default behaviour for focused-send when `request.waitForPersisted` is not provided
+  waitForPersistedDefault?: boolean;
+}
+
+export interface ChatCommandResult {
+  ok: boolean;
+  reason?: string;
+  session?: ChatSessionSummary;
+  sessions?: ChatSessionSummary[];
+  error?: string;
+  selection?: ChatSelectionVerification;
+  dispatch?: ChatDispatchInfo;
+  revealLifecycle?: ChatRevealLifecycle;
+}
+
+export type InternalChatOpenOptions = {
+  query: string;
+  isPartialQuery?: boolean;
+  mode?: string;
+  modelSelector?: { id: string; vendor?: string };
+  blockOnResponse?: boolean;
+};
+
+export interface MutexLease {
+  release(): void;
+}
+
+export interface ChatInteropApi {
+  listChats(): Promise<ChatSessionSummary[]>;
+  getExactSessionInteropSupport(): Promise<ExactSessionInteropSupport>;
+  getFocusedChatInteropSupport(): Promise<FocusedChatInteropSupport>;
+  createChat(request: CreateChatRequest): Promise<ChatCommandResult>;
+  sendMessage(request: SendChatMessageRequest): Promise<ChatCommandResult>;
+  sendFocusedMessage(request: CreateChatRequest): Promise<ChatCommandResult>;
+  closeVisibleTabs(sessionId: string): Promise<ChatCommandResult>;
+  revealChat(sessionId: string): Promise<ChatCommandResult>;
+}
+
+export type CommandMap = {
+  "agentArchitectTools.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
+  "agentArchitectTools.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "agentArchitectTools.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
+  "agentArchitectTools.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
+  "agentArchitectTools.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "agentArchitectTools.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
+  "agentArchitectTools.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
+};
+
+export function toModelSelector(value: ChatModelSelector | undefined): InternalChatOpenOptions["modelSelector"] | undefined {
+  if (!value?.id) {
+    return undefined;
+  }
+
+  return {
+    id: value.id,
+    vendor: value.vendor
+  };
+}
+
+export function buildPromptWithAgentSelector(prompt: string, agentName: string | undefined): string {
+  const trimmedPrompt = prompt.trim();
+  const trimmedAgentName = agentName?.trim();
+  if (!trimmedAgentName) {
+    return trimmedPrompt;
+  }
+
+  const selector = `#${trimmedAgentName.replace(/^#+/, "")}`;
+  if (trimmedPrompt === selector || trimmedPrompt.startsWith(`${selector} `) || trimmedPrompt.startsWith(`${selector}\n`)) {
+    return trimmedPrompt;
+  }
+
+  return `${selector}\n${trimmedPrompt}`;
+}
+
+function normalizeSelectionValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeAgentSelectionValue(value: string | undefined): string | undefined {
+  const normalized = value?.trim().replace(/^#+/, "").toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function modelMatches(requested: ChatModelSelector | undefined, observed: string | undefined): boolean {
+  const requestedId = normalizeSelectionValue(requested?.id);
+  const requestedVendor = normalizeSelectionValue(requested?.vendor);
+  const observedValue = normalizeSelectionValue(observed);
+  if (!requestedId || !observedValue) {
+    return false;
+  }
+
+  if (observedValue === requestedId || observedValue.includes(requestedId) || requestedId.includes(observedValue)) {
+    return requestedVendor ? observedValue.includes(requestedVendor) || observedValue === requestedId : true;
+  }
+
+  return false;
+}
+
+export function buildSelectionVerification(
+  request: CreateChatRequest,
+  session: ChatSessionSummary | undefined,
+  dispatch: ChatDispatchInfo
+): ChatSelectionVerification {
+  const modeRequested = normalizeSelectionValue(request.mode);
+  const modeObserved = normalizeSelectionValue(session?.mode);
+  const modelRequested = request.modelSelector;
+  const modelObserved = session?.model;
+  const requestedAgentLabel = request.agentName?.trim().replace(/^#+/, "");
+  const agentRequested = normalizeAgentSelectionValue(requestedAgentLabel);
+  const agentObserved = normalizeAgentSelectionValue(session?.agent);
+
+  const mode: ChatSelectionCheck = !modeRequested
+    ? { status: "not-requested" }
+    : !modeObserved
+      ? { status: "unverified", requested: request.mode }
+      : modeObserved === modeRequested
+        ? { status: "verified", requested: request.mode, observed: session?.mode }
+        : { status: "mismatch", requested: request.mode, observed: session?.mode };
+
+  const requestedModelLabel = modelRequested?.id
+    ? (modelRequested.vendor ? `${modelRequested.vendor}/${modelRequested.id}` : modelRequested.id)
+    : undefined;
+  const model: ChatSelectionCheck = !modelRequested?.id
+    ? { status: "not-requested" }
+    : !modelObserved
+      ? { status: "unverified", requested: requestedModelLabel }
+      : modelMatches(modelRequested, modelObserved)
+        ? { status: "verified", requested: requestedModelLabel, observed: modelObserved }
+        : { status: "mismatch", requested: requestedModelLabel, observed: modelObserved };
+
+  const agent: ChatSelectionCheck = !agentRequested
+    ? { status: "not-requested" }
+    : agentObserved === agentRequested
+      ? { status: "verified", requested: `#${requestedAgentLabel}`, observed: session?.agent }
+      : agentObserved
+        ? { status: "mismatch", requested: `#${requestedAgentLabel}`, observed: session?.agent }
+        : {
+            status: dispatch.surface === "prompt-file-slash-command"
+              || dispatch.dispatchedPrompt === `#${requestedAgentLabel}`
+              || dispatch.dispatchedPrompt.startsWith(`#${requestedAgentLabel} `)
+              || dispatch.dispatchedPrompt.startsWith(`#${requestedAgentLabel}\n`)
+              ? "dispatched-via-artifact"
+              : "unverified",
+            requested: `#${requestedAgentLabel}`
+          };
+
+  const allRequestedVerified = [mode, model, agent].every((item) => item.status === "not-requested" || item.status === "verified");
+
+  return {
+    mode,
+    model,
+    agent,
+    dispatchedPrompt: dispatch.dispatchedPrompt,
+    dispatchSurface: dispatch.surface,
+    dispatchedSlashCommand: dispatch.slashCommand,
+    allRequestedVerified
+  };
+}
+
+export function buildCreateChatSelectionBlocker(request: CreateChatRequest): string | undefined {
+  if (request.agentName?.trim()) {
+    if (request.requireSelectionEvidence) {
+      if (request.partialQuery === true) {
+        return "Live chat draft prefill cannot independently verify custom agent selection on this surface. Remove requireSelectionEvidence or use another explicitly verifiable surface.";
+      }
+
+      return "Live createChat can dispatch a custom agent as a prompt artifact on this surface, but it cannot independently verify actual participant selection. Remove requireSelectionEvidence to allow best-effort role dispatch, use partialQuery: true for draft-only prefill, or use another explicitly verifiable surface.";
+    }
+
+    return undefined;
+  }
+
+  return undefined;
+}
+
+export function buildSendChatSelectionBlocker(request: SendChatMessageRequest): string | undefined {
+  if (request.mode || request.modelSelector) {
+    return "Exact-session live chat send cannot currently prove or enforce mode/model selection on this surface; use createChat with explicit verification, or treat send as prompt-only dispatch.";
+  }
+
+  if (request.requireSelectionEvidence && request.agentName?.trim()) {
+    return "Exact-session live chat send cannot independently verify a custom agent prompt selector on this surface. Use createChat with partialQuery: true for no-token prefill, or another explicitly verifiable surface.";
+  }
+
+  return undefined;
+}
+
+export function buildFocusedChatSelectionBlocker(request: CreateChatRequest): string | undefined {
+  if (request.mode || request.modelSelector) {
+    return "Focused live chat send cannot currently prove or enforce mode/model selection on this surface; pre-select them in the UI first, or use createChat with explicit verification.";
+  }
+
+  if (request.requireSelectionEvidence && request.agentName?.trim()) {
+    return "Focused live chat send cannot independently verify a custom agent prompt selector on this surface. Use createChat with partialQuery: true for draft-only prefill, or another explicitly verifiable surface.";
+  }
+
+  return undefined;
+}
+
+export function normalizeFsPath(uriOrPath: vscode.Uri | string): string {
+  return typeof uriOrPath === "string" ? uriOrPath : uriOrPath.fsPath;
+}

@@ -1,0 +1,107 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build agent architect tools extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "build extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"build"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "noop",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop2",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop2"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop3",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop3"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop4",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop4"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop5",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop5"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop6",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop6"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop7",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop7"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "noop8",
+			"type": "shell",
+			"command": "echo",
+			"args": [
+				"noop8"
+			],
+			"isBackground": false
+		}
+	]
+}

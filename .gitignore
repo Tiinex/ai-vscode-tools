@@ -1,0 +1,7 @@
+node_modules/
+dist/
+sandboxed-workspace
+.venv
+.venv*
+TEMP-*.md
+.tmp*

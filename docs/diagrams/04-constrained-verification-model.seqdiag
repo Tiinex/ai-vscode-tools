@@ -1,0 +1,36 @@
+title Constrained verification model in a no-nested-subagent environment
+
+participantspacing equal
+
+actor "Co-Designer" as CD
+entity Artifact
+control "Role\nProbe" as RoleProbe
+control "Orchestration\nProbe" as OrchProbe
+control "Benchmark\nHarness" as Harness
+
+== Plausible file text is not enough ==
+CD->Artifact: inspect artifact text
+Artifact-->CD: plausible-looking body
+note over CD: This is signal only.\nIt is not verification by itself.
+
+== Role verification ==
+CD->RoleProbe: run bounded probe\nwithout telling desired answer
+RoleProbe->Artifact: read or mutate only as allowed
+Artifact-->RoleProbe: output and file state
+RoleProbe-->CD: preserved evidence
+
+alt bounded contract satisfied\nand mutation verified when claimed
+  note over CD: Role Verified
+else missing evidence, hidden unknowns,\nor wrong bounded result
+  note over CD: Not Verified\nCandidate only
+end
+
+== Orchestration evidence ==
+CD->OrchProbe: test orchestrator in current environment
+OrchProbe-->CD: evidence chain from constrained run
+note over CD: Useful surrogate evidence.\nNot full orchestration proof\nwhen nested execution is unavailable.
+
+== Benchmark evidence ==
+CD->Harness: preserve prompt, full output,\nmutations, re-read checks, deviations
+Harness-->CD: defect evidence or confidence
+note over CD: Observed bad behavior is valid defect evidence.\nAbsence of failure is not full proof.
