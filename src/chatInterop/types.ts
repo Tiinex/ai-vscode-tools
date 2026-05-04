@@ -50,6 +50,8 @@ export interface ChatSessionSummary {
   mode?: string;
   agent?: string;
   model?: string;
+  hasControlThreadArtifacts?: boolean;
+  controlThreadArtifactKinds?: string[];
   hasPendingEdits?: boolean;
   pendingRequestCount?: number;
   lastRequestCompleted?: boolean;

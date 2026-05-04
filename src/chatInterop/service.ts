@@ -780,15 +780,16 @@ export class ChatInteropService implements ChatInteropApi {
       const session = candidate;
       const selection = buildSelectionVerification(request, session, dispatch);
       const settled = !requireSettled || isSessionSettled(session);
+      const clean = isSessionCleanForCreateSelection(session);
 
       if (!request.requireSelectionEvidence) {
-        if (session && settled) {
+        if (session && settled && clean) {
           return { session, selection, settled };
         }
         continue;
       }
 
-      if (candidate && selection.allRequestedVerified && settled) {
+      if (candidate && selection.allRequestedVerified && settled && clean) {
         return { session, selection, settled };
       }
     }
@@ -826,15 +827,16 @@ export class ChatInteropService implements ChatInteropApi {
       }
       const selection = buildSelectionVerification(request, candidate, dispatch);
       const settled = observedMutation && (!requireSettled || isSessionSettled(candidate));
+      const clean = isSessionCleanForCreateSelection(candidate);
 
       if (!request.requireSelectionEvidence) {
-        if (settled) {
+        if (settled && clean) {
           return { session: candidate, selection, observedMutation, settled };
         }
         continue;
       }
 
-      if (candidate && selection.allRequestedVerified && settled) {
+      if (candidate && selection.allRequestedVerified && settled && clean) {
         return { session: candidate, selection, observedMutation, settled };
       }
     }
@@ -881,14 +883,19 @@ function toLocalChatSessionUri(sessionId: string): vscode.Uri {
 }
 
 function pickCreatedSession(beforeIds: Set<string>, after: ChatSessionSummary[]): ChatSessionSummary | undefined {
-  return pickLatestSession(after.filter((item) => !beforeIds.has(item.id)));
+  return pickPreferredCreatedSession(after.filter((item) => !beforeIds.has(item.id)));
 }
 
 function pickTouchedSession(
   beforeById: Map<string, string>,
   after: ChatSessionSummary[]
 ): ChatSessionSummary | undefined {
-  return pickLatestSession(after.filter((item) => beforeById.get(item.id) !== item.lastUpdated));
+  return pickPreferredCreatedSession(after.filter((item) => beforeById.get(item.id) !== item.lastUpdated));
+}
+
+function pickPreferredCreatedSession(sessions: ChatSessionSummary[]): ChatSessionSummary | undefined {
+  return pickLatestSession(sessions.filter((item) => isSessionCleanForCreateSelection(item)))
+    ?? pickLatestSession(sessions);
 }
 
 function pickLatestSession(sessions: ChatSessionSummary[]): ChatSessionSummary | undefined {
@@ -924,6 +931,10 @@ function isSessionSettled(session: ChatSessionSummary | undefined): boolean {
   }
 
   return true;
+}
+
+function isSessionCleanForCreateSelection(session: ChatSessionSummary | undefined): boolean {
+  return session?.hasControlThreadArtifacts !== true;
 }
 
 function toErrorResult(error: unknown): ChatCommandResult {

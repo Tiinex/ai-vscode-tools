@@ -19,6 +19,8 @@ interface ParsedMetadata {
   mode?: string;
   agent?: string;
   model?: string;
+  hasControlThreadArtifacts?: boolean;
+  controlThreadArtifactKinds?: string[];
   hasPendingEdits?: boolean;
   pendingRequestCount?: number;
   lastRequestCompleted?: boolean;
@@ -109,6 +111,8 @@ export class ChatSessionStorage {
       mode: metadata.mode,
       agent: metadata.agent,
       model: metadata.model,
+      hasControlThreadArtifacts: metadata.hasControlThreadArtifacts,
+      controlThreadArtifactKinds: metadata.controlThreadArtifactKinds,
       hasPendingEdits: metadata.hasPendingEdits,
       pendingRequestCount: metadata.pendingRequestCount,
       lastRequestCompleted: metadata.lastRequestCompleted,
@@ -203,6 +207,7 @@ export class ChatSessionStorage {
 
   private async parseSessionMetadata(sessionFile: string): Promise<ParsedMetadata> {
     const raw = await fs.readFile(sessionFile, "utf8");
+    const controlThreadArtifactKinds = detectControlThreadArtifacts(raw);
     const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
 
     let lastFullState: any | undefined;
@@ -261,6 +266,8 @@ export class ChatSessionStorage {
     const metadata = extractMetadata(lastFullState, requestRows, deltaState);
     return {
       ...metadata,
+      hasControlThreadArtifacts: controlThreadArtifactKinds.length > 0,
+      controlThreadArtifactKinds,
       archived,
       updatedAt
     };
@@ -377,6 +384,28 @@ function extractMetadata(fullState: any | undefined, requestRows: any[], deltaSt
   const lastRequestCompleted = lastRequest ? isRequestCompleted(lastRequest) : undefined;
 
   return { title, mode, agent, model, hasPendingEdits, pendingRequestCount, lastRequestCompleted };
+}
+
+function detectControlThreadArtifacts(raw: string): string[] {
+  const hits: string[] = [];
+
+  if (raw.includes("<reminderInstructions>")) {
+    hits.push("reminderInstructions");
+  }
+
+  if (raw.includes("<importantReminders>")) {
+    hits.push("importantReminders");
+  }
+
+  if (raw.includes("<todoList>")) {
+    hits.push("todoList");
+  }
+
+  if (raw.includes('"toolId":"manage_todo_list"')) {
+    hits.push("manage_todo_list");
+  }
+
+  return hits;
 }
 
 function inferTitleFromPrompt(requestPayload: any): string | undefined {

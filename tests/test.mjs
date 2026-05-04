@@ -1260,70 +1260,74 @@ async function runFocusedSendBehaviorChecks() {
     assert(stalePendingFlagResult.session?.id === 's4', 'Blocking focused-send returned the wrong session for the stale hasPendingEdits case.');
 
     const unsettledRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-unsettled-session-'));
-    const unsettledSessionFile = path.join(unsettledRoot, 'chatSessions', 's5.jsonl');
-    const unsettledTranscriptFile = path.join(unsettledRoot, 'GitHub.copilot-chat', 'transcripts', 's5.jsonl');
-    await fs.mkdir(path.dirname(unsettledSessionFile), { recursive: true });
-    await fs.mkdir(path.dirname(unsettledTranscriptFile), { recursive: true });
-    await fs.writeFile(unsettledSessionFile, '{}\n', 'utf8');
-    await fs.writeFile(unsettledTranscriptFile, `${[
-      JSON.stringify({ type: 'session.start', data: { sessionId: 's5' } }),
-      JSON.stringify({ type: 'user.message', data: { content: 'hello' } }),
-      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' } }),
-      JSON.stringify({
-        type: 'assistant.message',
-        data: {
-          content: 'Planning step',
-          toolRequests: [{ toolCallId: 'call-1', name: 'manage_todo_list', type: 'function' }]
-        }
-      }),
-      JSON.stringify({ type: 'assistant.turn_end', data: { turnId: '0' } }),
-      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '1' } })
-    ].join('\n')}\n`, 'utf8');
+    try {
+      const unsettledSessionFile = path.join(unsettledRoot, 'chatSessions', 's5.jsonl');
+      const unsettledTranscriptFile = path.join(unsettledRoot, 'GitHub.copilot-chat', 'transcripts', 's5.jsonl');
+      await fs.mkdir(path.dirname(unsettledSessionFile), { recursive: true });
+      await fs.mkdir(path.dirname(unsettledTranscriptFile), { recursive: true });
+      await fs.writeFile(unsettledSessionFile, '{}\n', 'utf8');
+      await fs.writeFile(unsettledTranscriptFile, `${[
+        JSON.stringify({ type: 'session.start', data: { sessionId: 's5' } }),
+        JSON.stringify({ type: 'user.message', data: { content: 'hello' } }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' } }),
+        JSON.stringify({
+          type: 'assistant.message',
+          data: {
+            content: 'Planning step',
+            toolRequests: [{ toolCallId: 'call-1', name: 'manage_todo_list', type: 'function' }]
+          }
+        }),
+        JSON.stringify({ type: 'assistant.turn_end', data: { turnId: '0' } }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '1' } })
+      ].join('\n')}\n`, 'utf8');
 
-    MockChatSessionStorage.setBehaviors([
-      [
-        {
-          id: 's5',
-          title: 'session-5',
-          lastUpdated: '2026-04-11T04:00:00.000Z',
-          mode: undefined,
-          agent: 'agent-architect',
-          model: undefined,
-          hasPendingEdits: false,
-          pendingRequestCount: 0,
-          lastRequestCompleted: true,
-          archived: false,
-          provider: 'workspaceStorage',
-          sessionFile: unsettledSessionFile
-        }
-      ],
-      [
-        {
-          id: 's5',
-          title: 'session-5',
-          lastUpdated: '2026-04-11T04:00:01.000Z',
-          mode: undefined,
-          agent: 'agent-architect',
-          model: undefined,
-          hasPendingEdits: false,
-          pendingRequestCount: 0,
-          lastRequestCompleted: false,
-          archived: false,
-          provider: 'workspaceStorage',
-          sessionFile: unsettledSessionFile
-        }
-      ]
-    ]);
+      MockChatSessionStorage.setBehaviors([
+        [
+          {
+            id: 's5',
+            title: 'session-5',
+            lastUpdated: '2026-04-11T04:00:00.000Z',
+            mode: undefined,
+            agent: 'agent-architect',
+            model: undefined,
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: unsettledSessionFile
+          }
+        ],
+        [
+          {
+            id: 's5',
+            title: 'session-5',
+            lastUpdated: '2026-04-11T04:00:01.000Z',
+            mode: undefined,
+            agent: 'agent-architect',
+            model: undefined,
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: false,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: unsettledSessionFile
+          }
+        ]
+      ]);
 
-    const service5 = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 80, waitForPersistedDefault: true });
-    service5.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+      const service5 = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 80, waitForPersistedDefault: true });
+      service5.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
 
-    const unfinishedAgentTurnResult = await service5.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
-    assert(unfinishedAgentTurnResult.ok === false, 'Blocking focused-send unexpectedly succeeded for an unfinished assistant tool turn.');
-    assert(
-      typeof unfinishedAgentTurnResult.reason === 'string' && unfinishedAgentTurnResult.reason.includes('no tool result or final answer was ever persisted'),
-      'Blocking focused-send did not diagnose the unfinished assistant tool turn after timeout.'
-    );
+      const unfinishedAgentTurnResult = await service5.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
+      assert(unfinishedAgentTurnResult.ok === false, 'Blocking focused-send unexpectedly succeeded for an unfinished assistant tool turn.');
+      assert(
+        typeof unfinishedAgentTurnResult.reason === 'string' && unfinishedAgentTurnResult.reason.includes('no tool result or final answer was ever persisted'),
+        'Blocking focused-send did not diagnose the unfinished assistant tool turn after timeout.'
+      );
+    } finally {
+      await fs.rm(unsettledRoot, { recursive: true, force: true });
+    }
   } finally {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
   }
@@ -1475,6 +1479,73 @@ async function runCreateChatDirectAgentCommandChecks() {
 
     assert(latestResult.ok === true, 'Direct agent-open createChat test did not recover when the host created a placeholder session before the real session.');
     assert(latestResult.session?.id === 'session-real', `Direct agent-open createChat test did not pick the latest real session. Got: ${latestResult.session?.id}`);
+
+    MockChatSessionStorage.setBehaviors([
+      [],
+      [
+        {
+          id: 'session-contaminated',
+          title: 'Contaminated Session',
+          lastUpdated: '2026-04-17T20:11:00.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-contaminated.jsonl',
+          hasControlThreadArtifacts: true,
+          controlThreadArtifactKinds: ['reminderInstructions', 'manage_todo_list'],
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true
+        }
+      ],
+      [
+        {
+          id: 'session-contaminated',
+          title: 'Contaminated Session',
+          lastUpdated: '2026-04-17T20:11:00.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-contaminated.jsonl',
+          hasControlThreadArtifacts: true,
+          controlThreadArtifactKinds: ['reminderInstructions', 'manage_todo_list'],
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true
+        },
+        {
+          id: 'session-clean',
+          title: 'Clean Session',
+          lastUpdated: '2026-04-17T20:11:05.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-clean.jsonl',
+          hasControlThreadArtifacts: false,
+          controlThreadArtifactKinds: [],
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true
+        }
+      ]
+    ]);
+
+    const serviceClean = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 1000 });
+    const cleanResult = await serviceClean.createChat({
+      prompt: 'Prefer a clean created session over a contaminated one.',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: false,
+      blockOnResponse: true
+    });
+
+    assert(cleanResult.ok === true, 'Direct agent-open createChat test did not succeed when a clean session arrived after a contaminated one.');
+    assert(cleanResult.session?.id === 'session-clean', `Direct agent-open createChat test did not prefer the clean created session. Got: ${cleanResult.session?.id}`);
   } finally {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
     vscodeModule.commands.executeCommand = originalExecuteCommand;
@@ -1487,14 +1558,15 @@ async function runChatSessionStorageDeltaChecks() {
   const { ChatSessionStorage } = storageModule;
 
   const tempDir = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-storage-delta-"));
-  const workspaceStorageRoot = path.join(tempDir, "workspaceStorage");
-  const workspaceId = "workspace-1";
-  const scopedWorkspaceRoot = path.join(workspaceStorageRoot, workspaceId);
-  const chatSessionsDir = path.join(scopedWorkspaceRoot, "chatSessions");
-  await fs.mkdir(chatSessionsDir, { recursive: true });
+  try {
+    const workspaceStorageRoot = path.join(tempDir, "workspaceStorage");
+    const workspaceId = "workspace-1";
+    const scopedWorkspaceRoot = path.join(workspaceStorageRoot, workspaceId);
+    const chatSessionsDir = path.join(scopedWorkspaceRoot, "chatSessions");
+    await fs.mkdir(chatSessionsDir, { recursive: true });
 
-  const sessionFile = path.join(chatSessionsDir, "session-1.jsonl");
-  const fullState = {
+    const sessionFile = path.join(chatSessionsDir, "session-1.jsonl");
+    const fullState = {
     version: 3,
     sessionId: "session-1",
     customTitle: "Delta Parsing Session",
@@ -1533,7 +1605,7 @@ async function runChatSessionStorageDeltaChecks() {
     }
   };
 
-  const lines = [
+    const lines = [
     JSON.stringify({ kind: 0, v: fullState }),
     JSON.stringify({
       kind: 1,
@@ -1607,11 +1679,11 @@ async function runChatSessionStorageDeltaChecks() {
       v: false
     })
   ];
-  await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
+    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
 
-  const storage = new ChatSessionStorage({}, { workspaceStorageRoots: [scopedWorkspaceRoot] });
-  const sessions = await storage.listSessions();
-  const session = sessions.find((item) => item.id === "session-1");
+    const storage = new ChatSessionStorage({}, { workspaceStorageRoots: [scopedWorkspaceRoot] });
+    const sessions = await storage.listSessions();
+    const session = sessions.find((item) => item.id === "session-1");
 
   assert(session, "Storage delta test did not discover the temp session.");
   assert((await storage.getExactSessionById("session-1"))?.id === "session-1", 'Storage exact-id test did not resolve the exact session id.');
@@ -1632,8 +1704,50 @@ async function runChatSessionStorageDeltaChecks() {
   assert(session.pendingRequestCount === 0, `Storage delta test did not resolve the request pending count after completion. Got: ${session.pendingRequestCount}`);
   assert(session.lastRequestCompleted === true, 'Storage delta test did not mark the final request as completed after the modelState completion delta.');
 
-  const stalePendingSessionFile = path.join(chatSessionsDir, 'session-2.jsonl');
-  await fs.writeFile(stalePendingSessionFile, `${JSON.stringify({
+    const contaminatedSessionFile = path.join(chatSessionsDir, 'session-contaminated.jsonl');
+    await fs.writeFile(contaminatedSessionFile, `${JSON.stringify({
+    kind: 0,
+    v: {
+      version: 3,
+      sessionId: 'session-contaminated',
+      customTitle: 'Contaminated Session',
+      requests: [
+        {
+          requestId: 'request-contaminated',
+          timestamp: 1775930003000,
+          message: {
+            text: '<reminderInstructions>control</reminderInstructions>\n<importantReminders>more control</importantReminders>\n<todoList></todoList>'
+          }
+        }
+      ],
+      inputState: {}
+    }
+  })}
+${JSON.stringify({
+    kind: 1,
+    k: ['requests', 0, 'response'],
+    v: [
+      {
+        kind: 'toolInvocationSerialized',
+        toolSpecificData: {
+          kind: 'todoList'
+        },
+        toolId: 'manage_todo_list'
+      }
+    ]
+  })}
+`, 'utf8');
+
+    const contaminationSession = (await storage.listSessions()).find((item) => item.id === 'session-contaminated');
+    assert(contaminationSession, 'Storage contamination test did not discover the contaminated temp session.');
+    assert(contaminationSession.hasControlThreadArtifacts === true, 'Storage contamination test did not flag control-thread artifacts from raw JSONL.');
+    assert(
+    JSON.stringify(contaminationSession.controlThreadArtifactKinds) === JSON.stringify(['reminderInstructions', 'importantReminders', 'todoList', 'manage_todo_list']),
+    `Storage contamination test did not preserve the detected control-thread artifact kinds. Got: ${JSON.stringify(contaminationSession.controlThreadArtifactKinds)}`
+    );
+
+    const stalePendingSessionFile = path.join(chatSessionsDir, 'session-2.jsonl');
+    await fs.writeFile(stalePendingSessionFile, `${JSON.stringify({
     kind: 0,
     v: {
       version: 3,
@@ -1658,29 +1772,29 @@ async function runChatSessionStorageDeltaChecks() {
     }
   })}\n`, 'utf8');
 
-  const refreshedSessions = await storage.listSessions();
-  const stalePendingSession = refreshedSessions.find((item) => item.id === 'session-2');
+    const refreshedSessions = await storage.listSessions();
+    const stalePendingSession = refreshedSessions.find((item) => item.id === 'session-2');
   assert(stalePendingSession, 'Storage delta test did not discover the stale pending full-state session.');
   assert(stalePendingSession.pendingRequestCount === 0, `Storage delta test did not prefer full-state pendingRequests for stale pending sessions. Got: ${stalePendingSession.pendingRequestCount}`);
   assert(stalePendingSession.lastRequestCompleted === true, 'Storage delta test did not preserve lastRequestCompleted for stale pending full-state sessions.');
 
-  const deleteTargetSessionFile = path.join(chatSessionsDir, 'session-3.jsonl');
-  const deleteTargetEditingFile = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3.jsonl');
-  const deleteTargetTranscriptFile = path.join(scopedWorkspaceRoot, 'transcripts', 'session-3.jsonl');
-  const deleteTargetNestedTranscriptFile = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'transcripts', 'session-3.jsonl');
-  const deleteTargetResourceDir = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'chat-session-resources', 'session-3');
-  const stateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb');
-  const backupStateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb.backup');
-  await fs.mkdir(path.dirname(deleteTargetEditingFile), { recursive: true });
-  await fs.mkdir(path.dirname(deleteTargetTranscriptFile), { recursive: true });
-  await fs.mkdir(path.dirname(deleteTargetNestedTranscriptFile), { recursive: true });
-  await fs.mkdir(deleteTargetResourceDir, { recursive: true });
-  await fs.writeFile(deleteTargetSessionFile, `${JSON.stringify({ kind: 0, v: { sessionId: 'session-3', requests: [], inputState: {} } })}\n`, 'utf8');
-  await fs.writeFile(deleteTargetEditingFile, '{}\n', 'utf8');
-  await fs.writeFile(deleteTargetTranscriptFile, '{}\n', 'utf8');
-  await fs.writeFile(deleteTargetNestedTranscriptFile, '{}\n', 'utf8');
-  await fs.writeFile(path.join(deleteTargetResourceDir, 'content.txt'), 'resource', 'utf8');
-  await writeWorkspaceStateValue(stateDbPath, 'chat.ChatSessionStore.index', JSON.stringify({
+    const deleteTargetSessionFile = path.join(chatSessionsDir, 'session-3.jsonl');
+    const deleteTargetEditingFile = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3.jsonl');
+    const deleteTargetTranscriptFile = path.join(scopedWorkspaceRoot, 'transcripts', 'session-3.jsonl');
+    const deleteTargetNestedTranscriptFile = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'transcripts', 'session-3.jsonl');
+    const deleteTargetResourceDir = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'chat-session-resources', 'session-3');
+    const stateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb');
+    const backupStateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb.backup');
+    await fs.mkdir(path.dirname(deleteTargetEditingFile), { recursive: true });
+    await fs.mkdir(path.dirname(deleteTargetTranscriptFile), { recursive: true });
+    await fs.mkdir(path.dirname(deleteTargetNestedTranscriptFile), { recursive: true });
+    await fs.mkdir(deleteTargetResourceDir, { recursive: true });
+    await fs.writeFile(deleteTargetSessionFile, `${JSON.stringify({ kind: 0, v: { sessionId: 'session-3', requests: [], inputState: {} } })}\n`, 'utf8');
+    await fs.writeFile(deleteTargetEditingFile, '{}\n', 'utf8');
+    await fs.writeFile(deleteTargetTranscriptFile, '{}\n', 'utf8');
+    await fs.writeFile(deleteTargetNestedTranscriptFile, '{}\n', 'utf8');
+    await fs.writeFile(path.join(deleteTargetResourceDir, 'content.txt'), 'resource', 'utf8');
+    await writeWorkspaceStateValue(stateDbPath, 'chat.ChatSessionStore.index', JSON.stringify({
     version: 1,
     entries: {
       'session-3': {
@@ -1799,47 +1913,48 @@ async function runChatSessionStorageDeltaChecks() {
     ]
   }));
 
-  const deleteTargetSession = await storage.getSessionById('session-3');
-  assert(deleteTargetSession, 'Storage deletion test did not discover the session targeted for artifact cleanup.');
+    const deleteTargetSession = await storage.getSessionById('session-3');
+    assert(deleteTargetSession, 'Storage deletion test did not discover the session targeted for artifact cleanup.');
 
-  const deletionReport = await storage.deleteSessionArtifacts(deleteTargetSession);
-  assert(deletionReport.deletedPaths.includes(deleteTargetSessionFile), 'Storage deletion test did not delete the chatSessions JSONL file.');
-  assert(deletionReport.deletedPaths.includes(deleteTargetEditingFile), 'Storage deletion test did not delete the chatEditingSessions JSONL file.');
-  assert(deletionReport.deletedPaths.includes(deleteTargetTranscriptFile), 'Storage deletion test did not delete the top-level transcript JSONL file.');
-  assert(deletionReport.deletedPaths.includes(deleteTargetNestedTranscriptFile), 'Storage deletion test did not delete the nested GitHub.copilot-chat transcript JSONL file.');
-  assert(deletionReport.deletedPaths.includes(deleteTargetResourceDir), 'Storage deletion test did not delete the chat-session-resources directory.');
-  await assertMissing(deleteTargetSessionFile, 'Storage deletion test left the chatSessions JSONL file on disk.');
-  await assertMissing(deleteTargetEditingFile, 'Storage deletion test left the chatEditingSessions JSONL file on disk.');
-  await assertMissing(deleteTargetTranscriptFile, 'Storage deletion test left the top-level transcript JSONL file on disk.');
-  await assertMissing(deleteTargetNestedTranscriptFile, 'Storage deletion test left the nested transcript JSONL file on disk.');
-  await assertMissing(deleteTargetResourceDir, 'Storage deletion test left the chat-session-resources directory on disk.');
-  assert(await storage.getSessionById('session-3') === undefined, 'Storage deletion test still resolved the deleted session after artifact cleanup.');
-  const prunedIndexRaw = await readWorkspaceStateValue(stateDbPath, 'chat.ChatSessionStore.index');
-  assert(prunedIndexRaw && !prunedIndexRaw.includes('session-3'), 'Storage deletion test left the deleted session in chat.ChatSessionStore.index.');
-  assert(prunedIndexRaw && prunedIndexRaw.includes('session-keep'), 'Storage deletion test removed unrelated chat.ChatSessionStore.index entries.');
-  const prunedModelCacheRaw = await readWorkspaceStateValue(stateDbPath, 'agentSessions.model.cache');
-  assert(prunedModelCacheRaw && !prunedModelCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in agentSessions.model.cache.');
-  assert(prunedModelCacheRaw && prunedModelCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated agentSessions.model.cache entries.');
-  const prunedStateCacheRaw = await readWorkspaceStateValue(stateDbPath, 'agentSessions.state.cache');
-  assert(prunedStateCacheRaw && !prunedStateCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in agentSessions.state.cache.');
-  assert(prunedStateCacheRaw && prunedStateCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated agentSessions.state.cache entries.');
-  const prunedTodoListRaw = await readWorkspaceStateValue(stateDbPath, 'memento/chat-todo-list');
-  assert(prunedTodoListRaw && !prunedTodoListRaw.includes('session-3'), 'Storage deletion test left the deleted session in memento/chat-todo-list.');
-  assert(prunedTodoListRaw && prunedTodoListRaw.includes('session-keep'), 'Storage deletion test removed unrelated memento/chat-todo-list entries.');
-  const prunedBackupIndexRaw = await readWorkspaceStateValue(backupStateDbPath, 'chat.ChatSessionStore.index');
-  assert(prunedBackupIndexRaw && !prunedBackupIndexRaw.includes('session-3'), 'Storage deletion test left the deleted session in state.vscdb.backup chat.ChatSessionStore.index.');
-  assert(prunedBackupIndexRaw && prunedBackupIndexRaw.includes('session-keep'), 'Storage deletion test removed unrelated state.vscdb.backup chat.ChatSessionStore.index entries.');
-  const prunedBackupModelCacheRaw = await readWorkspaceStateValue(backupStateDbPath, 'agentSessions.model.cache');
-  assert(prunedBackupModelCacheRaw && !prunedBackupModelCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in state.vscdb.backup agentSessions.model.cache.');
-  assert(prunedBackupModelCacheRaw && prunedBackupModelCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated state.vscdb.backup agentSessions.model.cache entries.');
-  const prunedBackupStateCacheRaw = await readWorkspaceStateValue(backupStateDbPath, 'agentSessions.state.cache');
-  assert(prunedBackupStateCacheRaw && !prunedBackupStateCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in state.vscdb.backup agentSessions.state.cache.');
-  assert(prunedBackupStateCacheRaw && prunedBackupStateCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated state.vscdb.backup agentSessions.state.cache entries.');
-  const prunedBackupTodoListRaw = await readWorkspaceStateValue(backupStateDbPath, 'memento/chat-todo-list');
-  assert(prunedBackupTodoListRaw && !prunedBackupTodoListRaw.includes('session-3'), 'Storage deletion test left the deleted session in state.vscdb.backup memento/chat-todo-list.');
-  assert(prunedBackupTodoListRaw && prunedBackupTodoListRaw.includes('session-keep'), 'Storage deletion test removed unrelated state.vscdb.backup memento/chat-todo-list entries.');
-
-  await fs.rm(tempDir, { recursive: true, force: true });
+    const deletionReport = await storage.deleteSessionArtifacts(deleteTargetSession);
+    assert(deletionReport.deletedPaths.includes(deleteTargetSessionFile), 'Storage deletion test did not delete the chatSessions JSONL file.');
+    assert(deletionReport.deletedPaths.includes(deleteTargetEditingFile), 'Storage deletion test did not delete the chatEditingSessions JSONL file.');
+    assert(deletionReport.deletedPaths.includes(deleteTargetTranscriptFile), 'Storage deletion test did not delete the top-level transcript JSONL file.');
+    assert(deletionReport.deletedPaths.includes(deleteTargetNestedTranscriptFile), 'Storage deletion test did not delete the nested GitHub.copilot-chat transcript JSONL file.');
+    assert(deletionReport.deletedPaths.includes(deleteTargetResourceDir), 'Storage deletion test did not delete the chat-session-resources directory.');
+    await assertMissing(deleteTargetSessionFile, 'Storage deletion test left the chatSessions JSONL file on disk.');
+    await assertMissing(deleteTargetEditingFile, 'Storage deletion test left the chatEditingSessions JSONL file on disk.');
+    await assertMissing(deleteTargetTranscriptFile, 'Storage deletion test left the top-level transcript JSONL file on disk.');
+    await assertMissing(deleteTargetNestedTranscriptFile, 'Storage deletion test left the nested transcript JSONL file on disk.');
+    await assertMissing(deleteTargetResourceDir, 'Storage deletion test left the chat-session-resources directory on disk.');
+    assert(await storage.getSessionById('session-3') === undefined, 'Storage deletion test still resolved the deleted session after artifact cleanup.');
+    const prunedIndexRaw = await readWorkspaceStateValue(stateDbPath, 'chat.ChatSessionStore.index');
+    assert(prunedIndexRaw && !prunedIndexRaw.includes('session-3'), 'Storage deletion test left the deleted session in chat.ChatSessionStore.index.');
+    assert(prunedIndexRaw && prunedIndexRaw.includes('session-keep'), 'Storage deletion test removed unrelated chat.ChatSessionStore.index entries.');
+    const prunedModelCacheRaw = await readWorkspaceStateValue(stateDbPath, 'agentSessions.model.cache');
+    assert(prunedModelCacheRaw && !prunedModelCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in agentSessions.model.cache.');
+    assert(prunedModelCacheRaw && prunedModelCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated agentSessions.model.cache entries.');
+    const prunedStateCacheRaw = await readWorkspaceStateValue(stateDbPath, 'agentSessions.state.cache');
+    assert(prunedStateCacheRaw && !prunedStateCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in agentSessions.state.cache.');
+    assert(prunedStateCacheRaw && prunedStateCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated agentSessions.state.cache entries.');
+    const prunedTodoListRaw = await readWorkspaceStateValue(stateDbPath, 'memento/chat-todo-list');
+    assert(prunedTodoListRaw && !prunedTodoListRaw.includes('session-3'), 'Storage deletion test left the deleted session in memento/chat-todo-list.');
+    assert(prunedTodoListRaw && prunedTodoListRaw.includes('session-keep'), 'Storage deletion test removed unrelated memento/chat-todo-list entries.');
+    const prunedBackupIndexRaw = await readWorkspaceStateValue(backupStateDbPath, 'chat.ChatSessionStore.index');
+    assert(prunedBackupIndexRaw && !prunedBackupIndexRaw.includes('session-3'), 'Storage deletion test left the deleted session in state.vscdb.backup chat.ChatSessionStore.index.');
+    assert(prunedBackupIndexRaw && prunedBackupIndexRaw.includes('session-keep'), 'Storage deletion test removed unrelated state.vscdb.backup chat.ChatSessionStore.index entries.');
+    const prunedBackupModelCacheRaw = await readWorkspaceStateValue(backupStateDbPath, 'agentSessions.model.cache');
+    assert(prunedBackupModelCacheRaw && !prunedBackupModelCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in state.vscdb.backup agentSessions.model.cache.');
+    assert(prunedBackupModelCacheRaw && prunedBackupModelCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated state.vscdb.backup agentSessions.model.cache entries.');
+    const prunedBackupStateCacheRaw = await readWorkspaceStateValue(backupStateDbPath, 'agentSessions.state.cache');
+    assert(prunedBackupStateCacheRaw && !prunedBackupStateCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in state.vscdb.backup agentSessions.state.cache.');
+    assert(prunedBackupStateCacheRaw && prunedBackupStateCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated state.vscdb.backup agentSessions.state.cache entries.');
+    const prunedBackupTodoListRaw = await readWorkspaceStateValue(backupStateDbPath, 'memento/chat-todo-list');
+    assert(prunedBackupTodoListRaw && !prunedBackupTodoListRaw.includes('session-3'), 'Storage deletion test left the deleted session in state.vscdb.backup memento/chat-todo-list.');
+    assert(prunedBackupTodoListRaw && prunedBackupTodoListRaw.includes('session-keep'), 'Storage deletion test removed unrelated state.vscdb.backup memento/chat-todo-list entries.');
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function runStabilizedCreateWorkflowChecks() {
