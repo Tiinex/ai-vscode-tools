@@ -1,10 +1,11 @@
 import { focusLikelyEditorChat } from "./editorFocus";
 import type { ChatFocusReport } from "./focusTargets";
 import type { ChatCommandResult, ChatInteropApi, SendChatMessageRequest } from "./types";
+import { appendUnsettledSessionDiagnostic, describeUnsettledSession } from "./unsettledDiagnostics";
 
-// Increase polling window so total wait ≈ 60 seconds (60 * 1000ms)
-const TARGET_MUTATION_POLL_ATTEMPTS = 60;
+const TARGET_MUTATION_TIMEOUT_MS = 180_000;
 const TARGET_MUTATION_POLL_DELAY_MS = 1000;
+const TARGET_MUTATION_POLL_ATTEMPTS = Math.ceil(TARGET_MUTATION_TIMEOUT_MS / TARGET_MUTATION_POLL_DELAY_MS);
 
 export interface SessionSendWorkflowResult {
   result: ChatCommandResult;
@@ -39,7 +40,7 @@ export async function sendMessageToSessionWithFallback(
     };
   }
 
-  const revealResult = await chatInterop.revealChat(request.sessionId);
+  let revealResult = await chatInterop.revealChat(request.sessionId);
   if (!revealResult.ok) {
     return {
       result: {
@@ -51,10 +52,21 @@ export async function sendMessageToSessionWithFallback(
     };
   }
 
-  const focusResult = await focusLikelyEditorChat(chatInterop, {
+  let focusResult = await focusLikelyEditorChat(chatInterop, {
     sessionId: request.sessionId
   });
-  const genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report);
+  let genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report);
+  if (!focusResult.ok && !genericActiveChatFallback) {
+    const retriedRevealResult = await chatInterop.revealChat(request.sessionId);
+    if (retriedRevealResult.ok) {
+      revealResult = retriedRevealResult;
+      focusResult = await focusLikelyEditorChat(chatInterop, {
+        sessionId: request.sessionId
+      });
+      genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report);
+    }
+  }
+
   if (!focusResult.ok && !genericActiveChatFallback) {
     return {
       result: {
@@ -80,38 +92,17 @@ export async function sendMessageToSessionWithFallback(
 
   if (!focusedResult.ok) {
     if (isPersistedMutationTimeout(focusedResult)) {
-      const recoveredTarget = await waitForTargetSessionMutation(
-        chatInterop,
-        request.sessionId,
-        beforeTarget?.lastUpdated,
-        request.blockOnResponse === true
-      );
-      if (recoveredTarget.session && recoveredTarget.observedMutation && recoveredTarget.settled) {
-        return {
-          result: {
-            ok: true,
-            session: recoveredTarget.session,
-            selection: focusedResult.selection,
-            dispatch: focusedResult.dispatch,
-            revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
-          },
-          usedFallback: true,
-          fallbackReason
-        };
-      }
-
-      if (recoveredTarget.observedMutation && !recoveredTarget.settled) {
-        return {
-          result: {
-            ok: false,
-            reason: `${fallbackReason} Fallback submit touched the target session, but it did not reach a settled state within the expected timeout.`,
-            session: recoveredTarget.session,
-            revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
-          },
-          usedFallback: true,
-          fallbackReason
-        };
-      }
+      const diagnosedTarget = await getSessionSummary(chatInterop, request.sessionId);
+      return {
+        result: {
+          ...focusedResult,
+          session: diagnosedTarget ?? focusedResult.session,
+          reason: await buildPersistedMutationTimeoutReason(fallbackReason, focusedResult, beforeTarget?.lastUpdated, diagnosedTarget),
+          revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+        },
+        usedFallback: true,
+        fallbackReason
+      };
     }
 
     return {
@@ -157,7 +148,10 @@ export async function sendMessageToSessionWithFallback(
     return {
       result: {
         ok: false,
-        reason: `${fallbackReason} Fallback submit touched target session ${request.sessionId}, but it did not reach a settled state within the expected timeout.`,
+        reason: await appendUnsettledSessionDiagnostic(
+          `${fallbackReason} Fallback submit touched target session ${request.sessionId}, but it did not reach a settled state within the expected timeout.`,
+          verifiedTarget.session
+        ),
         session: verifiedTarget.session,
         revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
       },
@@ -227,6 +221,38 @@ export function canTrustGenericActiveChatAfterReveal(report: ChatFocusReport | u
 function isPersistedMutationTimeout(result: ChatCommandResult): boolean {
   const rendered = `${result.reason ?? ""} ${result.error ?? ""}`.toLowerCase();
   return rendered.includes("no persisted session mutation");
+}
+
+async function buildPersistedMutationTimeoutReason(
+  fallbackReason: string,
+  focusedResult: ChatCommandResult,
+  previousLastUpdated: string | undefined,
+  diagnosedTarget: ChatCommandResult["session"] | undefined
+): Promise<string> {
+  const baseReason = focusedResult.reason
+    ?? focusedResult.error
+    ?? "Fallback submit timed out before a persisted session mutation was observed.";
+
+  const diagnosticFragments = [
+    "Timeouts are treated as diagnostic failures and should be investigated before continuing."
+  ];
+
+  if (!diagnosedTarget) {
+    diagnosticFragments.push("The target session could not be re-read after the timeout.");
+  } else if (!previousLastUpdated || diagnosedTarget.lastUpdated !== previousLastUpdated) {
+    if (isSessionSettled(diagnosedTarget)) {
+      diagnosticFragments.push("The target session appears to have mutated and settled after the timeout, which indicates a host-side persistence or UI synchronization lag.");
+    } else {
+      diagnosticFragments.push(
+        await describeUnsettledSession(diagnosedTarget)
+        ?? "The target session appears to have mutated after the timeout but still does not look settled."
+      );
+    }
+  } else {
+    diagnosticFragments.push("The target session still shows no persisted mutation after the timeout.");
+  }
+
+  return `${fallbackReason} ${baseReason} ${diagnosticFragments.join(" ")}`;
 }
 
 function normalize(value: string | undefined): string {

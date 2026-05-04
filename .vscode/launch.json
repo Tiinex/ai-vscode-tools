@@ -2,18 +2,17 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Agent Architect Tools Extension",
+      "name": "Run Recovery Tooling Extension",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
       "args": [
-        "--extensionDevelopmentPath=${workspaceFolder}",
-        "${workspaceFolder}/sandboxed-workspace"
+        "--extensionDevelopmentPath=${workspaceFolder}"
       ],
       "outFiles": [
         "${workspaceFolder}/dist/**/*.js"
       ],
-      "preLaunchTask": "build agent architect tools extension"
+      "preLaunchTask": "watch recovery tooling extension"
     }
   ]
 }

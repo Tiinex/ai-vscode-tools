@@ -3,9 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { loadWorkspaceSessionIndex, type WorkspaceSessionIndexEntry } from "../sessionIndex";
+import { loadWorkspaceSessionIndex, pruneWorkspaceSessionState, type WorkspaceSessionIndexEntry } from "../sessionIndex";
 import { parsePromptDispatchAgent } from "./promptDispatch";
-import { ChatInteropOptions, ChatSessionSummary } from "./types";
+import { ChatArtifactDeletionReport, ChatInteropOptions, ChatSessionSummary } from "./types";
 
 interface SessionContainer {
   provider: "workspaceStorage" | "emptyWindow";
@@ -52,6 +52,42 @@ export class ChatSessionStorage {
   async getSessionById(sessionId: string): Promise<ChatSessionSummary | undefined> {
     const sessions = await this.listSessions();
     return sessions.find((session) => session.id === sessionId || session.id.startsWith(sessionId));
+  }
+
+  async getExactSessionById(sessionId: string): Promise<ChatSessionSummary | undefined> {
+    const sessions = await this.listSessions();
+    return sessions.find((session) => session.id === sessionId);
+  }
+
+  async deleteSessionArtifacts(session: ChatSessionSummary): Promise<ChatArtifactDeletionReport> {
+    const attemptedPaths = this.buildArtifactPaths(session);
+    const deletedPaths: string[] = [];
+    const missingPaths: string[] = [];
+
+    for (const artifactPath of attemptedPaths) {
+      const stat = await safeStat(artifactPath);
+      if (!stat) {
+        missingPaths.push(artifactPath);
+        continue;
+      }
+
+      await fs.rm(artifactPath, {
+        recursive: stat.isDirectory(),
+        force: false
+      });
+      deletedPaths.push(artifactPath);
+    }
+
+    if (session.provider === "workspaceStorage") {
+      const workspaceStorageDir = path.dirname(path.dirname(session.sessionFile));
+      await pruneWorkspaceSessionState(workspaceStorageDir, session.id);
+    }
+
+    return {
+      attemptedPaths,
+      deletedPaths,
+      missingPaths
+    };
   }
 
   private async readSummary(container: SessionContainer): Promise<ChatSessionSummary | undefined> {
@@ -212,6 +248,8 @@ export class ChatSessionStorage {
           const key = normalizeJsonlKey(parsed?.k);
           if (key === "requests" && Array.isArray(parsed?.v)) {
             requestRows.push(...parsed.v);
+          } else if (key?.startsWith("requests/")) {
+            applyRequestDelta(requestRows, key, parsed?.v);
           }
           updatedAt = coerceDate(parsed?.updatedAt) ?? updatedAt;
         }
@@ -242,6 +280,20 @@ export class ChatSessionStorage {
     }
 
     return [path.join(getUserDataRoot(), "User", "globalStorage", "emptyWindowChatSessions")];
+  }
+
+  private buildArtifactPaths(session: ChatSessionSummary): string[] {
+    const attemptedPaths = new Set<string>([session.sessionFile]);
+
+    if (session.provider === "workspaceStorage") {
+      const storageDir = path.dirname(path.dirname(session.sessionFile));
+      attemptedPaths.add(path.join(storageDir, "chatEditingSessions", `${session.id}.jsonl`));
+      attemptedPaths.add(path.join(storageDir, "transcripts", `${session.id}.jsonl`));
+      attemptedPaths.add(path.join(storageDir, "GitHub.copilot-chat", "transcripts", `${session.id}.jsonl`));
+      attemptedPaths.add(path.join(storageDir, "GitHub.copilot-chat", "chat-session-resources", session.id));
+    }
+
+    return [...attemptedPaths];
   }
 }
 
@@ -282,7 +334,17 @@ function extractMetadata(fullState: any | undefined, requestRows: any[], deltaSt
     fullState?.inputState?.mode?.kind
   );
 
+  const inferredAgent = firstString(
+    inferAgentFromModeUri(currentInputState?.mode?.id),
+    inferAgentFromModeUri(requestPayload?.modeInfo?.modeInstructions?.uri?.external),
+    inferAgentFromModeUri(requestPayload?.mode),
+    inferAgentFromModeUri(fullState?.mode),
+    inferPromptDispatchAgent(requestPayload),
+    inferPromptDispatchAgent(fullState)
+  );
+
   const agent = firstString(
+    inferredAgent,
     requestPayload?.participant,
     requestPayload?.agentName,
     requestPayload?.agentId,
@@ -376,6 +438,28 @@ function inferPromptDispatchAgent(payload: any): string | undefined {
   }
 
   return undefined;
+}
+
+function inferAgentFromModeUri(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "file:") {
+      return undefined;
+    }
+
+    const basename = path.posix.basename(parsed.pathname);
+    if (!/\.agent\.md$/i.test(basename)) {
+      return undefined;
+    }
+
+    return basename.replace(/\.agent\.md$/i, "");
+  } catch {
+    return undefined;
+  }
 }
 
 function firstString(...values: unknown[]): string | undefined {

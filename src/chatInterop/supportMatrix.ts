@@ -93,8 +93,8 @@ export function buildLiveChatSupportMatrix(options: {
   return {
     localNewChatPrompt: createPathAvailable
       ? {
-          status: "supported",
-          reason: `The Local new-chat path can open a chat through ${NEW_CHAT_EDITOR_COMMAND} and dispatch through ${OPEN_CHAT_COMMAND}.`
+          status: "best-effort",
+          reason: `The Local new-chat path can open a chat through ${NEW_CHAT_EDITOR_COMMAND} and dispatch through ${OPEN_CHAT_COMMAND}, but a plain new chat can still inherit active chat mode or model state on this host instead of starting from a trustworthy neutral default.`
         }
       : {
           status: "unsupported",
@@ -103,7 +103,7 @@ export function buildLiveChatSupportMatrix(options: {
     localNewChatMode: createPathAvailable
       ? {
           status: "best-effort",
-          reason: "Mode can be requested on Local createChat and has been observed in persisted session metadata on this build, but the proof still depends on best-effort persisted fields rather than a first-class exact-session API."
+          reason: "Mode can be requested on Local createChat and has been observed in persisted session metadata on some hosts, but the current host can still inherit active chat UI state on create. Treat create-time mode as host-bounded and verify with persisted state rather than assuming a neutral new-chat start."
         }
       : {
           status: "unsupported",
@@ -112,7 +112,7 @@ export function buildLiveChatSupportMatrix(options: {
     localNewChatModel: createPathAvailable
       ? {
           status: "best-effort",
-          reason: "Model can be requested on Local createChat and has been observed in persisted session metadata on this build, but there is no dedicated chat-model command surface for exact follow-up or exact UI confirmation."
+          reason: "Model can be requested on Local createChat and has been observed in persisted session metadata on some hosts, but the current host can still inherit active chat UI state on create. There is no dedicated create-time surface that guarantees a neutral default model on new-chat start."
         }
       : {
           status: "unsupported",
@@ -121,7 +121,7 @@ export function buildLiveChatSupportMatrix(options: {
     localNewChatCustomRolePrompt: createPathAvailable
       ? {
           status: "best-effort",
-          reason: "Local createChat can dispatch a custom role through a temporary prompt-file slash command, and the request artifact carries the selected role, but the actual persisted participant still remains the built-in Copilot agent on this build."
+          reason: "Local createChat can dispatch a custom role through a temporary prompt-file slash command, and that prompt-artifact start is the safest current create-time way to avoid passive UI inheritance. The actual persisted participant can still remain the built-in Copilot agent on this build."
         }
       : {
           status: "unsupported",

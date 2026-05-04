@@ -1,16 +1,17 @@
-import * as vscode from "vscode";
+﻿import * as vscode from "vscode";
 import { ChatInteropService } from "./service";
 import { sendMessageToSessionWithFallback } from "./sessionSendWorkflow";
 import { ChatInteropApi, ChatInteropOptions } from "./types";
 
 const COMMAND_ALIASES = {
-  listChats: ["agentArchitectTools.chatInterop.listChats"],
-  createChat: ["agentArchitectTools.chatInterop.createChat"],
-  sendMessage: ["agentArchitectTools.chatInterop.sendMessage"],
-  sendMessageWithFallback: ["agentArchitectTools.chatInterop.sendMessageWithFallback"],
-  sendFocusedMessage: ["agentArchitectTools.chatInterop.sendFocusedMessage"],
-  closeVisibleTabs: ["agentArchitectTools.chatInterop.closeVisibleTabs"],
-  revealChat: ["agentArchitectTools.chatInterop.revealChat"]
+  listChats: ["aiRecoveryTooling.chatInterop.listChats"],
+  createChat: ["aiRecoveryTooling.chatInterop.createChat"],
+  sendMessage: ["aiRecoveryTooling.chatInterop.sendMessage"],
+  sendMessageWithFallback: ["aiRecoveryTooling.chatInterop.sendMessageWithFallback"],
+  sendFocusedMessage: ["aiRecoveryTooling.chatInterop.sendFocusedMessage"],
+  closeVisibleTabs: ["aiRecoveryTooling.chatInterop.closeVisibleTabs"],
+  deleteChat: ["aiRecoveryTooling.chatInterop.deleteChat"],
+  revealChat: ["aiRecoveryTooling.chatInterop.revealChat"]
 } as const;
 
 export function registerChatInterop(context: vscode.ExtensionContext, options: ChatInteropOptions = {}): ChatInteropApi {
@@ -36,6 +37,9 @@ export function registerChatInterop(context: vscode.ExtensionContext, options: C
   }
   for (const command of COMMAND_ALIASES.closeVisibleTabs) {
     context.subscriptions.push(vscode.commands.registerCommand(command, async (sessionId: string) => service.closeVisibleTabs(sessionId)));
+  }
+  for (const command of COMMAND_ALIASES.deleteChat) {
+    context.subscriptions.push(vscode.commands.registerCommand(command, async (sessionId: string) => service.deleteChat(sessionId)));
   }
   for (const command of COMMAND_ALIASES.revealChat) {
     context.subscriptions.push(vscode.commands.registerCommand(command, async (sessionId: string) => service.revealChat(sessionId)));

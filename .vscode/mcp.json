@@ -1,6 +1,6 @@
-{
+﻿{
   "servers": {
-    "agentArchitectTools": {
+    "aiRecoveryTooling": {
       "type": "stdio",
       "command": "node",
       "args": [

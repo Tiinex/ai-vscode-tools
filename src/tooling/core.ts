@@ -2950,6 +2950,7 @@ export async function buildContextEstimate(options: ContextEstimateOptions): Pro
   const candidate = await selectSession(options);
   const categories = createEmptyContextCategories();
   const afterLatestCompact = options.afterLatestCompact === true;
+  let compactionBoundaryApplied = false;
   const latestRequestFamiliesLimit = options.latestRequestFamilies !== undefined
     ? clampPositive(options.latestRequestFamilies, 1, DEFAULT_ACTIVE_REQUEST_FAMILY_WINDOW)
     : undefined;
@@ -3020,9 +3021,6 @@ export async function buildContextEstimate(options: ContextEstimateOptions): Pro
 
   let activeRequestFamilies = 0;
   if (requestFamilyIndex < 0) {
-    if (afterLatestCompact) {
-      throw new Error("No persisted compaction boundary was found because the selected session has no request families.");
-    }
     for (const entry of includedEntries) {
       const category = classifyContextCategory(entry.summary, entry.row);
       addCategoryChars(categories, category, textCharsFromRow(entry.row));
@@ -3032,9 +3030,7 @@ export async function buildContextEstimate(options: ContextEstimateOptions): Pro
     const requestedFamilyWindow = latestRequestFamiliesLimit ?? DEFAULT_ACTIVE_REQUEST_FAMILY_WINDOW;
     const boundedActiveRequestFamilies = Math.min(requestedFamilyWindow, requestFamilyIndex + 1);
     const boundedFirstActiveFamilyIndex = Math.max(0, requestFamilyIndex - boundedActiveRequestFamilies + 1);
-    if (afterLatestCompact && latestCompactionFamilyIndex < 0) {
-      throw new Error("No persisted compaction boundary was found in the selected context-estimate scope.");
-    }
+    compactionBoundaryApplied = afterLatestCompact && latestCompactionFamilyIndex >= 0;
     const firstActiveFamilyIndex = latestCompactionFamilyIndex >= 0
       ? Math.max(boundedFirstActiveFamilyIndex, latestCompactionFamilyIndex)
       : boundedFirstActiveFamilyIndex;
@@ -3096,8 +3092,10 @@ export async function buildContextEstimate(options: ContextEstimateOptions): Pro
     signals.push(
       `Estimate is bounded to the active persisted request families; current active tail = ${activeRequestFamilies || 0} ${activeRequestFamilies === 1 ? "family" : "families"} (cap ${Math.min(DEFAULT_ACTIVE_REQUEST_FAMILY_WINDOW, requestFamilyIndex + 1)}) instead of full-session accumulation.`
     );
-    if (latestCompactionFamilyIndex >= 0) {
+    if (compactionBoundaryApplied) {
       signals.push("Latest persisted conversation compaction is treated as an active-context boundary.");
+    } else if (afterLatestCompact) {
+      signals.push("Requested latest-compaction scoping could not be applied because no persisted compaction boundary was found; estimate falls back to the bounded active request tail.");
     }
     if (latestRequestFamiliesLimit !== undefined) {
       signals.push(`Requested latestRequestFamilies limit: ${latestRequestFamiliesLimit}.`);
@@ -3153,7 +3151,7 @@ export async function buildContextEstimate(options: ContextEstimateOptions): Pro
     signals,
     afterLatestCompact,
     latestRequestFamiliesLimit,
-    compactionBoundaryApplied: latestCompactionFamilyIndex >= 0 && activeRequestFamilies > 0
+    compactionBoundaryApplied
   };
 }
 
@@ -3387,7 +3385,7 @@ export function renderTranscriptEvidenceMarkdown(result: TranscriptEvidenceResul
     lines.push(
       "",
       "## Persisted Session Evidence",
-      "- The sections below are derived directly from the persisted session JSONL, which is the normal live-session evidence path when no canonical transcript artifact is present."
+      "- The sections below are derived directly from the persisted session JSONL and are provided as a bounded fallback when no canonical transcript artifact is present."
     );
 
     if (result.fallbackSnapshot) {
@@ -3636,6 +3634,7 @@ export function renderContextEstimateMarkdown(result: ContextEstimateResult, opt
       `- Session classification: ${describeSessionActivityKind(result.activityKind)}`,
       `- Noise filtering: ${result.includeNoise ? "included" : "filtered"}`,
       `- After latest compact: ${result.afterLatestCompact ? "yes" : "no"}`,
+      `- Compaction boundary applied: ${result.compactionBoundaryApplied ? "yes" : result.afterLatestCompact ? "no (fell back to bounded active tail)" : "not requested"}`,
       result.latestRequestFamiliesLimit !== undefined ? `- Latest request families limit: ${result.latestRequestFamiliesLimit}` : undefined,
       `- Active request families: ${result.activeRequestFamilies || "fallback"}`,
       "",
@@ -3687,6 +3686,7 @@ export function renderContextEstimateMarkdown(result: ContextEstimateResult, opt
     `- Session classification: ${describeSessionActivityKind(result.activityKind)}`,
     `- Noise filtering: ${result.includeNoise ? "included" : "filtered"}`,
     `- After latest compact: ${result.afterLatestCompact ? "yes" : "no"}`,
+    `- Compaction boundary applied: ${result.compactionBoundaryApplied ? "yes" : result.afterLatestCompact ? "no (fell back to bounded active tail)" : "not requested"}`,
     result.latestRequestFamiliesLimit !== undefined ? `- Latest request families limit: ${result.latestRequestFamiliesLimit}` : undefined,
     `- Token heuristic: ${result.tokenHeuristic}`,
     `- Rows scanned: ${result.totalRows}`,

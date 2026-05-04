@@ -10,33 +10,45 @@ import { toLocalChatSessionResourceString } from "./sessionResource";
 export interface LocalChatTabMatchRequest {
   sessionId: string;
   sessionTitle: string;
+  matchMode?: "resource-or-title" | "resource-only";
 }
+
+export type LocalChatEditorTabMatchKind = "resource" | "title" | "none";
 
 export function isMatchingLocalChatEditorTab(
   tab: Pick<ChatFocusTabLike, "label" | "input">,
   request: LocalChatTabMatchRequest
 ): boolean {
+  return getLocalChatEditorTabMatchKind(tab, request) !== "none";
+}
+
+export function getLocalChatEditorTabMatchKind(
+  tab: Pick<ChatFocusTabLike, "label" | "input">,
+  request: LocalChatTabMatchRequest
+): LocalChatEditorTabMatchKind {
   const input = summarizeTabInput(tab.input);
   const resourceValues = [input.uri, ...input.stringHints].filter((value): value is string => Boolean(value));
   const targetResource = normalize(toLocalChatSessionResourceString(request.sessionId));
   const hasAnyLocalSessionResource = resourceValues.some((value) => normalize(value).includes("vscode-chat-session://local/"));
   if (resourceValues.some((value) => normalize(value).includes(targetResource))) {
-    return true;
+    return "resource";
   }
 
-  if (hasAnyLocalSessionResource) {
-    return false;
+  if (hasAnyLocalSessionResource || request.matchMode === "resource-only") {
+    return "none";
   }
 
   if (isDefinitelyNonChatEditorInput(input)) {
-    return false;
+    return "none";
   }
 
   if (!isLikelyEditorChatTab(tab, [request.sessionTitle])) {
-    return false;
+    return "none";
   }
 
-  return matchesChatFocusTargetTitle(toChatFocusTabSummary(tab, input), request.sessionTitle);
+  return matchesChatFocusTargetTitle(toChatFocusTabSummary(tab, input), request.sessionTitle)
+    ? "title"
+    : "none";
 }
 
 function toChatFocusTabSummary(

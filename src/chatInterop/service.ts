@@ -38,15 +38,17 @@ import {
   SendChatMessageRequest,
   toModelSelector
 } from "./types";
-import { closeVisibleEditorChatTabsForSession } from "./editorTabLifecycle";
+import { appendUnsettledSessionDiagnostic } from "./unsettledDiagnostics";
+import { closeVisibleEditorChatTabsForSession, inspectVisibleEditorChatTabsForSession } from "./editorTabLifecycle";
 import { toLocalChatSessionResourceString } from "./sessionResource";
 
 const NEW_CHAT_EDITOR_COMMAND = "workbench.action.openChat";
 const OPEN_CHAT_COMMAND = "workbench.action.chat.open";
 const DEFAULT_OPEN_DELAY_MS = 200;
 const DEFAULT_POST_CREATE_DELAY_MS = 350;
-// Increase default post-create timeout to 60s to accommodate slower persistence observed in some hosts
-const DEFAULT_POST_CREATE_TIMEOUT_MS = 60_000;
+// Treat persistence waits as diagnostic gates, not soft fallbacks. Three minutes is long
+// enough for slower hosts while still surfacing real hangs for investigation.
+const DEFAULT_POST_CREATE_TIMEOUT_MS = 180_000;
 const DEFAULT_PROMPT_REGISTRATION_DELAY_MS = 350;
 
 export class ChatInteropService implements ChatInteropApi {
@@ -87,7 +89,12 @@ export class ChatInteropService implements ChatInteropApi {
       return { ok: false, reason: "prompt is required" };
     }
 
-    const selectionBlocker = buildCreateChatSelectionBlocker(request);
+    const directAgentOpenAvailable = request.agentName?.trim()
+      ? Boolean(await this.findDirectAgentOpenCommand(request.agentName))
+      : false;
+    const selectionBlocker = buildCreateChatSelectionBlocker(request, {
+      directAgentOpenAvailable
+    });
     if (selectionBlocker) {
       return { ok: false, reason: selectionBlocker };
     }
@@ -112,7 +119,10 @@ export class ChatInteropService implements ChatInteropApi {
       if (request.blockOnResponse && created && !settled) {
         return {
           ok: false,
-          reason: "Created chat session was observed, but it did not reach a settled state within the expected timeout.",
+          reason: await appendUnsettledSessionDiagnostic(
+            "Created chat session was observed, but it did not reach a settled state within the expected timeout.",
+            created
+          ),
           session: created,
           selection,
           dispatch
@@ -192,7 +202,10 @@ export class ChatInteropService implements ChatInteropApi {
         if (!waitResult.settled) {
           return {
             ok: false,
-            reason: "Exact session send dispatched and a persisted mutation was observed, but the target session did not reach a settled state within the expected timeout.",
+            reason: await appendUnsettledSessionDiagnostic(
+              "Exact session send dispatched and a persisted mutation was observed, but the target session did not reach a settled state within the expected timeout.",
+              session
+            ),
             session
           };
         }
@@ -310,7 +323,10 @@ export class ChatInteropService implements ChatInteropApi {
       if (request.blockOnResponse && !settled) {
         return {
           ok: false,
-          reason: "Focused chat submit dispatched and a persisted mutation was observed, but the session did not reach a settled state within the expected timeout.",
+          reason: await appendUnsettledSessionDiagnostic(
+            "Focused chat submit dispatched and a persisted mutation was observed, but the session did not reach a settled state within the expected timeout.",
+            session
+          ),
           session,
           selection,
           dispatch
@@ -365,6 +381,132 @@ export class ChatInteropService implements ChatInteropApi {
           closedMatchingVisibleTabs: closedTabs.closedCount,
           closedTabLabels: closedTabs.closedLabels
         }
+      };
+    } catch (error) {
+      return toErrorResult(error);
+    } finally {
+      lease?.release();
+    }
+  }
+
+  async deleteChat(sessionId: string): Promise<ChatCommandResult> {
+    let lease: { release(): void } | undefined;
+    try {
+      lease = this.acquireLease();
+    } catch (error) {
+      return toErrorResult(error);
+    }
+
+    try {
+      const session = await this.storage.getExactSessionById(sessionId);
+      if (!session) {
+        const sessions = await this.storage.listSessions();
+        const prefixMatches = sessions.filter((candidate) =>
+          candidate.id.startsWith(sessionId) || sessionId.startsWith(candidate.id)
+        );
+        if (prefixMatches.length > 0) {
+          const matchedIds = prefixMatches.slice(0, 3).map((candidate) => candidate.id).join(", ");
+          const extraMatches = prefixMatches.length > 3 ? ` (+${prefixMatches.length - 3} more)` : "";
+          return {
+            ok: false,
+            reason: `deleteChat requires an exact session id. Prefix input ${sessionId} matched ${matchedIds}${extraMatches}. Re-run with the full session id.`
+          };
+        }
+
+        return { ok: false, reason: `session not found: ${sessionId}` };
+      }
+
+      const preDeleteInspection = inspectVisibleEditorChatTabsForSession({
+        sessionId: session.id,
+        sessionTitle: session.title
+      });
+      if (preDeleteInspection.titleOnlyMatchCount > 0) {
+        const titleOnlyLabels = preDeleteInspection.titleOnlyMatchLabels.length > 0
+          ? preDeleteInspection.titleOnlyMatchLabels.map((label) => JSON.stringify(label)).join(", ")
+          : "-";
+        return {
+          ok: false,
+          reason: `Delete blocked for session ${session.id}: found ${preDeleteInspection.titleOnlyMatchCount} visible editor chat tab(s) that matched only by title (${titleOnlyLabels}) and could not be safely attributed to the exact session resource. Close that editor chat explicitly first, then retry delete.`,
+          session,
+          revealLifecycle: {
+            closedMatchingVisibleTabs: 0,
+            closedTabLabels: []
+          }
+        };
+      }
+
+      const closedTabs = await closeVisibleEditorChatTabsForSession({
+        sessionId: session.id,
+        sessionTitle: session.title,
+        matchMode: "resource-only"
+      });
+      const postCloseInspection = inspectVisibleEditorChatTabsForSession({
+        sessionId: session.id,
+        sessionTitle: session.title,
+        matchMode: "resource-only"
+      });
+      if (postCloseInspection.resourceMatchCount > 0) {
+        const remainingLabels = postCloseInspection.resourceMatchLabels.length > 0
+          ? postCloseInspection.resourceMatchLabels.map((label) => JSON.stringify(label)).join(", ")
+          : "-";
+        return {
+          ok: false,
+          reason: `Delete blocked for session ${session.id}: ${postCloseInspection.resourceMatchCount} exact resource-matched editor chat tab(s) remained visible after the close step (${remainingLabels}).`,
+          session,
+          revealLifecycle: {
+            closedMatchingVisibleTabs: closedTabs.closedCount,
+            closedTabLabels: closedTabs.closedLabels
+          }
+        };
+      }
+
+      const artifactDeletion = await this.storage.deleteSessionArtifacts(session);
+      const postDeleteSession = await this.storage.getExactSessionById(session.id);
+      if (postDeleteSession) {
+        return {
+          ok: false,
+          reason: `Delete blocked for session ${session.id}: the session still resolved from persisted storage after artifact deletion.`,
+          session,
+          revealLifecycle: {
+            closedMatchingVisibleTabs: closedTabs.closedCount,
+            closedTabLabels: closedTabs.closedLabels
+          },
+          artifactDeletion
+        };
+      }
+
+      const postDeleteInspection = inspectVisibleEditorChatTabsForSession({
+        sessionId: session.id,
+        sessionTitle: session.title
+      });
+      if (postDeleteInspection.resourceMatchCount > 0 || postDeleteInspection.titleOnlyMatchCount > 0) {
+        const lingeringLabels = [
+          ...postDeleteInspection.resourceMatchLabels,
+          ...postDeleteInspection.titleOnlyMatchLabels
+        ];
+        const uniqueLingeringLabels = lingeringLabels.length > 0
+          ? [...new Set(lingeringLabels)].map((label) => JSON.stringify(label)).join(", ")
+          : "-";
+        return {
+          ok: false,
+          reason: `Delete blocked for session ${session.id}: matching editor chat tabs were still visible after artifact deletion (resourceMatches=${postDeleteInspection.resourceMatchCount}, titleOnlyMatches=${postDeleteInspection.titleOnlyMatchCount}; labels=${uniqueLingeringLabels}).`,
+          session,
+          revealLifecycle: {
+            closedMatchingVisibleTabs: closedTabs.closedCount,
+            closedTabLabels: closedTabs.closedLabels
+          },
+          artifactDeletion
+        };
+      }
+
+      return {
+        ok: true,
+        session,
+        revealLifecycle: {
+          closedMatchingVisibleTabs: closedTabs.closedCount,
+          closedTabLabels: closedTabs.closedLabels
+        },
+        artifactDeletion
       };
     } catch (error) {
       return toErrorResult(error);
@@ -480,6 +622,23 @@ export class ChatInteropService implements ChatInteropApi {
     await vscode.commands.executeCommand(OPEN_CHAT_COMMAND, options);
   }
 
+  private async dispatchViaFocusedChatSubmit(
+    request: CreateChatRequest | SendChatMessageRequest,
+    query: string
+  ): Promise<boolean> {
+    const commandSupport = await this.getFocusedChatInteropSupport();
+    if (!commandSupport.canSubmitFocusedChatMessage || !commandSupport.focusInputCommand || !commandSupport.submitCommand) {
+      return false;
+    }
+
+    await vscode.commands.executeCommand(commandSupport.focusInputCommand);
+    await delay(this.openDelayMs);
+    await this.prefillFocusedChat(request, query);
+    await delay(this.openDelayMs);
+    await vscode.commands.executeCommand(commandSupport.submitCommand);
+    return true;
+  }
+
   private async dispatchCreateRequest(
     request: CreateChatRequest
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup?: () => Promise<void> }> {
@@ -519,13 +678,23 @@ export class ChatInteropService implements ChatInteropApi {
   ): Promise<void> {
     await vscode.commands.executeCommand(command);
     await delay(this.openDelayMs);
-    await this.dispatchToActiveChat(
+    const dispatched = await this.dispatchViaFocusedChatSubmit(
       {
         ...request,
         agentName: undefined
       },
       prompt
     );
+
+    if (!dispatched) {
+      await this.dispatchToActiveChat(
+        {
+          ...request,
+          agentName: undefined
+        },
+        prompt
+      );
+    }
   }
 
   private async dispatchViaPromptFile(
@@ -546,13 +715,23 @@ export class ChatInteropService implements ChatInteropApi {
       await fs.mkdir(promptsDirectory, { recursive: true });
       await fs.writeFile(artifact.filePath, artifact.content, "utf8");
       await delay(this.promptRegistrationDelayMs);
-      await this.dispatchToActiveChat(
+      const dispatched = await this.dispatchViaFocusedChatSubmit(
         {
           ...request,
           agentName: undefined
         },
         `/${artifact.slashCommand}`
       );
+
+      if (!dispatched) {
+        await this.dispatchToActiveChat(
+          {
+            ...request,
+            agentName: undefined
+          },
+          `/${artifact.slashCommand}`
+        );
+      }
     } catch (error) {
       await cleanup();
       throw error;
@@ -702,14 +881,29 @@ function toLocalChatSessionUri(sessionId: string): vscode.Uri {
 }
 
 function pickCreatedSession(beforeIds: Set<string>, after: ChatSessionSummary[]): ChatSessionSummary | undefined {
-  return after.find((item) => !beforeIds.has(item.id));
+  return pickLatestSession(after.filter((item) => !beforeIds.has(item.id)));
 }
 
 function pickTouchedSession(
   beforeById: Map<string, string>,
   after: ChatSessionSummary[]
 ): ChatSessionSummary | undefined {
-  return after.find((item) => beforeById.get(item.id) !== item.lastUpdated);
+  return pickLatestSession(after.filter((item) => beforeById.get(item.id) !== item.lastUpdated));
+}
+
+function pickLatestSession(sessions: ChatSessionSummary[]): ChatSessionSummary | undefined {
+  let latest: ChatSessionSummary | undefined;
+  let latestUpdatedAt = -Infinity;
+
+  for (const session of sessions) {
+    const updatedAt = parseIsoTimestamp(session.lastUpdated) ?? -Infinity;
+    if (!latest || updatedAt >= latestUpdatedAt) {
+      latest = session;
+      latestUpdatedAt = updatedAt;
+    }
+  }
+
+  return latest;
 }
 
 function isSessionSettled(session: ChatSessionSummary | undefined): boolean {
@@ -772,6 +966,15 @@ function formatSelectionFailure(
     return `${label} was dispatched through a stronger request artifact but is not independently verified in persisted session metadata yet.`;
   }
   return `${label} requested ${JSON.stringify(check.requested ?? "-")} but no explicit verification was available.`;
+}
+
+function parseIsoTimestamp(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function delay(ms: number): Promise<void> {

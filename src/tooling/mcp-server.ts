@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+﻿import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
@@ -26,18 +26,11 @@ import {
   renderTranscriptEvidenceMarkdown,
   renderWindowMarkdown
 } from "./core.js";
-import {
-  describeCopilotCliSessionStateRoot,
-  inspectCopilotCliSession,
-  listCopilotCliSessions,
-  renderCopilotCliSessionInspectionMarkdown,
-  renderCopilotCliSessionListText
-} from "./copilot-cli.js";
 
 const deliveryModeSchema = z.enum(["file-only", "file-and-inline-if-safe", "inline-if-safe"]);
 
 const server = new McpServer({
-  name: "agentArchitectTools",
+  name: "aiRecoveryTooling",
   version: "0.1.0"
 });
 
@@ -481,60 +474,6 @@ server.registerTool(
         {
           type: "text",
           text: delivery.responseText
-        }
-      ]
-    };
-  }
-);
-
-server.registerTool(
-  "listCopilotCliSessions",
-  {
-    title: "List Copilot CLI Sessions",
-    description: `List recent Copilot CLI session-state directories from the host default root ${describeCopilotCliSessionStateRoot()} or a supplied root.`,
-    inputSchema: {
-      sessionStateRoot: z.string().optional(),
-      limit: z.number().int().positive().max(100).optional(),
-      maxOutputChars: z.number().int().positive().max(HARD_MAX_OUTPUT_CHARS).optional()
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  },
-  async ({ sessionStateRoot, limit = 10, maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS }) => {
-    const sessions = await listCopilotCliSessions({ sessionStateRoot, limit });
-    return {
-      content: [
-        {
-          type: "text",
-          text: renderCopilotCliSessionListText(sessions, limit, { maxChars: maxOutputChars, sessionStateRoot })
-        }
-      ]
-    };
-  }
-);
-
-server.registerTool(
-  "inspectCopilotCliSession",
-  {
-    title: "Inspect Copilot CLI Session",
-    description: "Render a bounded markdown inspection of one Copilot CLI session-state entry, including the latest persisted turn summary from events.jsonl.",
-    inputSchema: {
-      sessionStateRoot: z.string().optional(),
-      sessionId: z.string().optional(),
-      latest: z.boolean().optional(),
-      maxOutputChars: z.number().int().positive().max(HARD_MAX_OUTPUT_CHARS).optional()
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  },
-  async ({ sessionStateRoot, sessionId, latest, maxOutputChars = DEFAULT_MAX_OUTPUT_CHARS }) => {
-    const inspection = await inspectCopilotCliSession({ sessionStateRoot, sessionId, latest });
-    if (!inspection) {
-      throw new Error("No Copilot CLI session-state directory with events.jsonl was found.");
-    }
-    return {
-      content: [
-        {
-          type: "text",
-          text: renderCopilotCliSessionInspectionMarkdown(inspection, { maxChars: maxOutputChars, sessionStateRoot })
         }
       ]
     };

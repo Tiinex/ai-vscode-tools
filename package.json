@@ -1,14 +1,10 @@
 {
-  "name": "agent-architect-tools",
-  "displayName": "Agent Architect Tools",
-  "description": "Single-package VS Code extension for Agent Architect session inspection, live chat interop, and MCP tooling, with an internal CLI harness for scripts and tests.",
+  "name": "ai-vscode-recovery-tooling",
+  "displayName": "AI Recovery Tooling",
+  "description": "Optional VS Code recovery tooling for persisted session inspection, artifact-read verification, and Local recovery validation.",
   "version": "0.1.0",
   "private": true,
-  "icon": "docs/images/logos/logo.png",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Tiinusen/vscode-agent-architect.git"
-  },
+  "icon": "assets/logo.png",
   "publisher": "local",
   "engines": {
     "vscode": "^1.99.0",
@@ -25,22 +21,12 @@
     "onLanguageModelTool:estimate_agent_context_breakdown",
     "onLanguageModelTool:get_agent_session_profile",
     "onLanguageModelTool:survey_agent_sessions",
-    "onLanguageModelTool:list_copilot_cli_sessions",
-    "onLanguageModelTool:inspect_copilot_cli_session",
-    "onLanguageModelTool:send_prompt_to_copilot_cli_session",
-    "onLanguageModelTool:inspect_live_chat_support",
-    "onLanguageModelTool:inspect_runtime_chat_commands",
-    "onLanguageModelTool:probe_local_reopen_candidates",
-    "onLanguageModelTool:inspect_chat_focus_targets",
-    "onLanguageModelTool:inspect_chat_focus_debug",
     "onLanguageModelTool:list_live_agent_chats",
     "onLanguageModelTool:create_live_agent_chat",
     "onLanguageModelTool:close_visible_live_chat_tabs",
-    "onLanguageModelTool:send_message_with_lifecycle",
+    "onLanguageModelTool:delete_live_agent_chat_artifacts",
     "onLanguageModelTool:send_message_to_live_agent_chat",
     "onLanguageModelTool:send_message_to_focused_live_chat",
-    "onLanguageModelTool:focus_visible_editor_live_chat",
-    "onLanguageModelTool:send_message_to_focused_editor_chat",
     "onLanguageModelTool:reveal_live_agent_chat"
   ],
   "categories": [
@@ -51,172 +37,104 @@
   "contributes": {
     "commands": [
       {
-        "command": "agentArchitectTools.refreshSessions",
-        "title": "Agent Architect Tools: Refresh Sessions"
+        "command": "aiRecoveryTooling.refreshSessions",
+        "title": "AI Recovery Tooling: Refresh Sessions"
       },
       {
-        "command": "agentArchitectTools.openLatestSnapshot",
-        "title": "Agent Architect Tools: Open Latest Snapshot"
+        "command": "aiRecoveryTooling.openLatestSnapshot",
+        "title": "AI Recovery Tooling: Open Latest Snapshot"
       },
       {
-        "command": "agentArchitectTools.openLatestTranscriptEvidence",
-        "title": "Agent Architect Tools: Open Latest Evidence Transcript"
+        "command": "aiRecoveryTooling.openLatestTranscriptEvidence",
+        "title": "AI Recovery Tooling: Open Latest Evidence Transcript"
       },
       {
-        "command": "agentArchitectTools.openLatestContextEstimate",
-        "title": "Agent Architect Tools: Open Latest Context Estimate"
+        "command": "aiRecoveryTooling.openLatestContextEstimate",
+        "title": "AI Recovery Tooling: Open Latest Context Estimate"
       },
       {
-        "command": "agentArchitectTools.openLatestProfile",
-        "title": "Agent Architect Tools: Open Latest Profile"
+        "command": "aiRecoveryTooling.openLatestProfile",
+        "title": "AI Recovery Tooling: Open Latest Profile"
       },
       {
-        "command": "agentArchitectTools.surveyRecentSessions",
-        "title": "Agent Architect Tools: Survey Recent Sessions"
+        "command": "aiRecoveryTooling.surveyRecentSessions",
+        "title": "AI Recovery Tooling: Survey Recent Sessions"
       },
       {
-        "command": "agentArchitectTools.openTranscriptEvidence",
-        "title": "Agent Architect Tools: Open Session Evidence Transcript"
+        "command": "aiRecoveryTooling.openTranscriptEvidence",
+        "title": "AI Recovery Tooling: Open Session Evidence Transcript"
       },
       {
-        "command": "agentArchitectTools.openSnapshot",
-        "title": "Agent Architect Tools: Open Session Snapshot"
+        "command": "aiRecoveryTooling.openSnapshot",
+        "title": "AI Recovery Tooling: Open Session Snapshot"
       },
       {
-        "command": "agentArchitectTools.openContextEstimate",
-        "title": "Agent Architect Tools: Open Session Context Estimate"
+        "command": "aiRecoveryTooling.openContextEstimate",
+        "title": "AI Recovery Tooling: Open Session Context Estimate"
       },
       {
-        "command": "agentArchitectTools.openProfile",
-        "title": "Agent Architect Tools: Open Session Profile"
+        "command": "aiRecoveryTooling.openProfile",
+        "title": "AI Recovery Tooling: Open Session Profile"
       },
       {
-        "command": "agentArchitectTools.openIndex",
-        "title": "Agent Architect Tools: Open Session Index"
+        "command": "aiRecoveryTooling.openIndex",
+        "title": "AI Recovery Tooling: Open Session Index"
       },
       {
-        "command": "agentArchitectTools.openSessionFile",
-        "title": "Agent Architect Tools: Open Session File"
+        "command": "aiRecoveryTooling.openSessionFile",
+        "title": "AI Recovery Tooling: Open Raw Session File (Last Resort)"
       },
       {
-        "command": "agentArchitectTools.prepareLocalToCopilotCliHandoff",
-        "title": "Agent Architect Tools: Prepare Local To Copilot CLI Handoff"
+        "command": "aiRecoveryTooling.listLiveChats",
+        "title": "AI Recovery Tooling: List Local Chats"
       },
       {
-        "command": "agentArchitectTools.sendLocalToCopilotCliHandoff",
-        "title": "Agent Architect Tools: Send Local To Copilot CLI"
+        "command": "aiRecoveryTooling.revealLiveChat",
+        "title": "AI Recovery Tooling: Reveal Local Chat"
       },
       {
-        "command": "agentArchitectTools.listLiveChats",
-        "title": "Agent Architect Tools: List Live Chats"
+        "command": "aiRecoveryTooling.closeVisibleLiveChatTabs",
+        "title": "AI Recovery Tooling: Close Visible Local Chat Tabs"
       },
       {
-        "command": "agentArchitectTools.inspectLiveChatSupport",
-        "title": "Agent Architect Tools: Inspect Live Chat Support"
+        "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
+        "title": "AI Recovery Tooling: Delete Local Chat Artifacts"
       },
       {
-        "command": "agentArchitectTools.inspectRuntimeChatCommands",
-        "title": "Agent Architect Tools: Inspect Runtime Chat Commands"
+        "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
+        "title": "AI Recovery Tooling: Schedule Offline Local Chat Cleanup"
       },
       {
-        "command": "agentArchitectTools.probeLocalReopenCandidates",
-        "title": "Agent Architect Tools: Probe Local Reopen Candidates"
+        "command": "aiRecoveryTooling.createLiveChat",
+        "title": "AI Recovery Tooling: Create Local Chat"
       },
       {
-        "command": "agentArchitectTools.inspectChatFocusTargets",
-        "title": "Agent Architect Tools: Inspect Chat Focus Targets"
+        "command": "aiRecoveryTooling.sendMessageToLiveChat",
+        "title": "AI Recovery Tooling: Send Message To Local Chat"
       },
       {
-        "command": "agentArchitectTools.inspectChatFocusDebug",
-        "title": "Agent Architect Tools: Inspect Chat Focus Debug"
-      },
-      {
-        "command": "agentArchitectTools.createLiveChat",
-        "title": "Agent Architect Tools: Create Live Chat"
-      },
-      {
-        "command": "agentArchitectTools.revealLiveChat",
-        "title": "Agent Architect Tools: Reveal Live Chat (Exact Session)"
-      },
-      {
-        "command": "agentArchitectTools.closeVisibleLiveChatTabs",
-        "title": "Agent Architect Tools: Close Visible Live Chat Tabs (Exact Session)"
-      },
-      {
-        "command": "agentArchitectTools.sendMessageToLiveChat",
-        "title": "Agent Architect Tools: Send Message To Live Chat (Exact Session)"
-      },
-      {
-        "command": "agentArchitectTools.sendMessageToFocusedLiveChat",
-        "title": "Agent Architect Tools: Send Message To Focused Visible Live Chat"
-      },
-      {
-        "command": "agentArchitectTools.focusVisibleEditorLiveChat",
-        "title": "Agent Architect Tools: Focus Visible Editor Chat"
-      },
-      {
-        "command": "agentArchitectTools.sendMessageToFocusedEditorChat",
-        "title": "Agent Architect Tools: Send Message To Focused Editor Chat"
-      },
-      {
-        "command": "agentArchitectTools.inspectLatestCopilotCliSession",
-        "title": "Agent Architect Tools: Inspect Latest Copilot CLI Session"
-      },
-      {
-        "command": "agentArchitectTools.inspectCopilotCliSession",
-        "title": "Agent Architect Tools: Inspect Copilot CLI Session"
-      },
-      {
-        "command": "agentArchitectTools.sendPromptToCopilotCliSession",
-        "title": "Agent Architect Tools: Send Prompt To Copilot CLI Session"
-      },
-      {
-        "command": "agentArchitectTools.openCopilotCliEventsFile",
-        "title": "Agent Architect Tools: Open Copilot CLI Events File"
-      },
-      {
-        "command": "agentArchitectTools.openCopilotCliWorkspaceYaml",
-        "title": "Agent Architect Tools: Open Copilot CLI Workspace YAML"
-      },
-      {
-        "command": "agentArchitectTools.probeLatestCopilotCliSession",
-        "title": "Agent Architect Tools: Probe Latest Copilot CLI Session"
-      },
-      {
-        "command": "agentArchitectTools.prepareCopilotCliCapabilityProbes",
-        "title": "Agent Architect Tools: Prepare Copilot CLI Capability Probes"
-      },
-      {
-        "command": "agentArchitectTools.probeLatestCopilotCliReadAccess",
-        "title": "Agent Architect Tools: Probe Latest Copilot CLI Read Access"
-      },
-      {
-        "command": "agentArchitectTools.probeLatestCopilotCliWorkspaceMutation",
-        "title": "Agent Architect Tools: Probe Latest Copilot CLI Workspace Mutation"
-      },
-      {
-        "command": "agentArchitectTools.probeLatestCopilotCliToolApproval",
-        "title": "Agent Architect Tools: Probe Latest Copilot CLI Tool Approval"
+        "command": "aiRecoveryTooling.sendMessageToFocusedLiveChat",
+        "title": "AI Recovery Tooling: Send Message To Focused Local Chat"
       }
     ],
     "views": {
       "explorer": [
         {
-          "id": "agentArchitectTools.sessions",
-          "name": "Agent Sessions",
-          "when": "config.agentArchitectTools.showSessionsView"
+          "id": "aiRecoveryTooling.sessions",
+          "name": "Recovery Sessions",
+          "when": "config.aiRecoveryTooling.showSessionsView"
         }
       ]
     },
     "configuration": {
-      "title": "Agent Architect Tools",
+      "title": "AI Recovery Tooling",
       "properties": {
-        "agentArchitectTools.showSessionsView": {
+        "aiRecoveryTooling.showSessionsView": {
           "type": "boolean",
           "default": false,
-          "description": "Show the Agent Sessions view in the Explorer."
+          "description": "Show the Recovery Sessions view in the Explorer."
         },
-        "agentArchitectTools.sessionDiscoveryScope": {
+        "aiRecoveryTooling.sessionDiscoveryScope": {
           "type": "string",
           "enum": [
             "current-workspace",
@@ -226,12 +144,12 @@
           "description": "Choose whether the Explorer session view and workspace commands use only the current workspace's session storage or all local workspaceStorage roots."
         }
         ,
-        "agentArchitectTools.postCreateTimeoutMs": {
+        "aiRecoveryTooling.postCreateTimeoutMs": {
           "type": "number",
-          "default": 60000,
-          "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows)."
+          "default": 180000,
+          "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows). Default: 3 minutes."
         },
-        "agentArchitectTools.waitForPersistedDefault": {
+        "aiRecoveryTooling.waitForPersistedDefault": {
           "type": "boolean",
           "default": true,
           "description": "When true, focused-send calls will wait for a persisted session mutation by default. Set to false to make focused-send non-blocking by default. Individual calls can override with the request flag `waitForPersisted`."
@@ -241,225 +159,133 @@
     "menus": {
       "view/title": [
         {
-          "command": "agentArchitectTools.refreshSessions",
-          "when": "view == agentArchitectTools.sessions",
+          "command": "aiRecoveryTooling.refreshSessions",
+          "when": "view == aiRecoveryTooling.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "aiRecoveryTooling.createLiveChat",
+          "when": "view == aiRecoveryTooling.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "aiRecoveryTooling.listLiveChats",
+          "when": "view == aiRecoveryTooling.sessions",
           "group": "navigation"
         }
       ],
       "view/item/context": [
         {
-          "command": "agentArchitectTools.openTranscriptEvidence",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
+          "command": "aiRecoveryTooling.openTranscriptEvidence",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "inline"
         },
         {
-          "command": "agentArchitectTools.openSnapshot",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
+          "command": "aiRecoveryTooling.openSnapshot",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "agentArchitectTools.openContextEstimate",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
+          "command": "aiRecoveryTooling.openContextEstimate",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "agentArchitectTools.openProfile",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
+          "command": "aiRecoveryTooling.openProfile",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "agentArchitectTools.openIndex",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
+          "command": "aiRecoveryTooling.openIndex",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "agentArchitectTools.openSessionFile",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
-          "group": "navigation"
+          "command": "aiRecoveryTooling.openSessionFile",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "group": "z_lastResort"
         },
         {
-          "command": "agentArchitectTools.prepareLocalToCopilotCliHandoff",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
-          "group": "navigation"
-        },
-        {
-          "command": "agentArchitectTools.sendLocalToCopilotCliHandoff",
-          "when": "view == agentArchitectTools.sessions && viewItem == session",
-          "group": "navigation"
-        },
-        {
-          "command": "agentArchitectTools.revealLiveChat",
-          "when": "view == agentArchitectTools.sessions && viewItem == session && agentArchitectTools.exactLiveChatRevealSupported",
-          "group": "navigation"
-        },
-        {
-          "command": "agentArchitectTools.sendMessageToLiveChat",
-          "when": "view == agentArchitectTools.sessions && viewItem == session && agentArchitectTools.exactLiveChatSendSupported",
-          "group": "navigation"
-        },
-        {
-          "command": "agentArchitectTools.inspectCopilotCliSession",
-          "when": "view == agentArchitectTools.sessions && viewItem == copilotCliSession",
+          "command": "aiRecoveryTooling.revealLiveChat",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "inline"
         },
         {
-          "command": "agentArchitectTools.openCopilotCliEventsFile",
-          "when": "view == agentArchitectTools.sessions && viewItem == copilotCliSession",
+          "command": "aiRecoveryTooling.closeVisibleLiveChatTabs",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "agentArchitectTools.openCopilotCliWorkspaceYaml",
-          "when": "view == agentArchitectTools.sessions && viewItem == copilotCliSession",
+          "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "group": "navigation"
+        },
+        {
+          "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "group": "navigation"
+        },
+        {
+          "command": "aiRecoveryTooling.sendMessageToLiveChat",
+          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "agentArchitectTools.refreshSessions",
+          "command": "aiRecoveryTooling.refreshSessions",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openLatestSnapshot",
+          "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openLatestTranscriptEvidence",
+          "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openLatestContextEstimate",
+          "command": "aiRecoveryTooling.openLatestSnapshot",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openLatestProfile",
+          "command": "aiRecoveryTooling.openLatestTranscriptEvidence",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.surveyRecentSessions",
+          "command": "aiRecoveryTooling.openLatestContextEstimate",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openTranscriptEvidence",
+          "command": "aiRecoveryTooling.openLatestProfile",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openSnapshot",
+          "command": "aiRecoveryTooling.surveyRecentSessions",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openContextEstimate",
+          "command": "aiRecoveryTooling.openTranscriptEvidence",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openProfile",
+          "command": "aiRecoveryTooling.openSnapshot",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openIndex",
+          "command": "aiRecoveryTooling.openContextEstimate",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.openSessionFile",
+          "command": "aiRecoveryTooling.openProfile",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.prepareLocalToCopilotCliHandoff",
+          "command": "aiRecoveryTooling.openIndex",
           "when": "false"
         },
         {
-          "command": "agentArchitectTools.sendLocalToCopilotCliHandoff",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.listLiveChats",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.inspectLiveChatSupport",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.inspectRuntimeChatCommands",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.probeLocalReopenCandidates",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.inspectChatFocusTargets",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.inspectChatFocusDebug",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.createLiveChat",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.revealLiveChat",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.closeVisibleLiveChatTabs",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.sendMessageToLiveChat",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.sendMessageToFocusedLiveChat",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.focusVisibleEditorLiveChat",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.sendMessageToFocusedEditorChat",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.inspectLatestCopilotCliSession",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.inspectCopilotCliSession",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.sendPromptToCopilotCliSession",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.openCopilotCliEventsFile",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.openCopilotCliWorkspaceYaml",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.probeLatestCopilotCliSession",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.prepareCopilotCliCapabilityProbes",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.probeLatestCopilotCliReadAccess",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.probeLatestCopilotCliWorkspaceMutation",
-          "when": "false"
-        },
-        {
-          "command": "agentArchitectTools.probeLatestCopilotCliToolApproval",
+          "command": "aiRecoveryTooling.openSessionFile",
           "when": "false"
         }
       ]
@@ -902,175 +728,6 @@
         }
       },
       {
-        "name": "list_copilot_cli_sessions",
-        "displayName": "List Copilot CLI Sessions",
-        "userDescription": "List recent Copilot CLI session-state directories.",
-        "modelDescription": "List recent Copilot CLI session-state directories from ~/.copilot/session-state or a supplied root. Use this before inspecting a specific Copilot CLI worker lane. This tool is read-only and returns a bounded text list.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "copilot-cli-sessions",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionStateRoot": {
-              "type": "string",
-              "description": "Optional absolute root for Copilot CLI session-state instead of ~/.copilot/session-state."
-            },
-            "limit": {
-              "type": "number",
-              "description": "Maximum number of Copilot CLI sessions to return."
-            }
-          }
-        }
-      },
-      {
-        "name": "inspect_copilot_cli_session",
-        "displayName": "Inspect Copilot CLI Session",
-        "userDescription": "Render a bounded inspection of one Copilot CLI session-state entry.",
-        "modelDescription": "Render a bounded inspection of one Copilot CLI session-state entry, including the latest persisted turn summary from events.jsonl. Use this when you need the latest worker-lane outcome without reading the raw log. This tool is read-only and returns markdown.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "copilot-cli-session-inspection",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionStateRoot": {
-              "type": "string",
-              "description": "Optional absolute root for Copilot CLI session-state instead of ~/.copilot/session-state."
-            },
-            "sessionId": {
-              "type": "string",
-              "description": "Exact or prefix Copilot CLI session identifier. If omitted, the latest session is used."
-            },
-            "latest": {
-              "type": "boolean",
-              "description": "Use the most recently modified Copilot CLI session-state entry."
-            }
-          }
-        }
-      },
-      {
-        "name": "send_prompt_to_copilot_cli_session",
-        "displayName": "Send Prompt To Copilot CLI Session",
-        "userDescription": "Send a prompt to an exact Copilot CLI session-state resource.",
-        "modelDescription": "Send a prompt to an exact Copilot CLI session-state resource using the Copilot CLI-specific openSessionWithPrompt command. Use this when Local chat cannot target an exact session reliably and you need a verifiable worker-lane transport instead. This tool affects the VS Code UI and targets Copilot CLI sessions, not ordinary Local chats.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "send-copilot-cli-session-prompt",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string",
-              "description": "Exact or prefix Copilot CLI session identifier. If omitted, the latest session is used unless latest is false."
-            },
-            "latest": {
-              "type": "boolean",
-              "description": "Use the most recently modified Copilot CLI session-state entry. Defaults to true when sessionId is omitted."
-            },
-            "prompt": {
-              "type": "string",
-              "description": "The prompt to send into the target Copilot CLI session."
-            }
-          },
-          "required": [
-            "prompt"
-          ]
-        }
-      },
-      {
-        "name": "inspect_live_chat_support",
-        "displayName": "Inspect Live Chat Support",
-        "userDescription": "Render the current Copilot Chat live-interaction support matrix for this build.",
-        "modelDescription": "Render the current Copilot Chat live-interaction support matrix for this build. Use this when you need an explicit, evidence-bound answer about whether Local live chat can open new chats, set mode/model, select a custom agent, or target an exact existing session. By default this agent-facing tool returns a compact capability summary; pass detailLevel=full for runtime command and manifest sections. The tool is read-only and combines current runtime commands with the installed Copilot Chat manifest.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "live-chat-support",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "detailLevel": {
-              "type": "string",
-              "description": "Control how much inline detail is returned. Use summary for compact status or inventory output, or full for raw evidence sections and complete listings.",
-              "enum": [
-                "summary",
-                "full"
-              ]
-            }
-          }
-        }
-      },
-      {
-        "name": "inspect_runtime_chat_commands",
-        "displayName": "Inspect Runtime Chat Commands",
-        "userDescription": "Render a bounded inventory of runtime and manifest chat/session commands.",
-        "modelDescription": "Render a bounded inventory of currently registered runtime chat/session commands plus related manifest-declared Copilot Chat commands. Use this when you need to exhaust possible Local reopen or resume workarounds before concluding that exact Local reopen is unsupported. By default this agent-facing tool returns a compact summary with candidate counts; pass detailLevel=full for complete command lists.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "runtime-chat-commands",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "detailLevel": {
-              "type": "string",
-              "description": "Control how much inline detail is returned. Use summary for compact status or inventory output, or full for raw evidence sections and complete listings.",
-              "enum": [
-                "summary",
-                "full"
-              ]
-            }
-          }
-        }
-      },
-      {
-        "name": "probe_local_reopen_candidates",
-        "displayName": "Probe Local Reopen Candidates",
-        "userDescription": "Try runtime reopen candidates against a specific Local chat session.",
-        "modelDescription": "Try runtime chat reopen candidates against a specific Local chat session and verify whether the requested editor-hosted Local chat actually opens in the current window. Use this when exact Local reopen appears unsupported but runtime command inventory still shows possible openSessionIn... or showAsChatSession workarounds.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "probe-local-reopen-candidates",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string",
-              "description": "Exact or prefix Local session identifier to probe for a reopen workaround."
-            }
-          },
-          "required": [
-            "sessionId"
-          ]
-        }
-      },
-      {
-        "name": "inspect_chat_focus_targets",
-        "displayName": "Inspect Chat Focus Targets",
-        "userDescription": "Render the current chat focus target report from VS Code tab groups.",
-        "modelDescription": "Render the current chat focus target report from VS Code tab groups plus persisted live-chat titles. Use this before editor-focused live-chat send when you need evidence about which visible tab currently looks like the intended editor-hosted Local chat.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "chat-focus-targets",
-        "inputSchema": {
-          "type": "object",
-          "properties": {}
-        }
-      },
-      {
-        "name": "inspect_chat_focus_debug",
-        "displayName": "Inspect Chat Focus Debug",
-        "userDescription": "Render raw debug details for current editor chat tabs.",
-        "modelDescription": "Render a raw debug report for current editor chat tabs, including shallow object keys and collected string hints from tab input metadata. Use this when a Local editor chat appears visible in the UI but cannot be matched to a persisted session title through the normal focus-target report. By default this agent-facing tool returns a compact likely-chat-editor summary; pass detailLevel=full for raw object keys and string hints for every tab.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "chat-focus-debug",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "detailLevel": {
-              "type": "string",
-              "description": "Control how much inline detail is returned. Use summary for compact status or inventory output, or full for raw evidence sections and complete listings.",
-              "enum": [
-                "summary",
-                "full"
-              ]
-            }
-          }
-        }
-      },
-      {
         "name": "list_live_agent_chats",
         "displayName": "List Live Agent Chats",
         "userDescription": "List local live chat sessions that can be reopened or continued.",
@@ -1156,46 +813,22 @@
         }
       },
       {
-        "name": "send_message_with_lifecycle",
-        "displayName": "Send Message With Lifecycle",
-        "userDescription": "Preferred high-level Local create route when agent or model stability matters.",
-        "modelDescription": "Preferred high-level Local create route. Seeds a new chat, patches persisted mode or model when needed, and then continues through the normal Local follow-up path. Use this instead of raw create when requested agent or model may be overridden by host state. This tool still depends on the same Local follow-up surface and cannot bypass host limits such as missing ordinary Local exact-session send.",
+        "name": "delete_live_agent_chat_artifacts",
+        "displayName": "Delete Live Agent Chat Artifacts",
+        "userDescription": "Close visible editor-hosted tabs and delete persisted artifacts for one live chat session.",
+        "modelDescription": "Close visible editor-hosted Local chat tabs for one exact session identifier and then delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI, uses the exact-session self-targeting guard, and does not attempt to delete the currently invoking conversation.",
         "canBeReferencedInPrompt": true,
-        "toolReferenceName": "send-message-with-lifecycle",
+        "toolReferenceName": "delete-live-agent-chat-artifacts",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "prompt": {
+            "sessionId": {
               "type": "string",
-              "description": "The real prompt to send after the lifecycle has stabilized the target chat."
-            },
-            "agentName": {
-              "type": "string",
-              "description": "Optional requested custom agent name. The lifecycle will resolve a workspace agent file when possible and patch persisted mode before the real prompt is sent."
-            },
-            "mode": {
-              "type": "string",
-              "description": "Optional explicit mode id to patch into persisted session state before the real prompt is sent."
-            },
-            "modelId": {
-              "type": "string",
-              "description": "Optional model identifier to request during create and patch from persisted metadata if the create path falls back."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Optional model vendor for the requested model selector."
-            },
-            "blockOnResponse": {
-              "type": "boolean",
-              "description": "Block until the real follow-up response is produced when supported by the underlying lifecycle path."
-            },
-            "requireSelectionEvidence": {
-              "type": "boolean",
-              "description": "Fail if the final lifecycle result cannot explicitly evidence the requested selection."
+              "description": "Exact session identifier for the live chat whose persisted artifacts should be deleted from disk. Prefixes are rejected for this destructive route."
             }
           },
           "required": [
-            "prompt"
+            "sessionId"
           ]
         }
       },
@@ -1289,75 +922,6 @@
             "partialQuery": {
               "type": "boolean",
               "description": "Reserved for compatibility; focused live send uses a partial prefill before submit on this build."
-            },
-            "blockOnResponse": {
-              "type": "boolean",
-              "description": "Reserved for compatibility with other live chat mutation tools."
-            },
-            "requireSelectionEvidence": {
-              "type": "boolean",
-              "description": "Fail if the requested agent selection cannot be explicitly evidenced after dispatch."
-            }
-          },
-          "required": [
-            "prompt"
-          ]
-        }
-      },
-      {
-        "name": "focus_visible_editor_live_chat",
-        "displayName": "Focus Visible Editor Live Chat",
-        "userDescription": "Steer focus to a visible editor-hosted live chat without sending a prompt.",
-        "modelDescription": "Steer focus to the active editor group, or to a visible editor-hosted chat tab matching an optional live session id, and verify that the resulting active tab still looks like an editor-hosted Local chat. Use this to satisfy the target-confirmation gate before any focused editor-chat prompt send. This tool affects the VS Code UI but does not dispatch a prompt.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "focus-visible-editor-live-chat",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string",
-              "description": "Optional exact or prefix session identifier for the visible editor-hosted live chat to focus. When omitted, the active editor-group candidate is used."
-            }
-          }
-        }
-      },
-      {
-        "name": "send_message_to_focused_editor_chat",
-        "displayName": "Send Message To Focused Editor Chat",
-        "userDescription": "Steer focus to the active editor chat and send a prompt there.",
-        "modelDescription": "Steer focus to the active editor group, or to a visible editor-hosted chat tab matching an optional live session id, verify that the resulting active tab still looks like an editor-hosted Local chat, and then dispatch a prompt through the focused chat input. Use this when a side-panel chat currently has focus but the intended Local target is already open in an editor tab. This tool affects the VS Code UI and remains best-effort until the touched session is verified from persisted artifacts. A heuristic self-targeting guard blocks ambiguous sends and prefers an explicit sessionId.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "send-message-focused-editor-chat",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string",
-              "description": "Optional exact or prefix session identifier for the visible editor-hosted live chat to focus before submit. When omitted, the active editor-group candidate is used."
-            },
-            "prompt": {
-              "type": "string",
-              "description": "The prompt to send through the focused editor-hosted live chat."
-            },
-            "agentName": {
-              "type": "string",
-              "description": "Optional custom agent selector to prefix as #agentName in the dispatched prompt."
-            },
-            "mode": {
-              "type": "string",
-              "description": "Optional chat mode override. Focused editor send cannot reliably apply or prove this on the current build."
-            },
-            "modelId": {
-              "type": "string",
-              "description": "Optional model identifier. Focused editor send cannot reliably apply or prove this on the current build."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Optional model vendor for the requested model selector."
-            },
-            "partialQuery": {
-              "type": "boolean",
-              "description": "Reserved for compatibility; focused editor send uses a partial prefill before submit on this build."
             },
             "blockOnResponse": {
               "type": "boolean",

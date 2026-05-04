@@ -5,7 +5,7 @@ export const SELF_TARGETING_GUARD_WINDOW_MS = 5 * 60 * 1000;
 export function getExactSelfTargetingReason(
   chats: readonly ChatSessionSummary[],
   targetSessionId: string,
-  operation: "reveal" | "send" | "close-visible-tabs",
+  operation: "reveal" | "send" | "close-visible-tabs" | "delete-artifacts",
   now = Date.now()
 ): string | undefined {
   const latest = findRecentLikelyInvokingChat(chats, now);

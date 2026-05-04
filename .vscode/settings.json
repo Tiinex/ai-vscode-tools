@@ -1,9 +1,9 @@
-{
+﻿{
     "chat.disableAIFeatures": false,
     "telemetry.editStats.details.enabled": false,
     "telemetry.editStats.enabled": false,
     "telemetry.feedback.enabled": false,
     "telemetry.editStats.showStatusBar": false,
     "telemetry.editStats.showDecorations": false,
-    "agentArchitectTools.showSessionsView": true
+    "aiRecoveryTooling.showSessionsView": true
 }

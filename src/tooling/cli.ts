@@ -37,12 +37,6 @@ import {
   type SessionSelector,
   type WindowOptions
 } from "./core.js";
-import {
-  inspectCopilotCliSession,
-  listCopilotCliSessions,
-  renderCopilotCliSessionInspectionMarkdown,
-  renderCopilotCliSessionListText
-} from "./copilot-cli.js";
 
 function parseDeliveryMode(value: string | undefined, fallback: DeliveryMode): DeliveryMode {
   if (!value) {
@@ -76,8 +70,6 @@ function usage(): string {
     `  copilot-session-tool estimate-context [--latest|--session-id <id>|--session-file <path>] [--include-noise] [--after-latest-compact] [--latest-request-families <n>] [--reserved-response-tokens <n>] [--assumed-window-tokens <n>] [--mode <file-only|file-and-inline-if-safe|inline-if-safe>] [--output <file>] [--max-inline-chars <n>]`,
     `  copilot-session-tool profile [--latest|--session-id <id>|--session-file <path>] [--include-noise] [--reserved-response-tokens <n>] [--assumed-window-tokens <n>] [--mode <file-only|file-and-inline-if-safe|inline-if-safe>] [--output <file>] [--max-inline-chars <n>]`,
     `  copilot-session-tool survey [--storage-root <path>] [--limit <n>] [--include-noise] [--reserved-response-tokens <n>] [--assumed-window-tokens <n>] [--mode <file-only|file-and-inline-if-safe|inline-if-safe>] [--output <file>] [--max-inline-chars <n>]`,
-    `  copilot-session-tool list-copilot-cli [--session-state-root <path>] [--limit <n>] [--max-output-chars <n>]`,
-    `  copilot-session-tool inspect-copilot-cli [--session-state-root <path>] [--latest|--session-id <id>] [--max-output-chars <n>]`,
     "",
     `Defaults to a ${DEFAULT_MAX_OUTPUT_CHARS}-character response budget and hard-clamps larger requests.`
   ].join("\n");
@@ -392,56 +384,6 @@ async function main(): Promise<number> {
       maxInlineChars
     });
     process.stdout.write(delivery.responseText);
-    return 0;
-  }
-
-  if (command === "list-copilot-cli") {
-    const { values } = parseArgs({
-      args: rest,
-      options: {
-        "session-state-root": { type: "string" },
-        limit: { type: "string" },
-        "max-output-chars": { type: "string" }
-      },
-      allowPositionals: false
-    });
-    const limit = Number(values.limit ?? "10");
-    const maxOutputChars = Number(values["max-output-chars"] ?? String(DEFAULT_MAX_OUTPUT_CHARS));
-    const sessions = await listCopilotCliSessions({
-      sessionStateRoot: values["session-state-root"] as string | undefined,
-      limit
-    });
-    process.stdout.write(renderCopilotCliSessionListText(sessions, limit, {
-      maxChars: maxOutputChars,
-      sessionStateRoot: values["session-state-root"] as string | undefined
-    }));
-    return 0;
-  }
-
-  if (command === "inspect-copilot-cli") {
-    const { values } = parseArgs({
-      args: rest,
-      options: {
-        "session-state-root": { type: "string" },
-        "session-id": { type: "string" },
-        latest: { type: "boolean" },
-        "max-output-chars": { type: "string" }
-      },
-      allowPositionals: false
-    });
-    const maxOutputChars = Number(values["max-output-chars"] ?? String(DEFAULT_MAX_OUTPUT_CHARS));
-    const inspection = await inspectCopilotCliSession({
-      sessionStateRoot: values["session-state-root"] as string | undefined,
-      sessionId: values["session-id"] as string | undefined,
-      latest: Boolean(values.latest)
-    });
-    if (!inspection) {
-      throw new Error("No Copilot CLI session-state directory with events.jsonl was found.");
-    }
-    process.stdout.write(renderCopilotCliSessionInspectionMarkdown(inspection, {
-      maxChars: maxOutputChars,
-      sessionStateRoot: values["session-state-root"] as string | undefined
-    }));
     return 0;
   }
 

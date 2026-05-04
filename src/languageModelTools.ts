@@ -21,6 +21,13 @@ import {
   renderCopilotCliSessionInspectionMarkdown,
   renderCopilotCliSessionListText
 } from "./tooling/copilot-cli";
+import {
+  FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED,
+  LOCAL_CHAT_CONTROL_SURFACES_ENABLED,
+  LOCAL_CHAT_MUTATION_SURFACES_ENABLED,
+  LOCAL_CHAT_RUNTIME_SURFACES_ENABLED,
+  isFirstSliceSessionTool
+} from "./firstSlice";
 
 type JsonSchema = Record<string, unknown>;
 type DetailLevel = "summary" | "full";
@@ -138,6 +145,10 @@ interface CloseVisibleLiveChatTabsInput {
   sessionId: string;
 }
 
+interface DeleteLiveChatArtifactsInput {
+  sessionId: string;
+}
+
 interface FocusedEditorChatSelectionInput {
   sessionId?: string;
 }
@@ -178,7 +189,7 @@ const anchorOccurrenceProperty = {
   description: "When multiple anchor matches exist, choose the first or last match after any compaction filter.",
   enum: ["first", "last"]
 } as const;
-const SESSION_INSPECTION_ROUTING_NOTE = " Use these dedicated inspection tools instead of VS Code built-in chat references UI when the question is about persisted session evidence, and do not delegate that inspection to agent-architect." as const;
+const SESSION_INSPECTION_ROUTING_NOTE = " Use these dedicated inspection tools instead of VS Code built-in chat references UI when the question is about persisted session evidence. Prefer snapshot, index, window, profile, transcript, or export surfaces over opening raw session files, and do not delegate that inspection to agent-architect." as const;
 const afterLatestCompactProperty = {
   type: "boolean",
   description: "Restrict the result to rows or blocks at or after the latest persisted compaction boundary."
@@ -210,7 +221,7 @@ const sessionSelectionProperties = {
   }
 } as const;
 
-export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = [
+const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
   {
     name: "list_agent_sessions",
     displayName: "List Agent Sessions",
@@ -548,8 +559,8 @@ export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = [
   {
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
-    userDescription: "Low-level new-chat create route. Prefer Send Message With Lifecycle when agent or model stability matters.",
-    modelDescription: "Low-level Local create route. Opens a new chat and sends the first prompt. Use this when you specifically want raw create behavior. Prefer send_message_with_lifecycle when requested agent or model must survive host inheritance or when persisted follow-up evidence matters. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+    userDescription: "Host-bounded new-chat create route. Prefer Send Message With Lifecycle with an explicit agent when startup state must not drift.",
+    modelDescription: "Low-level Local create route. Opens a new chat and sends the first prompt. On the current host, do not treat a plain create as a trustworthy neutral default because it can inherit active chat mode or model state. Prefer send_message_with_lifecycle with an explicit agentName when startup state must not drift, or work against an existing target via reveal plus send. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
     toolReferenceName: "create-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -608,10 +619,27 @@ export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: "delete_live_agent_chat_artifacts",
+    displayName: "Delete Live Agent Chat Artifacts",
+    userDescription: "Close visible editor-hosted tabs and delete persisted artifacts for one live chat session.",
+    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier and then delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI, uses the exact-session self-targeting guard, and does not attempt to delete the currently invoking conversation.",
+    toolReferenceName: "delete-live-agent-chat-artifacts",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "Exact session identifier for the live chat whose persisted artifacts should be deleted from disk. Prefixes are rejected for this destructive route."
+        }
+      },
+      required: ["sessionId"]
+    }
+  },
+  {
     name: "send_message_with_lifecycle",
     displayName: "Send Message With Lifecycle",
-    userDescription: "Preferred high-level Local create route when agent or model stability matters.",
-    modelDescription: "Preferred high-level Local create route. Seeds a new chat, patches persisted mode or model when needed, and then continues through the normal Local follow-up path. Use this instead of raw create when requested agent or model may be overridden by host state. This tool still depends on the same Local follow-up surface and cannot bypass host limits such as missing ordinary Local exact-session send.",
+    userDescription: "Preferred high-level Local create route when an explicit agent should anchor new-chat startup.",
+    modelDescription: "Preferred high-level Local create route. Seeds a new chat, patches persisted mode or model when needed, and then continues through the normal Local follow-up path. Use this instead of raw create when a new chat must be anchored by an explicit agent start rather than left to active host UI state. This tool still depends on the same Local follow-up surface and cannot bypass host limits such as missing ordinary Local exact-session send.",
     toolReferenceName: "send-message-with-lifecycle",
     inputSchema: {
       type: "object",
@@ -830,6 +858,29 @@ export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = [
   }
 ];
 
+const LOCAL_CHAT_CONTROL_TOOL_NAMES = new Set([
+  "list_live_agent_chats",
+  "close_visible_live_chat_tabs",
+  "reveal_live_agent_chat"
+]);
+
+const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
+  "create_live_agent_chat",
+  "delete_live_agent_chat_artifacts",
+  "send_message_to_live_agent_chat",
+  "send_message_to_focused_live_chat"
+]);
+
+function isEnabledToolContribution(toolName: string): boolean {
+  return isFirstSliceSessionTool(toolName)
+    || (LOCAL_CHAT_CONTROL_SURFACES_ENABLED && LOCAL_CHAT_CONTROL_TOOL_NAMES.has(toolName))
+    || (LOCAL_CHAT_MUTATION_SURFACES_ENABLED && LOCAL_CHAT_MUTATION_TOOL_NAMES.has(toolName));
+}
+
+export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED
+  ? ALL_TOOL_CONTRIBUTIONS
+  : ALL_TOOL_CONTRIBUTIONS.filter((tool) => isEnabledToolContribution(tool.name));
+
 function outputBudget(tokenBudget: number | undefined): number {
   if (!Number.isFinite(tokenBudget) || !tokenBudget || tokenBudget <= 0) {
     return DEFAULT_MAX_OUTPUT_CHARS;
@@ -1027,6 +1078,19 @@ function formatChatMutationResult(
   return lines.join("\n");
 }
 
+function formatArtifactDeletionNotes(report: ChatCommandResult["artifactDeletion"]): string[] {
+  if (!report) {
+    return [];
+  }
+
+  return [
+    `Deleted Artifact Count: ${report.deletedPaths.length}`,
+    `Missing Artifact Count: ${report.missingPaths.length}`,
+    `Deleted Artifact Paths: ${report.deletedPaths.length > 0 ? report.deletedPaths.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`,
+    `Missing Artifact Paths: ${report.missingPaths.length > 0 ? report.missingPaths.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`
+  ];
+}
+
 function formatStabilizedLifecycleResult(result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>): string {
   if (!result.workflow.result.ok) {
     throw new Error(result.workflow.result.reason ?? result.workflow.result.error ?? "Failed to complete stabilized live chat lifecycle.");
@@ -1055,6 +1119,46 @@ function formatStabilizedLifecycleResult(result: Awaited<ReturnType<typeof creat
   );
 }
 
+async function throwOnUnsafeStabilizedCreateSelection(
+  chatInterop: ChatInteropApi,
+  input: LiveChatMutationInput,
+  result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>
+): Promise<void> {
+  const selection = result.workflow.result.selection;
+  if (!selection) {
+    return;
+  }
+
+  const failures: string[] = [];
+  if (input.mode?.trim() && selection.mode.status !== "verified") {
+    failures.push(`Mode selection did not verify: ${formatSelectionCheck(selection.mode)}`);
+  }
+  if (input.agentName?.trim() && input.requireSelectionEvidence && selection.agent.status !== "verified") {
+    failures.push(`Agent selection did not verify: ${formatSelectionCheck(selection.agent)}`);
+  }
+  if (input.modelId?.trim() && selection.model.status !== "verified") {
+    failures.push(`Model selection did not verify: ${formatSelectionCheck(selection.model)}`);
+  }
+
+  if (failures.length === 0) {
+    return;
+  }
+
+  const sessionId = result.workflow.result.session?.id ?? result.createResult.session?.id;
+  let cleanupNote = "";
+  if (sessionId) {
+    const cleanupResult = await chatInterop.closeVisibleTabs(sessionId);
+    if (cleanupResult.ok) {
+      const closedCount = cleanupResult.revealLifecycle?.closedMatchingVisibleTabs ?? 0;
+      cleanupNote = ` Visible cleanup closed ${closedCount} matching tabs for the mismatched chat.`;
+    }
+  }
+
+  throw new Error(
+    `${failures.join(" ")} The requested create-time selection would otherwise inherit unsafe UI state on this build.${cleanupNote}`
+  );
+}
+
 function formatSelectionCheck(check: NonNullable<ChatCommandResult["selection"]>["agent"]): string {
   const requested = check.requested ? `requested=${JSON.stringify(check.requested)}` : undefined;
   const observed = check.observed ? `observed=${JSON.stringify(check.observed)}` : undefined;
@@ -1064,7 +1168,7 @@ function formatSelectionCheck(check: NonNullable<ChatCommandResult["selection"]>
 async function assertNotSelfTargetingLiveChat(
   chatInterop: ChatInteropApi,
   targetSessionId: string,
-  operation: "reveal" | "send" | "close-visible-tabs"
+  operation: "reveal" | "send" | "close-visible-tabs" | "delete-artifacts"
 ): Promise<void> {
   const chats = await chatInterop.listChats();
   const reason = getExactSelfTargetingReason(chats, targetSessionId, operation);
@@ -1124,7 +1228,7 @@ class LiveChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 }
 
-export function registerLanguageModelTools(context: vscode.ExtensionContext, adapter: SessionToolingAdapter, chatInterop: ChatInteropApi): void {
+export function registerLanguageModelTools(context: vscode.ExtensionContext, adapter: SessionToolingAdapter, chatInterop?: ChatInteropApi): void {
   const currentWorkspaceStorageRoots = (() => {
     if (!context.storageUri) {
       return undefined;
@@ -1247,7 +1351,149 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           resolveScopedStorageRoots(input.storageRoots, input.scope, currentWorkspaceStorageRoots)
         )
       )
-    ),
+    )
+  );
+
+  if (LOCAL_CHAT_RUNTIME_SURFACES_ENABLED) {
+    if (!chatInterop) {
+      throw new Error("Interactive chat interop is required when Local chat runtime surfaces are enabled.");
+    }
+
+    const liveToolRegistrations: vscode.Disposable[] = [];
+
+    if (LOCAL_CHAT_CONTROL_SURFACES_ENABLED) {
+      liveToolRegistrations.push(
+        vscode.lm.registerTool(
+          "list_live_agent_chats",
+          new LiveChatTool<ListLiveChatsInput>(
+            () => "Listing live agent chat sessions",
+            async (input) => renderLiveChatList(await chatInterop.listChats(), input.limit ?? 20)
+          )
+        ),
+        vscode.lm.registerTool(
+          "close_visible_live_chat_tabs",
+          new LiveChatTool<CloseVisibleLiveChatTabsInput>(
+            (input) => `Closing visible live chat tabs for ${JSON.stringify(input.sessionId)}`,
+            async (input) => {
+              await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "close-visible-tabs");
+              const result = await chatInterop.closeVisibleTabs(input.sessionId);
+              if (!result.ok) {
+                throw new Error(result.reason ?? result.error ?? `Failed to close visible live chat tabs for ${input.sessionId}.`);
+              }
+              return formatChatMutationResult("Visible Live Chat Tabs Closed", result.session, result.selection, result.revealLifecycle);
+            }
+          )
+        ),
+        vscode.lm.registerTool(
+          "delete_live_agent_chat_artifacts",
+          new LiveChatTool<DeleteLiveChatArtifactsInput>(
+            (input) => `Deleting live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
+            async (input) => {
+              await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "delete-artifacts");
+              const result = await chatInterop.deleteChat(input.sessionId);
+              if (!result.ok) {
+                throw new Error(result.reason ?? result.error ?? `Failed to delete live agent chat artifacts for ${input.sessionId}.`);
+              }
+              return formatChatMutationResult(
+                "Live Agent Chat Artifacts Deleted",
+                result.session,
+                result.selection,
+                result.revealLifecycle,
+                formatArtifactDeletionNotes(result.artifactDeletion)
+              );
+            }
+          )
+        ),
+        vscode.lm.registerTool(
+          "reveal_live_agent_chat",
+          new LiveChatTool<LiveChatSelectionInput>(
+            (input) => `Revealing live agent chat ${JSON.stringify(input.sessionId)}`,
+            async (input) => {
+              await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "reveal");
+              const result = await chatInterop.revealChat(input.sessionId);
+              if (!result.ok) {
+                throw new Error(result.reason ?? result.error ?? `Failed to reveal live agent chat ${input.sessionId}.`);
+              }
+              return formatChatMutationResult("Live Agent Chat Revealed", result.session, result.selection, result.revealLifecycle);
+            }
+          )
+        )
+      );
+    }
+
+    if (LOCAL_CHAT_MUTATION_SURFACES_ENABLED) {
+      liveToolRegistrations.push(
+        vscode.lm.registerTool(
+          "create_live_agent_chat",
+          new LiveChatTool<LiveChatMutationInput>(
+            () => "Creating a new live agent chat",
+            async (input) => {
+              const result = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
+              await throwOnUnsafeStabilizedCreateSelection(chatInterop, input, result);
+              return formatStabilizedLifecycleResult(result);
+            }
+          )
+        ),
+        vscode.lm.registerTool(
+          "send_message_to_live_agent_chat",
+          new LiveChatTool<SendLiveChatMessageInput>(
+            (input) => `Sending a message to live agent chat ${JSON.stringify(input.sessionId)}`,
+            async (input) => {
+              const request = toSendChatMessageRequest(input);
+              const transportNotes = await tryPrepareLatestSessionTransportWorkaround(chatInterop, request);
+              const workflow = await sendMessageToSessionWithFallback(chatInterop, request);
+              if (!workflow.result.ok) {
+                throw new Error(workflow.result.reason ?? workflow.result.error ?? `Failed to send a message to live agent chat ${input.sessionId}.`);
+              }
+              return formatChatMutationResult(
+                workflow.usedFallback
+                  ? "Live Agent Chat Updated Via Reveal And Focused Editor Fallback"
+                  : "Live Agent Chat Updated",
+                workflow.result.session,
+                workflow.result.selection,
+                workflow.result.revealLifecycle,
+                [
+                  ...(workflow.usedFallback && workflow.fallbackReason
+                    ? [
+                      `Fallback Used: yes`,
+                      `Fallback Basis: ${workflow.fallbackReason}`
+                    ]
+                    : []),
+                  ...transportNotes
+                ]
+              );
+            }
+          )
+        ),
+        vscode.lm.registerTool(
+          "send_message_to_focused_live_chat",
+          new LiveChatTool<FocusedLiveChatMutationInput>(
+            () => "Sending a message to the currently focused live chat",
+            async (input) => {
+              await assertFocusedLiveChatNotSelfTargeting(chatInterop, "focused-send");
+              const result = await chatInterop.sendFocusedMessage(toCreateChatRequest(input));
+              if (!result.ok) {
+                throw new Error(result.reason ?? result.error ?? "Failed to send a message to the currently focused live chat.");
+              }
+              return formatChatMutationResult("Focused Live Agent Chat Updated", result.session, result.selection, result.revealLifecycle);
+            }
+          )
+        )
+      );
+    }
+
+    context.subscriptions.push(...liveToolRegistrations);
+  }
+
+  if (!FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED) {
+    return;
+  }
+
+  if (!chatInterop) {
+    throw new Error("Interactive chat interop is required when first-slice interactive surfaces are enabled.");
+  }
+
+  context.subscriptions.push(
     vscode.lm.registerTool(
       "list_copilot_cli_sessions",
       new ReadOnlyTool<ListCopilotCliSessionsInput>(
@@ -1388,10 +1634,34 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
       )
     ),
     vscode.lm.registerTool(
+      "delete_live_agent_chat_artifacts",
+      new LiveChatTool<DeleteLiveChatArtifactsInput>(
+        (input) => `Deleting live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
+        async (input) => {
+          await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "delete-artifacts");
+          const result = await chatInterop.deleteChat(input.sessionId);
+          if (!result.ok) {
+            throw new Error(result.reason ?? result.error ?? `Failed to delete live agent chat artifacts for ${input.sessionId}.`);
+          }
+          return formatChatMutationResult(
+            "Live Agent Chat Artifacts Deleted",
+            result.session,
+            result.selection,
+            result.revealLifecycle,
+            formatArtifactDeletionNotes(result.artifactDeletion)
+          );
+        }
+      )
+    ),
+    vscode.lm.registerTool(
       "send_message_with_lifecycle",
       new LiveChatTool<StabilizedLiveChatMutationInput>(
         () => "Creating or continuing a live agent chat through the stabilized lifecycle",
-        async (input) => formatStabilizedLifecycleResult(await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input)))
+        async (input) => {
+          const result = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
+          await throwOnUnsafeStabilizedCreateSelection(chatInterop, input, result);
+          return formatStabilizedLifecycleResult(result);
+        }
       )
     ),
     vscode.lm.registerTool(

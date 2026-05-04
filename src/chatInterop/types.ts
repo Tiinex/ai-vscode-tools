@@ -1,4 +1,4 @@
-import * as vscode from "vscode";
+﻿import * as vscode from "vscode";
 import type { ExactSessionInteropSupport, FocusedChatInteropSupport } from "./capabilities";
 
 export type ChatModelSelector = {
@@ -35,6 +35,12 @@ export interface ChatSelectionVerification {
 export interface ChatRevealLifecycle {
   closedMatchingVisibleTabs: number;
   closedTabLabels: string[];
+}
+
+export interface ChatArtifactDeletionReport {
+  attemptedPaths: string[];
+  deletedPaths: string[];
+  missingPaths: string[];
 }
 
 export interface ChatSessionSummary {
@@ -82,6 +88,10 @@ export interface ChatInteropOptions {
   waitForPersistedDefault?: boolean;
 }
 
+export interface CreateChatSelectionBlockerOptions {
+  directAgentOpenAvailable?: boolean;
+}
+
 export interface ChatCommandResult {
   ok: boolean;
   reason?: string;
@@ -91,6 +101,7 @@ export interface ChatCommandResult {
   selection?: ChatSelectionVerification;
   dispatch?: ChatDispatchInfo;
   revealLifecycle?: ChatRevealLifecycle;
+  artifactDeletion?: ChatArtifactDeletionReport;
 }
 
 export type InternalChatOpenOptions = {
@@ -113,17 +124,19 @@ export interface ChatInteropApi {
   sendMessage(request: SendChatMessageRequest): Promise<ChatCommandResult>;
   sendFocusedMessage(request: CreateChatRequest): Promise<ChatCommandResult>;
   closeVisibleTabs(sessionId: string): Promise<ChatCommandResult>;
+  deleteChat(sessionId: string): Promise<ChatCommandResult>;
   revealChat(sessionId: string): Promise<ChatCommandResult>;
 }
 
 export type CommandMap = {
-  "agentArchitectTools.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
-  "agentArchitectTools.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "agentArchitectTools.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
-  "agentArchitectTools.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
-  "agentArchitectTools.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "agentArchitectTools.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
-  "agentArchitectTools.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
+  "aiRecoveryTooling.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.deleteChat": (sessionId: string) => Promise<ChatCommandResult>;
+  "aiRecoveryTooling.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
 };
 
 export function toModelSelector(value: ChatModelSelector | undefined): InternalChatOpenOptions["modelSelector"] | undefined {
@@ -242,17 +255,27 @@ export function buildSelectionVerification(
   };
 }
 
-export function buildCreateChatSelectionBlocker(request: CreateChatRequest): string | undefined {
-  if (request.agentName?.trim()) {
-    if (request.requireSelectionEvidence) {
-      if (request.partialQuery === true) {
-        return "Live chat draft prefill cannot independently verify custom agent selection on this surface. Remove requireSelectionEvidence or use another explicitly verifiable surface.";
-      }
+export function buildCreateChatSelectionBlocker(
+  request: CreateChatRequest,
+  options: CreateChatSelectionBlockerOptions = {}
+): string | undefined {
+  if (request.mode?.trim() || request.modelSelector?.id?.trim()) {
+    return "Live createChat with explicit mode or model selection is unsupported on this VS Code/Copilot build because observed create-time selection can inherit the active chat UI state. Use createChat only without selection overrides, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
+  }
 
-      return "Live createChat can dispatch a custom agent as a prompt artifact on this surface, but it cannot independently verify actual participant selection. Remove requireSelectionEvidence to allow best-effort role dispatch, use partialQuery: true for draft-only prefill, or use another explicitly verifiable surface.";
+  if (!request.agentName?.trim()) {
+    return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use send_message_with_lifecycle with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
+  }
+
+  if (request.requireSelectionEvidence) {
+    if (request.partialQuery === true) {
+      return "Live chat draft prefill cannot independently verify custom agent selection on this surface. Remove requireSelectionEvidence or use another explicitly verifiable surface.";
     }
 
-    return undefined;
+    const routeHint = options.directAgentOpenAvailable
+      ? "Even with a direct agent-open command, this surface still cannot independently verify the persisted participant."
+      : "This host will otherwise rely on a prompt artifact path to anchor the new chat start.";
+    return `Live createChat can anchor a new chat start for a requested custom agent on this surface, but it cannot independently verify actual participant selection. ${routeHint} Remove requireSelectionEvidence to allow the current best-effort create path, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.`;
   }
 
   return undefined;

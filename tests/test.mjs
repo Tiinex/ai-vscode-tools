@@ -1,8 +1,9 @@
-import { execFile } from "node:child_process";
+﻿import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import initSqlJs from "sql.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -15,8 +16,7 @@ const distCli = path.join(packageRoot, "dist", "tooling", "cli.js");
 const distServer = path.join(packageRoot, "dist", "tooling", "mcp-server.js");
 const benchmarkSessionFile = path.join(
   workspaceRoot,
-  "docs",
-  "benchmarks",
+  "tests",
   "assets",
   "transcript-emitter-transcript-jsonl-sample.jsonl"
 );
@@ -32,13 +32,17 @@ const distChatInteropService = path.join(packageRoot, "dist", "chatInterop", "se
 const distChatInteropStorage = path.join(packageRoot, "dist", "chatInterop", "storage.js");
 const distChatInteropSessionSendWorkflow = path.join(packageRoot, "dist", "chatInterop", "sessionSendWorkflow.js");
 const distChatInteropStabilizedCreateWorkflow = path.join(packageRoot, "dist", "chatInterop", "stabilizedCreateWorkflow.js");
+const distOfflineLocalChatCleanup = path.join(packageRoot, "dist", "offlineLocalChatCleanup.js");
+const distFirstSlice = path.join(packageRoot, "dist", "firstSlice.js");
 const distCopilotCliSummary = path.join(packageRoot, "dist", "chatInterop", "copilotCliSummary.js");
 const distLocalToCopilotCliHandoff = path.join(packageRoot, "dist", "chatInterop", "localToCopilotCliHandoff.js");
 const distCopilotCliTooling = path.join(packageRoot, "dist", "tooling", "copilot-cli.js");
 const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tooling", "agentArchitectProcessEvidence.js");
 const distToolingCore = path.join(packageRoot, "dist", "tooling", "core.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
-const coDesignerPath = path.join(packageRoot, "CO-DESIGNER.md");
+const readmePath = path.join(packageRoot, "README.md");
+const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
+const sqlJsDistRoot = path.join(packageRoot, "node_modules", "sql.js", "dist");
 const expectedToolNames = [
   "listSessions",
   "getSessionIndex",
@@ -48,9 +52,7 @@ const expectedToolNames = [
   "getSessionSnapshot",
   "estimateContextBreakdown",
   "getSessionProfile",
-  "surveySessions",
-  "listCopilotCliSessions",
-  "inspectCopilotCliSession"
+  "surveySessions"
 ];
 const invalidSessionFile = path.join(workspaceRoot, "README.md");
 const tempOutputFile = path.join(workspaceRoot, "tools", ".test-session-output.md");
@@ -65,44 +67,92 @@ const expectedLanguageModelToolNames = [
   "estimate_agent_context_breakdown",
   "get_agent_session_profile",
   "survey_agent_sessions",
-  "list_copilot_cli_sessions",
-  "inspect_copilot_cli_session",
-  "send_prompt_to_copilot_cli_session",
-  "inspect_live_chat_support",
-  "inspect_runtime_chat_commands",
-  "probe_local_reopen_candidates",
-  "inspect_chat_focus_targets",
-  "inspect_chat_focus_debug",
   "list_live_agent_chats",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
-  "send_message_with_lifecycle",
+  "delete_live_agent_chat_artifacts",
   "send_message_to_live_agent_chat",
   "send_message_to_focused_live_chat",
-  "focus_visible_editor_live_chat",
-  "send_message_to_focused_editor_chat",
   "reveal_live_agent_chat"
 ];
 
 const expectedExtensionCommandNames = [
-  "agentArchitectTools.inspectLiveChatSupport",
-  "agentArchitectTools.inspectRuntimeChatCommands",
-  "agentArchitectTools.probeLocalReopenCandidates",
-  "agentArchitectTools.inspectChatFocusTargets",
-  "agentArchitectTools.inspectChatFocusDebug",
-  "agentArchitectTools.createLiveChat",
-  "agentArchitectTools.revealLiveChat",
-  "agentArchitectTools.closeVisibleLiveChatTabs",
-  "agentArchitectTools.sendMessageToLiveChat",
-  "agentArchitectTools.sendMessageToFocusedLiveChat",
-  "agentArchitectTools.focusVisibleEditorLiveChat",
-  "agentArchitectTools.sendMessageToFocusedEditorChat",
-  "agentArchitectTools.sendPromptToCopilotCliSession"
+  "aiRecoveryTooling.refreshSessions",
+  "aiRecoveryTooling.openLatestSnapshot",
+  "aiRecoveryTooling.openLatestTranscriptEvidence",
+  "aiRecoveryTooling.openLatestContextEstimate",
+  "aiRecoveryTooling.openLatestProfile",
+  "aiRecoveryTooling.surveyRecentSessions",
+  "aiRecoveryTooling.openTranscriptEvidence",
+  "aiRecoveryTooling.openSnapshot",
+  "aiRecoveryTooling.openContextEstimate",
+  "aiRecoveryTooling.openProfile",
+  "aiRecoveryTooling.openIndex",
+  "aiRecoveryTooling.openSessionFile",
+  "aiRecoveryTooling.listLiveChats",
+  "aiRecoveryTooling.revealLiveChat",
+  "aiRecoveryTooling.closeVisibleLiveChatTabs",
+  "aiRecoveryTooling.deleteLiveChatArtifacts",
+  "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
+  "aiRecoveryTooling.createLiveChat",
+  "aiRecoveryTooling.sendMessageToLiveChat",
+  "aiRecoveryTooling.sendMessageToFocusedLiveChat"
 ];
+
+let sqlJsPromise;
 
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
+  }
+}
+
+async function getSqlJs() {
+  if (!sqlJsPromise) {
+    sqlJsPromise = initSqlJs({
+      locateFile: (file) => path.join(sqlJsDistRoot, file)
+    });
+  }
+  return sqlJsPromise;
+}
+
+async function writeWorkspaceStateValue(dbPath, key, value) {
+  const SQL = await getSqlJs();
+  let db;
+  try {
+    const bytes = await fs.readFile(dbPath);
+    db = new SQL.Database(bytes);
+  } catch {
+    db = new SQL.Database();
+    db.run("CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value BLOB)");
+  }
+
+  try {
+    db.run("INSERT OR REPLACE INTO ItemTable(key, value) VALUES (?, ?)", [key, value]);
+    await fs.writeFile(dbPath, Buffer.from(db.export()));
+  } finally {
+    db.close();
+  }
+}
+
+async function readWorkspaceStateValue(dbPath, key) {
+  const SQL = await getSqlJs();
+  const bytes = await fs.readFile(dbPath);
+  const db = new SQL.Database(bytes);
+  try {
+    const statement = db.prepare("SELECT CAST(value AS TEXT) AS value FROM ItemTable WHERE key = ?");
+    try {
+      statement.bind([key]);
+      if (!statement.step()) {
+        return undefined;
+      }
+      const row = statement.getAsObject();
+      return typeof row.value === "string" ? row.value : undefined;
+    } finally {
+      statement.free();
+    }
+  } finally {
+    db.close();
   }
 }
 
@@ -228,6 +278,80 @@ async function createCompactionSessionFixture() {
       k: ["requests", 3, "result"],
       v: {
         value: "Follow-up result",
+        metadata: {}
+      }
+    }
+  ];
+  await fs.writeFile(sessionFile, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`, "utf-8");
+  return { rootDir, sessionFile };
+}
+
+async function createNoCompactionSessionFixture() {
+  const rootDir = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-no-compaction-session-"));
+  const sessionFile = path.join(rootDir, "no-compaction-session.jsonl");
+  const rows = [
+    {
+      kind: 0,
+      v: {
+        version: 3,
+        creationDate: 1,
+        sessionId: "no-compaction-session",
+        responderUsername: "GitHub Copilot"
+      }
+    },
+    {
+      kind: 2,
+      k: ["requests"],
+      v: [
+        {
+          requestId: "request-1",
+          timestamp: 1,
+          message: { text: "ordinary request 1" }
+        }
+      ]
+    },
+    {
+      kind: 1,
+      k: ["requests", 0, "response"],
+      v: [
+        {
+          value: "Ordinary response without compaction boundary"
+        }
+      ]
+    },
+    {
+      kind: 1,
+      k: ["requests", 0, "result"],
+      v: {
+        value: "Ordinary result 1",
+        metadata: {}
+      }
+    },
+    {
+      kind: 2,
+      k: ["requests"],
+      v: [
+        {
+          requestId: "request-2",
+          timestamp: 2,
+          message: { text: "ordinary request 2" }
+        }
+      ]
+    },
+    {
+      kind: 1,
+      k: ["requests", 1, "response"],
+      v: [
+        {
+          value: "Another ordinary response"
+        }
+      ]
+    },
+    {
+      kind: 1,
+      k: ["requests", 1, "result"],
+      v: {
+        value: "Ordinary result 2",
         metadata: {}
       }
     }
@@ -407,7 +531,7 @@ async function runCliChecks() {
   const transcriptGap = await runCli([
     "transcript",
     "--session-file",
-    path.join(workspaceRoot, "docs", "benchmarks", "assets", "transcript-emitter-transcript-jsonl-descendant-gap-sample.jsonl"),
+    path.join(workspaceRoot, "tests", "assets", "transcript-emitter-transcript-jsonl-descendant-gap-sample.jsonl"),
     "--mode",
     "inline-if-safe"
   ]);
@@ -460,7 +584,24 @@ async function runCliChecks() {
       "inline-if-safe"
     ]);
     assert(compactEstimate.stdout.includes("- After latest compact: yes"), "CLI context-estimate filter test did not render the compaction scope flag.");
+    assert(compactEstimate.stdout.includes("- Compaction boundary applied: yes"), "CLI context-estimate filter test did not report that the persisted compaction boundary was applied.");
     assert(compactEstimate.stdout.includes("Latest request families limit: 1"), "CLI context-estimate filter test did not render the latest request family limit.");
+
+    const noCompactionFixture = await createNoCompactionSessionFixture();
+    try {
+      const fallbackEstimate = await runCli([
+        "estimate-context",
+        "--session-file",
+        noCompactionFixture.sessionFile,
+        "--after-latest-compact",
+        "--mode",
+        "inline-if-safe"
+      ]);
+      assert(fallbackEstimate.stdout.includes("- After latest compact: yes"), "CLI compact-fallback estimate must preserve the requested compact scope flag.");
+      assert(fallbackEstimate.stdout.includes("- Compaction boundary applied: no (fell back to bounded active tail)"), "CLI compact-fallback estimate must report the bounded-tail fallback when no persisted compaction boundary exists.");
+    } finally {
+      await fs.rm(noCompactionFixture.rootDir, { recursive: true, force: true });
+    }
 
     const selfMatchTranscriptFixture = await createTranscriptAnchorSelfMatchFixture();
     try {
@@ -547,30 +688,6 @@ async function runCliChecks() {
     "Blocked storage-root test did not fail with the expected guardrail."
   );
 
-  const fixture = await createCopilotCliSessionFixture();
-  try {
-    const listCopilotCli = await runCli([
-      "list-copilot-cli",
-      "--session-state-root",
-      fixture.sessionStateRoot,
-      "--limit",
-      "5"
-    ]);
-    assert(listCopilotCli.stdout.includes("# Copilot CLI Sessions"), "CLI Copilot CLI list test did not return the session list header.");
-    assert(listCopilotCli.stdout.includes("cli-session-aaa"), "CLI Copilot CLI list test did not include the fixture session id.");
-
-    const inspectCopilotCli = await runCli([
-      "inspect-copilot-cli",
-      "--session-state-root",
-      fixture.sessionStateRoot,
-      "--session-id",
-      "cli-session-aaa"
-    ]);
-    assert(inspectCopilotCli.stdout.includes("# Copilot CLI Session"), "CLI Copilot CLI inspect test did not return the session header.");
-    assert(inspectCopilotCli.stdout.includes("Latest assistant message: Investigated via worker lane."), "CLI Copilot CLI inspect test did not include the latest assistant message.");
-  } finally {
-    await fs.rm(fixture.rootDir, { recursive: true, force: true });
-  }
 }
 
 async function runChatInteropCapabilityChecks() {
@@ -843,8 +960,8 @@ async function runChatInteropSelectionChecks() {
       mode: "Agent",
       modelSelector: { id: "gpt-5.4", vendor: "copilot" },
       requireSelectionEvidence: true
-    })?.includes("cannot independently verify actual participant selection") === true,
-    "Live chat selection blocker test did not block verified participant demands on Local createChat custom-agent dispatch."
+    })?.includes("explicit mode or model selection is unsupported") === true,
+    "Live chat selection blocker test did not hard-block createChat selection overrides on the current Local build."
   );
 
   assert(
@@ -853,8 +970,8 @@ async function runChatInteropSelectionChecks() {
       agentName: "agent-architect",
       mode: "Agent",
       modelSelector: { id: "gpt-5.4", vendor: "copilot" }
-    }) === undefined,
-    "Live chat selection blocker test should allow best-effort Local createChat role dispatch when verified participant evidence is not required."
+    })?.includes("inherit the active chat UI state") === true,
+    "Live chat selection blocker test did not block best-effort Local createChat role dispatch after the observed selection-drift failure."
   );
 
   assert(
@@ -865,8 +982,8 @@ async function runChatInteropSelectionChecks() {
       modelSelector: { id: "gpt-5.4", vendor: "copilot" },
       requireSelectionEvidence: true,
       partialQuery: true
-    })?.includes("draft prefill cannot independently verify") === true,
-    "Live chat selection blocker test did not block draft-prefill requests that still demand verified custom-agent selection."
+    })?.includes("explicit mode or model selection is unsupported") === true,
+    "Live chat selection blocker test did not block draft-prefill selection overrides after the observed create-time drift failure."
   );
 
   assert(
@@ -875,7 +992,33 @@ async function runChatInteropSelectionChecks() {
       agentName: "agent-architect",
       partialQuery: true
     }) === undefined,
-    "Live chat selection blocker test should allow partialQuery draft prefill as the manual custom-agent fallback."
+    "Live chat selection blocker test should allow partialQuery custom-agent create requests as the current best-effort prompt-file start."
+  );
+
+  assert(
+    buildCreateChatSelectionBlocker({
+      prompt: "Inspect the target artifact.",
+      agentName: "agent-architect"
+    }, {
+      directAgentOpenAvailable: true
+    }) === undefined,
+    "Live chat selection blocker test should still allow createChat custom-agent requests when a first-class direct agent-open command is available."
+  );
+
+  assert(
+    buildCreateChatSelectionBlocker({
+      prompt: "Inspect the target artifact."
+    })?.includes("without an explicit agent is unsafe") === true,
+    "Live chat selection blocker test did not block a plain createChat after the observed inherited-mode neutral-create failure."
+  );
+
+  assert(
+    buildCreateChatSelectionBlocker({
+      prompt: "Inspect the target artifact.",
+      agentName: "agent-architect",
+      requireSelectionEvidence: true
+    })?.includes("cannot independently verify actual participant selection") === true,
+    "Live chat selection blocker test did not preserve the verified-participant blocker for current create-time custom-agent starts."
   );
 
   assert(
@@ -1115,6 +1258,72 @@ async function runFocusedSendBehaviorChecks() {
     const stalePendingFlagResult = await service4.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
     assert(stalePendingFlagResult.ok === true, 'Blocking focused-send incorrectly treated a stale hasPendingEdits flag as unsettled after completion.');
     assert(stalePendingFlagResult.session?.id === 's4', 'Blocking focused-send returned the wrong session for the stale hasPendingEdits case.');
+
+    const unsettledRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-unsettled-session-'));
+    const unsettledSessionFile = path.join(unsettledRoot, 'chatSessions', 's5.jsonl');
+    const unsettledTranscriptFile = path.join(unsettledRoot, 'GitHub.copilot-chat', 'transcripts', 's5.jsonl');
+    await fs.mkdir(path.dirname(unsettledSessionFile), { recursive: true });
+    await fs.mkdir(path.dirname(unsettledTranscriptFile), { recursive: true });
+    await fs.writeFile(unsettledSessionFile, '{}\n', 'utf8');
+    await fs.writeFile(unsettledTranscriptFile, `${[
+      JSON.stringify({ type: 'session.start', data: { sessionId: 's5' } }),
+      JSON.stringify({ type: 'user.message', data: { content: 'hello' } }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' } }),
+      JSON.stringify({
+        type: 'assistant.message',
+        data: {
+          content: 'Planning step',
+          toolRequests: [{ toolCallId: 'call-1', name: 'manage_todo_list', type: 'function' }]
+        }
+      }),
+      JSON.stringify({ type: 'assistant.turn_end', data: { turnId: '0' } }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '1' } })
+    ].join('\n')}\n`, 'utf8');
+
+    MockChatSessionStorage.setBehaviors([
+      [
+        {
+          id: 's5',
+          title: 'session-5',
+          lastUpdated: '2026-04-11T04:00:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: unsettledSessionFile
+        }
+      ],
+      [
+        {
+          id: 's5',
+          title: 'session-5',
+          lastUpdated: '2026-04-11T04:00:01.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: false,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: unsettledSessionFile
+        }
+      ]
+    ]);
+
+    const service5 = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 80, waitForPersistedDefault: true });
+    service5.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+
+    const unfinishedAgentTurnResult = await service5.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
+    assert(unfinishedAgentTurnResult.ok === false, 'Blocking focused-send unexpectedly succeeded for an unfinished assistant tool turn.');
+    assert(
+      typeof unfinishedAgentTurnResult.reason === 'string' && unfinishedAgentTurnResult.reason.includes('no tool result or final answer was ever persisted'),
+      'Blocking focused-send did not diagnose the unfinished assistant tool turn after timeout.'
+    );
   } finally {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
   }
@@ -1156,6 +1365,8 @@ async function runCreateChatDirectAgentCommandChecks() {
     vscodeModule.commands.getCommands = async () => [
       'workbench.action.openChat',
       'workbench.action.chat.open',
+      'workbench.action.chat.focusInput',
+      'workbench.action.chat.submit',
       'workbench.action.chat.openagent-architect'
     ];
     vscodeModule.commands.executeCommand = async (command, args) => {
@@ -1188,7 +1399,7 @@ async function runCreateChatDirectAgentCommandChecks() {
     const service = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
 
     const result = await service.createChat({
-      prompt: 'Create the runtime agent artifact artifact-list-item-checker using docs/targets/artifact-list-item-checker-brief.md as the build input.',
+      prompt: 'Create a local recovery tooling helper named artifact-list-item-checker using the provided build input.',
       agentName: 'agent-architect',
       requireSelectionEvidence: false,
       blockOnResponse: true
@@ -1197,8 +1408,73 @@ async function runCreateChatDirectAgentCommandChecks() {
     assert(result.ok === true, 'Direct agent-open createChat test did not succeed when a session was created and settled.');
     assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Direct agent-open createChat test did not open a new chat editor first.');
     assert(executedCommands[1]?.command === 'workbench.action.chat.openagent-architect', 'Direct agent-open createChat test did not prefer the runtime openagent-architect command.');
-    assert(executedCommands[2]?.command === 'workbench.action.chat.open', 'Direct agent-open createChat test did not dispatch the prompt through the generic chat-open command after opening the direct agent chat.');
-    assert(executedCommands[2]?.args?.query === 'Create the runtime agent artifact artifact-list-item-checker using docs/targets/artifact-list-item-checker-brief.md as the build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
+  assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Direct agent-open createChat test did not focus the newly opened chat before dispatch.');
+  assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Direct agent-open createChat test did not prefill the focused chat input after opening the direct agent chat.');
+  assert(executedCommands[3]?.args?.query === 'Create a local recovery tooling helper named artifact-list-item-checker using the provided build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
+  assert(executedCommands[3]?.args?.isPartialQuery === true, 'Direct agent-open createChat test did not use partial-query prefill for the focused submit path.');
+  assert(executedCommands[4]?.command === 'workbench.action.chat.submit', 'Direct agent-open createChat test did not submit the focused chat after prefilling it.');
+
+    executedCommands.length = 0;
+    MockChatSessionStorage.setBehaviors([
+      [],
+      [
+        {
+          id: 'session-placeholder',
+          title: 'Placeholder Session',
+          lastUpdated: '2026-04-17T20:10:00.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-placeholder.jsonl',
+          hasPendingEdits: true,
+          pendingRequestCount: 1,
+          lastRequestCompleted: false
+        }
+      ],
+      [
+        {
+          id: 'session-placeholder',
+          title: 'Placeholder Session',
+          lastUpdated: '2026-04-17T20:10:00.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-placeholder.jsonl',
+          hasPendingEdits: true,
+          pendingRequestCount: 1,
+          lastRequestCompleted: false
+        },
+        {
+          id: 'session-real',
+          title: 'Real Session',
+          lastUpdated: '2026-04-17T20:10:05.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-real.jsonl',
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true
+        }
+      ]
+    ]);
+
+    const serviceLatest = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 1000 });
+    const latestResult = await serviceLatest.createChat({
+      prompt: 'Prefer the newest created session.',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: false,
+      blockOnResponse: true
+    });
+
+    assert(latestResult.ok === true, 'Direct agent-open createChat test did not recover when the host created a placeholder session before the real session.');
+    assert(latestResult.session?.id === 'session-real', `Direct agent-open createChat test did not pick the latest real session. Got: ${latestResult.session?.id}`);
   } finally {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
     vscodeModule.commands.executeCommand = originalExecuteCommand;
@@ -1338,6 +1614,8 @@ async function runChatSessionStorageDeltaChecks() {
   const session = sessions.find((item) => item.id === "session-1");
 
   assert(session, "Storage delta test did not discover the temp session.");
+  assert((await storage.getExactSessionById("session-1"))?.id === "session-1", 'Storage exact-id test did not resolve the exact session id.');
+  assert(await storage.getExactSessionById("session") === undefined, 'Storage exact-id test incorrectly resolved a prefix-only session id.');
   assert(
     session.mode === "file:///tmp/support-doc.fresh-reader.agent.md",
     `Storage delta test did not prefer the later inputState/mode delta. Got: ${session.mode}`
@@ -1345,6 +1623,10 @@ async function runChatSessionStorageDeltaChecks() {
   assert(
     session.model === "copilot/gpt-5.4",
     `Storage delta test did not prefer the later inputState/selectedModel delta. Got: ${session.model}`
+  );
+  assert(
+    session.agent === "support-doc.fresh-reader",
+    `Storage delta test did not infer the custom workspace-agent identity from persisted mode evidence. Got: ${session.agent}`
   );
   assert(session.hasPendingEdits === false, 'Storage delta test did not track the latest hasPendingEdits state.');
   assert(session.pendingRequestCount === 0, `Storage delta test did not resolve the request pending count after completion. Got: ${session.pendingRequestCount}`);
@@ -1381,6 +1663,181 @@ async function runChatSessionStorageDeltaChecks() {
   assert(stalePendingSession, 'Storage delta test did not discover the stale pending full-state session.');
   assert(stalePendingSession.pendingRequestCount === 0, `Storage delta test did not prefer full-state pendingRequests for stale pending sessions. Got: ${stalePendingSession.pendingRequestCount}`);
   assert(stalePendingSession.lastRequestCompleted === true, 'Storage delta test did not preserve lastRequestCompleted for stale pending full-state sessions.');
+
+  const deleteTargetSessionFile = path.join(chatSessionsDir, 'session-3.jsonl');
+  const deleteTargetEditingFile = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3.jsonl');
+  const deleteTargetTranscriptFile = path.join(scopedWorkspaceRoot, 'transcripts', 'session-3.jsonl');
+  const deleteTargetNestedTranscriptFile = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'transcripts', 'session-3.jsonl');
+  const deleteTargetResourceDir = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'chat-session-resources', 'session-3');
+  const stateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb');
+  const backupStateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb.backup');
+  await fs.mkdir(path.dirname(deleteTargetEditingFile), { recursive: true });
+  await fs.mkdir(path.dirname(deleteTargetTranscriptFile), { recursive: true });
+  await fs.mkdir(path.dirname(deleteTargetNestedTranscriptFile), { recursive: true });
+  await fs.mkdir(deleteTargetResourceDir, { recursive: true });
+  await fs.writeFile(deleteTargetSessionFile, `${JSON.stringify({ kind: 0, v: { sessionId: 'session-3', requests: [], inputState: {} } })}\n`, 'utf8');
+  await fs.writeFile(deleteTargetEditingFile, '{}\n', 'utf8');
+  await fs.writeFile(deleteTargetTranscriptFile, '{}\n', 'utf8');
+  await fs.writeFile(deleteTargetNestedTranscriptFile, '{}\n', 'utf8');
+  await fs.writeFile(path.join(deleteTargetResourceDir, 'content.txt'), 'resource', 'utf8');
+  await writeWorkspaceStateValue(stateDbPath, 'chat.ChatSessionStore.index', JSON.stringify({
+    version: 1,
+    entries: {
+      'session-3': {
+        sessionId: 'session-3',
+        title: 'Disposable Probe Session',
+        lastMessageDate: 1775930003000,
+        isEmpty: false,
+        isExternal: false
+      },
+      'session-keep': {
+        sessionId: 'session-keep',
+        title: 'Keep Session',
+        lastMessageDate: 1775930004000,
+        isEmpty: false,
+        isExternal: false
+      }
+    }
+  }));
+  await writeWorkspaceStateValue(stateDbPath, 'agentSessions.model.cache', JSON.stringify([
+    {
+      providerType: 'local',
+      providerLabel: 'Local',
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi0z',
+      label: 'Disposable Probe Session'
+    },
+    {
+      providerType: 'local',
+      providerLabel: 'Local',
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1rZWVw',
+      label: 'Keep Session'
+    }
+  ]));
+  await writeWorkspaceStateValue(stateDbPath, 'agentSessions.state.cache', JSON.stringify([
+    {
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi0z',
+      read: 1775930005000
+    },
+    {
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1rZWVw',
+      read: 1775930006000
+    }
+  ]));
+  await writeWorkspaceStateValue(stateDbPath, 'memento/chat-todo-list', JSON.stringify({
+    'session-3': [
+      {
+        id: 1,
+        title: 'Disposable todo',
+        status: 'completed'
+      }
+    ],
+    'session-keep': [
+      {
+        id: 1,
+        title: 'Keep todo',
+        status: 'not-started'
+      }
+    ]
+  }));
+  await writeWorkspaceStateValue(backupStateDbPath, 'chat.ChatSessionStore.index', JSON.stringify({
+    version: 1,
+    entries: {
+      'session-3': {
+        sessionId: 'session-3',
+        title: 'Disposable Probe Session',
+        lastMessageDate: 1775930003000,
+        isEmpty: false,
+        isExternal: false
+      },
+      'session-keep': {
+        sessionId: 'session-keep',
+        title: 'Keep Session',
+        lastMessageDate: 1775930004000,
+        isEmpty: false,
+        isExternal: false
+      }
+    }
+  }));
+  await writeWorkspaceStateValue(backupStateDbPath, 'agentSessions.model.cache', JSON.stringify([
+    {
+      providerType: 'local',
+      providerLabel: 'Local',
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi0z',
+      label: 'Disposable Probe Session'
+    },
+    {
+      providerType: 'local',
+      providerLabel: 'Local',
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1rZWVw',
+      label: 'Keep Session'
+    }
+  ]));
+  await writeWorkspaceStateValue(backupStateDbPath, 'agentSessions.state.cache', JSON.stringify([
+    {
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi0z',
+      read: 1775930005000
+    },
+    {
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1rZWVw',
+      read: 1775930006000
+    }
+  ]));
+  await writeWorkspaceStateValue(backupStateDbPath, 'memento/chat-todo-list', JSON.stringify({
+    'session-3': [
+      {
+        id: 1,
+        title: 'Disposable todo',
+        status: 'completed'
+      }
+    ],
+    'session-keep': [
+      {
+        id: 1,
+        title: 'Keep todo',
+        status: 'not-started'
+      }
+    ]
+  }));
+
+  const deleteTargetSession = await storage.getSessionById('session-3');
+  assert(deleteTargetSession, 'Storage deletion test did not discover the session targeted for artifact cleanup.');
+
+  const deletionReport = await storage.deleteSessionArtifacts(deleteTargetSession);
+  assert(deletionReport.deletedPaths.includes(deleteTargetSessionFile), 'Storage deletion test did not delete the chatSessions JSONL file.');
+  assert(deletionReport.deletedPaths.includes(deleteTargetEditingFile), 'Storage deletion test did not delete the chatEditingSessions JSONL file.');
+  assert(deletionReport.deletedPaths.includes(deleteTargetTranscriptFile), 'Storage deletion test did not delete the top-level transcript JSONL file.');
+  assert(deletionReport.deletedPaths.includes(deleteTargetNestedTranscriptFile), 'Storage deletion test did not delete the nested GitHub.copilot-chat transcript JSONL file.');
+  assert(deletionReport.deletedPaths.includes(deleteTargetResourceDir), 'Storage deletion test did not delete the chat-session-resources directory.');
+  await assertMissing(deleteTargetSessionFile, 'Storage deletion test left the chatSessions JSONL file on disk.');
+  await assertMissing(deleteTargetEditingFile, 'Storage deletion test left the chatEditingSessions JSONL file on disk.');
+  await assertMissing(deleteTargetTranscriptFile, 'Storage deletion test left the top-level transcript JSONL file on disk.');
+  await assertMissing(deleteTargetNestedTranscriptFile, 'Storage deletion test left the nested transcript JSONL file on disk.');
+  await assertMissing(deleteTargetResourceDir, 'Storage deletion test left the chat-session-resources directory on disk.');
+  assert(await storage.getSessionById('session-3') === undefined, 'Storage deletion test still resolved the deleted session after artifact cleanup.');
+  const prunedIndexRaw = await readWorkspaceStateValue(stateDbPath, 'chat.ChatSessionStore.index');
+  assert(prunedIndexRaw && !prunedIndexRaw.includes('session-3'), 'Storage deletion test left the deleted session in chat.ChatSessionStore.index.');
+  assert(prunedIndexRaw && prunedIndexRaw.includes('session-keep'), 'Storage deletion test removed unrelated chat.ChatSessionStore.index entries.');
+  const prunedModelCacheRaw = await readWorkspaceStateValue(stateDbPath, 'agentSessions.model.cache');
+  assert(prunedModelCacheRaw && !prunedModelCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in agentSessions.model.cache.');
+  assert(prunedModelCacheRaw && prunedModelCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated agentSessions.model.cache entries.');
+  const prunedStateCacheRaw = await readWorkspaceStateValue(stateDbPath, 'agentSessions.state.cache');
+  assert(prunedStateCacheRaw && !prunedStateCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in agentSessions.state.cache.');
+  assert(prunedStateCacheRaw && prunedStateCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated agentSessions.state.cache entries.');
+  const prunedTodoListRaw = await readWorkspaceStateValue(stateDbPath, 'memento/chat-todo-list');
+  assert(prunedTodoListRaw && !prunedTodoListRaw.includes('session-3'), 'Storage deletion test left the deleted session in memento/chat-todo-list.');
+  assert(prunedTodoListRaw && prunedTodoListRaw.includes('session-keep'), 'Storage deletion test removed unrelated memento/chat-todo-list entries.');
+  const prunedBackupIndexRaw = await readWorkspaceStateValue(backupStateDbPath, 'chat.ChatSessionStore.index');
+  assert(prunedBackupIndexRaw && !prunedBackupIndexRaw.includes('session-3'), 'Storage deletion test left the deleted session in state.vscdb.backup chat.ChatSessionStore.index.');
+  assert(prunedBackupIndexRaw && prunedBackupIndexRaw.includes('session-keep'), 'Storage deletion test removed unrelated state.vscdb.backup chat.ChatSessionStore.index entries.');
+  const prunedBackupModelCacheRaw = await readWorkspaceStateValue(backupStateDbPath, 'agentSessions.model.cache');
+  assert(prunedBackupModelCacheRaw && !prunedBackupModelCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in state.vscdb.backup agentSessions.model.cache.');
+  assert(prunedBackupModelCacheRaw && prunedBackupModelCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated state.vscdb.backup agentSessions.model.cache entries.');
+  const prunedBackupStateCacheRaw = await readWorkspaceStateValue(backupStateDbPath, 'agentSessions.state.cache');
+  assert(prunedBackupStateCacheRaw && !prunedBackupStateCacheRaw.includes('c2Vzc2lvbi0z'), 'Storage deletion test left the deleted session in state.vscdb.backup agentSessions.state.cache.');
+  assert(prunedBackupStateCacheRaw && prunedBackupStateCacheRaw.includes('c2Vzc2lvbi1rZWVw'), 'Storage deletion test removed unrelated state.vscdb.backup agentSessions.state.cache entries.');
+  const prunedBackupTodoListRaw = await readWorkspaceStateValue(backupStateDbPath, 'memento/chat-todo-list');
+  assert(prunedBackupTodoListRaw && !prunedBackupTodoListRaw.includes('session-3'), 'Storage deletion test left the deleted session in state.vscdb.backup memento/chat-todo-list.');
+  assert(prunedBackupTodoListRaw && prunedBackupTodoListRaw.includes('session-keep'), 'Storage deletion test removed unrelated state.vscdb.backup memento/chat-todo-list entries.');
 
   await fs.rm(tempDir, { recursive: true, force: true });
 }
@@ -1653,9 +2110,56 @@ async function runStabilizedCreateWorkflowChecks() {
   await fs.rm(tempDir, { recursive: true, force: true });
 }
 
+async function runOfflineLocalChatCleanupChecks() {
+  const cleanupModule = await import(pathToFileURL(distOfflineLocalChatCleanup).href);
+  const globalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-global");
+  const reportFilePath = cleanupModule.getOfflineLocalChatCleanupReportPath(globalStorageDir);
+  const spec = cleanupModule.buildOfflineLocalChatCleanupLaunchSpec({
+    extensionRoot: packageRoot,
+    workspaceStorageDir: "C:/tmp/workspaceStorage/example",
+    keepSessionIds: ["session-keep-1", "session-keep-2"],
+    reportFilePath
+  });
+
+  assert(spec.executable === "powershell.exe", "Offline cleanup launch test did not target powershell.exe.");
+  assert(spec.args.includes("-File"), "Offline cleanup launch test did not include the script file switch.");
+  assert(spec.args.includes(path.join(packageRoot, "tools", "schedule-local-chat-state-cleanup.ps1")), "Offline cleanup launch test did not point at the scheduler script.");
+  assert(spec.args.includes("-WorkspaceStorageDir") && spec.args.includes("C:/tmp/workspaceStorage/example"), "Offline cleanup launch test did not preserve the workspace storage directory.");
+  assert(spec.args.filter((value) => value === "-KeepSessionId").length === 2, "Offline cleanup launch test did not emit one KeepSessionId argument per preserved session.");
+  assert(spec.options.detached === true && spec.options.stdio === "ignore", "Offline cleanup launch test did not configure detached background execution.");
+
+  await fs.mkdir(globalStorageDir, { recursive: true });
+  await fs.writeFile(reportFilePath, `${JSON.stringify([
+    {
+      dbPath: "state.vscdb",
+      removedIndexEntries: 5,
+      removedModelEntries: 5,
+      removedStateEntries: 11,
+      removedTodoEntries: 1
+    },
+    {
+      dbPath: "state.vscdb.backup",
+      removedIndexEntries: 5,
+      removedModelEntries: 5,
+      removedStateEntries: 11,
+      removedTodoEntries: 1
+    }
+  ])}\n`, "utf8");
+
+  const summary = await cleanupModule.readAndDeleteOfflineLocalChatCleanupReport(reportFilePath);
+  assert(summary && summary.reports.length === 2, "Offline cleanup report test did not read the stored report payload.");
+  await assertMissing(reportFilePath, "Offline cleanup report test did not remove the consumed report file.");
+  assert(
+    cleanupModule.formatOfflineLocalChatCleanupSummary(summary).includes("Removed state cache entries: 22."),
+    "Offline cleanup summary test did not aggregate report totals."
+  );
+
+  await fs.rm(globalStorageDir, { recursive: true, force: true });
+}
+
 async function runSessionSendWorkflowChecks() {
   const workflowModule = await import(pathToFileURL(distChatInteropSessionSendWorkflow).href);
-  const { canTrustGenericActiveChatAfterReveal } = workflowModule;
+  const { canTrustGenericActiveChatAfterReveal, sendMessageToSessionWithFallback } = workflowModule;
 
   assert(
     canTrustGenericActiveChatAfterReveal({
@@ -1752,6 +2256,228 @@ async function runSessionSendWorkflowChecks() {
     }) === false,
     "Session send workflow test incorrectly trusted a non-chat active tab after reveal."
   );
+
+  const { createRequire } = await import('module');
+  const require = createRequire(import.meta.url);
+  const vscodeModule = require('vscode');
+  const originalWindow = vscodeModule.window;
+  const originalExecuteCommand = vscodeModule.commands.executeCommand;
+  const originalGetCommands = vscodeModule.commands.getCommands;
+
+  let revealCalls = 0;
+  let focusedSendCalls = 0;
+  let sessionLastUpdated = '2026-04-11T04:00:00.000Z';
+  let activeChatLabel = 'Retry Target';
+
+  try {
+    vscodeModule.window = vscodeModule.window || {};
+    Object.defineProperty(vscodeModule.window, 'tabGroups', {
+      configurable: true,
+      value: {
+        get all() {
+          if (revealCalls < 2) {
+            return [
+              {
+                isActive: true,
+                viewColumn: 1,
+                tabs: [
+                  {
+                    label: 'README.md',
+                    isActive: true,
+                    isDirty: false,
+                    isPinned: false,
+                    isPreview: false,
+                    input: {
+                      constructor: { name: 'TabInputText' },
+                      uri: { toString: () => 'file:///tmp/README.md' }
+                    }
+                  }
+                ]
+              }
+            ];
+          }
+
+          return [
+            {
+              isActive: true,
+              viewColumn: 1,
+              tabs: [
+                {
+                  label: activeChatLabel,
+                  isActive: true,
+                  isDirty: false,
+                  isPinned: false,
+                  isPreview: false,
+                  input: {
+                    constructor: { name: 'TabInputCustom' },
+                    viewType: 'github.copilot.chat.editor'
+                  }
+                }
+              ]
+            }
+          ];
+        }
+      }
+    });
+    vscodeModule.commands.getCommands = async () => ['workbench.action.focusActiveEditorGroup'];
+    vscodeModule.commands.executeCommand = async () => undefined;
+
+    const retryInterop = {
+      async listChats() {
+        return [{
+          id: 'session-retry',
+          title: 'Retry Target',
+          lastUpdated: sessionLastUpdated,
+          mode: 'agent',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-retry.jsonl'
+        }];
+      },
+      async getExactSessionInteropSupport() {
+        return {
+          canRevealExactSession: true,
+          canSendExactSessionMessage: false,
+          revealUnsupportedReason: undefined,
+          sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+        };
+      },
+      async revealChat() {
+        revealCalls += 1;
+        return {
+          ok: true,
+          session: {
+            id: 'session-retry',
+            title: 'Retry Target',
+            lastUpdated: sessionLastUpdated,
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-retry.jsonl'
+          },
+          revealLifecycle: {
+            closedMatchingVisibleTabs: 0,
+            closedTabLabels: []
+          }
+        };
+      },
+      async sendFocusedMessage() {
+        focusedSendCalls += 1;
+        sessionLastUpdated = '2026-04-11T04:00:01.000Z';
+        return {
+          ok: true,
+          session: {
+            id: 'session-retry',
+            title: 'Retry Target',
+            lastUpdated: sessionLastUpdated,
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-retry.jsonl'
+          },
+          dispatch: {
+            surface: 'focused-chat-submit',
+            dispatchedPrompt: 'retry prompt'
+          }
+        };
+      }
+    };
+
+    const retriedFocusResult = await sendMessageToSessionWithFallback(retryInterop, {
+      sessionId: 'session-retry',
+      prompt: 'retry prompt',
+      blockOnResponse: false
+    });
+
+    assert(retriedFocusResult.result.ok === true, 'Session send workflow test did not recover by revealing the target chat again after focus was lost.');
+    assert(revealCalls === 2, `Session send workflow test did not retry reveal after the first focus miss. Got: ${revealCalls}`);
+    assert(focusedSendCalls === 1, `Session send workflow test did not send exactly once after the reveal retry. Got: ${focusedSendCalls}`);
+
+    let timeoutListChatsCalls = 0;
+    activeChatLabel = 'Timeout Target';
+    const timeoutInterop = {
+      async listChats() {
+        timeoutListChatsCalls += 1;
+        return [{
+          id: 'session-timeout',
+          title: 'Timeout Target',
+          lastUpdated: timeoutListChatsCalls >= 2 ? '2026-04-11T05:00:01.000Z' : '2026-04-11T05:00:00.000Z',
+          mode: 'agent',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-timeout.jsonl'
+        }];
+      },
+      async getExactSessionInteropSupport() {
+        return {
+          canRevealExactSession: true,
+          canSendExactSessionMessage: false,
+          revealUnsupportedReason: undefined,
+          sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+        };
+      },
+      async revealChat() {
+        return {
+          ok: true,
+          session: {
+            id: 'session-timeout',
+            title: 'Timeout Target',
+            lastUpdated: '2026-04-11T05:00:00.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-timeout.jsonl'
+          },
+          revealLifecycle: {
+            closedMatchingVisibleTabs: 0,
+            closedTabLabels: []
+          }
+        };
+      },
+      async sendFocusedMessage() {
+        return {
+          ok: false,
+          reason: 'Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.'
+        };
+      }
+    };
+
+    const timedOutResult = await sendMessageToSessionWithFallback(timeoutInterop, {
+      sessionId: 'session-timeout',
+      prompt: 'timeout prompt',
+      blockOnResponse: true
+    });
+
+    assert(timedOutResult.result.ok === false, 'Session send workflow test incorrectly continued after a focused-send timeout.');
+    assert(
+      typeof timedOutResult.result.reason === 'string' && timedOutResult.result.reason.includes('diagnostic failures'),
+      'Session send workflow test did not mark timeout as a diagnostic failure.'
+    );
+    assert(
+      typeof timedOutResult.result.reason === 'string' && timedOutResult.result.reason.includes('mutated and settled after the timeout'),
+      'Session send workflow test did not preserve late-mutation diagnostics after timeout.'
+    );
+  } finally {
+    vscodeModule.window = originalWindow;
+    vscodeModule.commands.executeCommand = originalExecuteCommand;
+    vscodeModule.commands.getCommands = originalGetCommands;
+  }
 }
 
 async function runChatFocusTargetChecks() {
@@ -2070,7 +2796,7 @@ async function runEditorFocusCommandChecks() {
 
 async function runEditorTabMatcherChecks() {
   const editorTabMatcherModule = await import(pathToFileURL(distChatInteropEditorTabMatcher).href);
-  const { isMatchingLocalChatEditorTab } = editorTabMatcherModule;
+  const { getLocalChatEditorTabMatchKind, isMatchingLocalChatEditorTab } = editorTabMatcherModule;
 
   assert(
     isMatchingLocalChatEditorTab(
@@ -2087,6 +2813,39 @@ async function runEditorTabMatcherChecks() {
       }
     ) === true,
     "Editor tab matcher test did not match a visible chat tab by exact Local title when no session-resource metadata was available."
+  );
+  assert(
+    getLocalChatEditorTabMatchKind(
+      {
+        label: "Local follow-up attempt request",
+        input: {
+          constructor: { name: "TabInputCustom" },
+          viewType: "github.copilot.chat.editor"
+        }
+      },
+      {
+        sessionId: "7ae206a1-089f-40d3-b173-8afaa002177b",
+        sessionTitle: "Local follow-up attempt request"
+      }
+    ) === "title",
+    "Editor tab matcher test did not classify a fallback title-only chat tab correctly."
+  );
+  assert(
+    isMatchingLocalChatEditorTab(
+      {
+        label: "Local follow-up attempt request",
+        input: {
+          constructor: { name: "TabInputCustom" },
+          viewType: "github.copilot.chat.editor"
+        }
+      },
+      {
+        sessionId: "7ae206a1-089f-40d3-b173-8afaa002177b",
+        sessionTitle: "Local follow-up attempt request",
+        matchMode: "resource-only"
+      }
+    ) === false,
+    "Editor tab matcher test incorrectly allowed a title-only chat tab when resource-only matching was requested."
   );
 
   assert(
@@ -2107,6 +2866,26 @@ async function runEditorTabMatcherChecks() {
       }
     ) === true,
     "Editor tab matcher test did not match a visible chat tab by exact Local session resource metadata."
+  );
+  assert(
+    getLocalChatEditorTabMatchKind(
+      {
+        label: "Chat",
+        input: {
+          constructor: { name: "TabInputCustom" },
+          viewType: "github.copilot.chat.editor",
+          uri: {
+            toString: () => "vscode-chat-session://local/N2FlMjA2YTEtMDg5Zi00MGQzLWIxNzMtOGFmYWEwMDIxNzdi"
+          }
+        }
+      },
+      {
+        sessionId: "7ae206a1-089f-40d3-b173-8afaa002177b",
+        sessionTitle: "Different visible label",
+        matchMode: "resource-only"
+      }
+    ) === "resource",
+    "Editor tab matcher test did not preserve exact Local session-resource matches under resource-only mode."
   );
 
   assert(
@@ -2311,7 +3090,7 @@ async function runLiveChatSupportMatrixChecks() {
     }
   });
 
-  assert(matrix.localNewChatPrompt.status === "supported", "Live chat support matrix test did not mark Local new-chat prompt support when the open commands exist.");
+  assert(matrix.localNewChatPrompt.status === "best-effort", "Live chat support matrix test did not downgrade Local new-chat prompt support after the observed neutral-create inheritance risk.");
   assert(matrix.localNewChatModel.status === "best-effort", "Live chat support matrix test did not mark Local new-chat model support as best-effort.");
   assert(matrix.localNewChatCustomRolePrompt.status === "best-effort", "Live chat support matrix test did not expose best-effort Local custom role prompt dispatch.");
   assert(matrix.localNewChatCustomAgent.status === "unsupported", "Live chat support matrix test did not keep Local custom-agent support blocked.");
@@ -2678,11 +3457,30 @@ async function runPendingRequestHeuristicChecks() {
       latestRequestFamilies: 1
     });
     assert(filteredContextEstimate.afterLatestCompact === true, "Context estimate filter test must record the latest-compaction flag.");
+    assert(filteredContextEstimate.compactionBoundaryApplied === true, "Context estimate filter test must report that the persisted compaction boundary was applied.");
     assert(filteredContextEstimate.latestRequestFamiliesLimit === 1, "Context estimate filter test must preserve the requested latest request family limit.");
     assert(filteredContextEstimate.activeRequestFamilies === 1, "Context estimate filter test must cap the active request families to the requested limit.");
 
     const filteredContextEstimateMarkdown = renderContextEstimateMarkdown(filteredContextEstimate, { detailLevel: "summary" });
+    assert(filteredContextEstimateMarkdown.includes("- Compaction boundary applied: yes"), "Context estimate markdown must report that the persisted compaction boundary was applied.");
     assert(filteredContextEstimateMarkdown.includes("Latest request families limit: 1"), "Context estimate markdown must render the latest request family limit.");
+
+    const noCompactionFixture = await createNoCompactionSessionFixture();
+    try {
+      const fallbackContextEstimate = await buildContextEstimate({
+        sessionFile: noCompactionFixture.sessionFile,
+        afterLatestCompact: true
+      });
+      assert(fallbackContextEstimate.afterLatestCompact === true, "Compact-fallback estimate must preserve the requested latest-compaction flag.");
+      assert(fallbackContextEstimate.compactionBoundaryApplied === false, "Compact-fallback estimate must report that no persisted compaction boundary was applied.");
+      assert(fallbackContextEstimate.signals.some((signal) => signal.includes("could not be applied") && signal.includes("falls back to the bounded active request tail")), "Compact-fallback estimate must explain why it fell back to the bounded active request tail.");
+
+      const fallbackContextEstimateMarkdown = renderContextEstimateMarkdown(fallbackContextEstimate, { detailLevel: "summary" });
+      assert(fallbackContextEstimateMarkdown.includes("- After latest compact: yes"), "Compact-fallback markdown must preserve the requested latest-compaction flag.");
+      assert(fallbackContextEstimateMarkdown.includes("- Compaction boundary applied: no (fell back to bounded active tail)"), "Compact-fallback markdown must report the bounded-tail fallback.");
+    } finally {
+      await fs.rm(noCompactionFixture.rootDir, { recursive: true, force: true });
+    }
   } finally {
     await fs.rm(compactionFixture.rootDir, { recursive: true, force: true });
   }
@@ -2813,7 +3611,7 @@ async function runAgentArchitectProcessEvidenceChecks() {
         "Creation evidence:",
         "- created_by: test-run",
         "- created_path: .github/agents/tmp-process-evidence.agent.md",
-        "- basis: docs/targets/tmp-brief.md"
+        "- basis: tmp-brief.txt"
       ].join("\n")
     );
 
@@ -3255,20 +4053,13 @@ async function runAgentArchitectProcessEvidenceChecks() {
   }
 }
 
-async function runAgentRoutingPolicyChecks() {
-  const coDesigner = await fs.readFile(coDesignerPath, "utf-8");
-
-  assert(coDesigner.includes("helper-routing recommendation only when the current request actually needs one"), "Agent routing policy test did not find the explicit helper-routing output gate in CO-DESIGNER.md.");
-  assert(coDesigner.includes("do not present the built-in default agent as the ambient baseline helper"), "Agent routing policy test did not find the explicit prohibition against treating the built-in default agent as the baseline helper in CO-DESIGNER.md.");
-  assert(coDesigner.includes("If a helper recommendation names the built-in default agent, state that it is an exception"), "Agent routing policy test did not require explicit exception handling when the built-in default agent is recommended in CO-DESIGNER.md.");
-  assert(coDesigner.includes("treat use of the built-in default agent as an exception that should be justified by capability need"), "Agent routing policy test did not find the matching support-layer exception rule in CO-DESIGNER.md.");
-}
-
 async function runManifestChecks() {
   const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
   const activationEvents = packageJson.activationEvents;
   const languageModelTools = packageJson.contributes?.languageModelTools;
   const extensionCommands = packageJson.contributes?.commands;
+  const viewTitleMenu = packageJson.contributes?.menus?.["view/title"] ?? [];
+  const viewItemContextMenu = packageJson.contributes?.menus?.["view/item/context"] ?? [];
 
   assert(Array.isArray(activationEvents), "package.json activationEvents must be an array.");
   assert(Array.isArray(languageModelTools), "package.json contributes.languageModelTools must be an array.");
@@ -3300,6 +4091,8 @@ async function runManifestChecks() {
   const windowTool = languageModelTools.find((tool) => tool.name === "get_agent_session_window");
   const transcriptTool = languageModelTools.find((tool) => tool.name === "export_agent_evidence_transcript");
   const estimateTool = languageModelTools.find((tool) => tool.name === "estimate_agent_context_breakdown");
+  const rawSessionCommand = extensionCommands.find((command) => command.command === "aiRecoveryTooling.openSessionFile");
+  const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "aiRecoveryTooling.openSessionFile");
 
   assert(windowTool?.inputSchema?.properties?.afterLatestCompact, "package.json window tool schema must expose afterLatestCompact.");
   assert(windowTool?.inputSchema?.properties?.anchorOccurrence, "package.json window tool schema must expose anchorOccurrence.");
@@ -3307,6 +4100,60 @@ async function runManifestChecks() {
   assert(transcriptTool?.inputSchema?.properties?.maxBlocks, "package.json transcript tool schema must expose maxBlocks.");
   assert(transcriptTool?.inputSchema?.properties?.afterLatestCompact, "package.json transcript tool schema must expose afterLatestCompact.");
   assert(estimateTool?.inputSchema?.properties?.latestRequestFamilies, "package.json context estimate tool schema must expose latestRequestFamilies.");
+  assert(rawSessionCommand?.title === "AI Recovery Tooling: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
+  assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
+
+  const viewTitleCommands = viewTitleMenu.map((item) => item.command);
+  const viewItemCommands = viewItemContextMenu.map((item) => item.command);
+  assert(viewTitleCommands.includes("aiRecoveryTooling.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
+  assert(viewTitleCommands.includes("aiRecoveryTooling.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
+  assert(viewItemCommands.includes("aiRecoveryTooling.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
+  assert(viewItemCommands.includes("aiRecoveryTooling.closeVisibleLiveChatTabs"), "package.json session context menu must expose Close Visible Local Chat Tabs.");
+  assert(viewItemCommands.includes("aiRecoveryTooling.deleteLiveChatArtifacts"), "package.json session context menu must expose Delete Local Chat Artifacts.");
+  assert(viewItemCommands.includes("aiRecoveryTooling.sendMessageToLiveChat"), "package.json session context menu must expose Send Message To Local Chat.");
+}
+
+async function runRoutingGuardChecks() {
+  const firstSliceModule = await import(pathToFileURL(distFirstSlice).href);
+  const readme = await fs.readFile(readmePath, "utf-8");
+  const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
+
+  assert(
+    firstSliceModule.isFirstSliceSessionCommand("aiRecoveryTooling.openSessionFile") === false,
+    "Routing guard must keep raw session file access out of the default first-slice session commands."
+  );
+  assert(
+    firstSliceModule.isEnabledSessionCommand("aiRecoveryTooling.openSessionFile") === true,
+    "Routing guard must keep raw session file access available as an explicit non-default escape hatch."
+  );
+  assert(
+    firstSliceModule.isFirstSliceSessionCommand("aiRecoveryTooling.openSnapshot") === true,
+    "Routing guard must keep bounded snapshot inspection in the default first-slice session commands."
+  );
+  assert(
+    readme.includes("Open Raw Session File (Last Resort)"),
+    "README routing guard must keep raw session file access marked as last resort."
+  );
+  assert(
+    readme.includes("Bounded inspection surfaces should be preferred over opening raw session JSONL directly."),
+    "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
+  );
+  assert(
+    languageModelToolsSource.includes("Prefer snapshot, index, window, profile, transcript, or export surfaces over opening raw session files"),
+    "Language-model routing note must keep bounded inspection surfaces preferred over raw session files."
+  );
+}
+
+async function assertMissing(targetPath, message) {
+  try {
+    await fs.stat(targetPath);
+    throw new Error(message);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
 }
 
 async function runMcpChecks() {
@@ -3329,6 +4176,8 @@ async function runMcpChecks() {
       JSON.stringify(advertisedToolNames) === JSON.stringify(expectedToolNames),
       `MCP tool-list test did not advertise the expected tools. Got: ${advertisedToolNames.join(", ")}`
     );
+    assert(!advertisedToolNames.includes("listCopilotCliSessions"), "MCP tool-list must not expose listCopilotCliSessions while Copilot CLI is out of active scope.");
+    assert(!advertisedToolNames.includes("inspectCopilotCliSession"), "MCP tool-list must not expose inspectCopilotCliSession while Copilot CLI is out of active scope.");
     for (const tool of toolList.tools) {
       assert(typeof tool.title === "string" && tool.title.trim().length > 0, `MCP tool ${tool.name} is missing a title.`);
       assert(typeof tool.description === "string" && tool.description.trim().length > 0, `MCP tool ${tool.name} is missing a description.`);
@@ -3502,40 +4351,6 @@ async function runMcpChecks() {
       "MCP blocked storage-root test did not return the expected guardrail text."
     );
 
-    const fixture = await createCopilotCliSessionFixture();
-    try {
-      const listCopilotCliResult = await client.callTool({
-        name: "listCopilotCliSessions",
-        arguments: {
-          sessionStateRoot: fixture.sessionStateRoot,
-          limit: 5
-        }
-      });
-      const listCopilotCliText = listCopilotCliResult.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
-      assert(listCopilotCliResult.isError !== true, "MCP Copilot CLI list test unexpectedly returned an error.");
-      assert(listCopilotCliText.includes("# Copilot CLI Sessions"), "MCP Copilot CLI list test did not return the list header.");
-      assert(listCopilotCliText.includes("cli-session-aaa"), "MCP Copilot CLI list test did not include the fixture session id.");
-
-      const inspectCopilotCliResult = await client.callTool({
-        name: "inspectCopilotCliSession",
-        arguments: {
-          sessionStateRoot: fixture.sessionStateRoot,
-          sessionId: "cli-session-aaa"
-        }
-      });
-      const inspectCopilotCliText = inspectCopilotCliResult.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
-      assert(inspectCopilotCliResult.isError !== true, "MCP Copilot CLI inspect test unexpectedly returned an error.");
-      assert(inspectCopilotCliText.includes("# Copilot CLI Session"), "MCP Copilot CLI inspect test did not return the session header.");
-      assert(inspectCopilotCliText.includes("Latest assistant message: Investigated via worker lane."), "MCP Copilot CLI inspect test did not include the latest assistant message.");
-    } finally {
-      await fs.rm(fixture.rootDir, { recursive: true, force: true });
-    }
   } finally {
     await transport.close();
   }
@@ -3604,14 +4419,15 @@ async function main() {
   await runCreateChatDirectAgentCommandChecks();
   await runChatSessionStorageDeltaChecks();
   await runStabilizedCreateWorkflowChecks();
+  await runOfflineLocalChatCleanupChecks();
   await runSessionSendWorkflowChecks();
   await runLiveChatSupportMatrixChecks();
   await runLocalToCopilotCliHandoffChecks();
   await runPendingRequestHeuristicChecks();
   await runCopilotCliInspectionChecks();
   await runAgentArchitectProcessEvidenceChecks();
-  await runAgentRoutingPolicyChecks();
   await runManifestChecks();
+  await runRoutingGuardChecks();
   process.stdout.write("Tests passed.\n");
 }
 
