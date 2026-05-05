@@ -1,4 +1,4 @@
-# Tiinex AI VS Code Tools
+# Tiinex — AI — VS Code — Tools
 
 Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 
