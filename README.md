@@ -1,8 +1,10 @@
-# AI Recovery Tooling
+# Tiinex AI VS Code Tools
+
+Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 
 ![AI Recovery Tooling logo](assets/logo.png)
 
-AI Recovery Tooling is a VS Code extension for persisted Local chat inspection and bounded recovery work when chat state has drifted, compacted, reset, or become operationally unclear.
+AI Recovery Tooling is the current VS Code extension inside this repo. It provides persisted Local chat inspection and bounded recovery work when chat state has drifted, compacted, reset, or become operationally unclear.
 
 This is a tooling repo. It is not an agent-authoring framework and it does not claim a broad Agent Architect product surface.
 

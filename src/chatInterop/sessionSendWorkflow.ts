@@ -1,10 +1,13 @@
 import { focusLikelyEditorChat } from "./editorFocus";
+import { getLocalChatEditorTabMatchKind } from "./editorTabMatcher";
 import type { ChatFocusReport } from "./focusTargets";
 import type { ChatCommandResult, ChatInteropApi, SendChatMessageRequest } from "./types";
 import { appendUnsettledSessionDiagnostic, describeUnsettledSession } from "./unsettledDiagnostics";
 
-const TARGET_MUTATION_TIMEOUT_MS = 180_000;
-const TARGET_MUTATION_POLL_DELAY_MS = 1000;
+const TARGET_MUTATION_TIMEOUT_MS = 90_000;
+// Keep timeout semantics strict, but poll faster so successful fallback sends
+// don't linger an extra second before the tool can observe settlement.
+const TARGET_MUTATION_POLL_DELAY_MS = 250;
 const TARGET_MUTATION_POLL_ATTEMPTS = Math.ceil(TARGET_MUTATION_TIMEOUT_MS / TARGET_MUTATION_POLL_DELAY_MS);
 
 export interface SessionSendWorkflowResult {
@@ -17,6 +20,10 @@ export async function sendMessageToSessionWithFallback(
   chatInterop: ChatInteropApi,
   request: SendChatMessageRequest
 ): Promise<SessionSendWorkflowResult> {
+  const fallbackStartedAt = Date.now();
+  let totalRevealMs = 0;
+  let totalFocusMs = 0;
+  let focusedSendCallMs = 0;
   const beforeTarget = await getSessionSummary(chatInterop, request.sessionId);
   const exactSupport = await chatInterop.getExactSessionInteropSupport();
   if (exactSupport.canSendExactSessionMessage) {
@@ -40,7 +47,9 @@ export async function sendMessageToSessionWithFallback(
     };
   }
 
+  const initialRevealStartedAt = Date.now();
   let revealResult = await chatInterop.revealChat(request.sessionId);
+  totalRevealMs += Date.now() - initialRevealStartedAt;
   if (!revealResult.ok) {
     return {
       result: {
@@ -52,18 +61,30 @@ export async function sendMessageToSessionWithFallback(
     };
   }
 
+  const initialFocusStartedAt = Date.now();
   let focusResult = await focusLikelyEditorChat(chatInterop, {
     sessionId: request.sessionId
   });
-  let genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report);
+  totalFocusMs += Date.now() - initialFocusStartedAt;
+  let genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report, {
+    sessionId: request.sessionId,
+    sessionTitle: revealResult.session?.title ?? beforeTarget?.title
+  });
   if (!focusResult.ok && !genericActiveChatFallback) {
+    const retriedRevealStartedAt = Date.now();
     const retriedRevealResult = await chatInterop.revealChat(request.sessionId);
+    totalRevealMs += Date.now() - retriedRevealStartedAt;
     if (retriedRevealResult.ok) {
       revealResult = retriedRevealResult;
+      const retriedFocusStartedAt = Date.now();
       focusResult = await focusLikelyEditorChat(chatInterop, {
         sessionId: request.sessionId
       });
-      genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report);
+      totalFocusMs += Date.now() - retriedFocusStartedAt;
+      genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report, {
+        sessionId: request.sessionId,
+        sessionTitle: revealResult.session?.title ?? beforeTarget?.title
+      });
     }
   }
 
@@ -80,6 +101,7 @@ export async function sendMessageToSessionWithFallback(
     };
   }
 
+  const focusedSendStartedAt = Date.now();
   const focusedResult = await chatInterop.sendFocusedMessage({
     prompt: request.prompt,
     agentName: request.agentName,
@@ -89,6 +111,22 @@ export async function sendMessageToSessionWithFallback(
     blockOnResponse: request.blockOnResponse,
     requireSelectionEvidence: request.requireSelectionEvidence
   });
+  focusedSendCallMs = Date.now() - focusedSendStartedAt;
+  const focusedSendTiming = focusedResult.revealLifecycle?.timingMs;
+
+  const revealLifecycle = withFallbackTiming(
+    revealResult.revealLifecycle ?? focusedResult.revealLifecycle,
+    {
+      totalFallbackMs: Date.now() - fallbackStartedAt,
+      revealMs: totalRevealMs,
+      focusMs: totalFocusMs,
+      focusedSendCallMs,
+      focusedInputMs: focusedSendTiming?.focusedInputMs,
+      prefillMs: focusedSendTiming?.prefillMs,
+      submitMs: focusedSendTiming?.submitMs,
+      focusedMutationWaitMs: focusedSendTiming?.focusedMutationWaitMs
+    }
+  );
 
   if (!focusedResult.ok) {
     if (isPersistedMutationTimeout(focusedResult)) {
@@ -98,7 +136,7 @@ export async function sendMessageToSessionWithFallback(
           ...focusedResult,
           session: diagnosedTarget ?? focusedResult.session,
           reason: await buildPersistedMutationTimeoutReason(fallbackReason, focusedResult, beforeTarget?.lastUpdated, diagnosedTarget),
-          revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+          revealLifecycle
         },
         usedFallback: true,
         fallbackReason
@@ -108,18 +146,22 @@ export async function sendMessageToSessionWithFallback(
     return {
       result: {
         ...focusedResult,
-        revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+        revealLifecycle
       },
       usedFallback: true,
       fallbackReason
     };
   }
 
-  if (focusedResult.session?.id === request.sessionId) {
+  if (
+    focusedResult.session?.id === request.sessionId
+    && request.blockOnResponse !== true
+    && isSessionSettled(focusedResult.session)
+  ) {
     return {
       result: {
         ...focusedResult,
-        revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+        revealLifecycle
       },
       usedFallback: true,
       fallbackReason
@@ -137,7 +179,7 @@ export async function sendMessageToSessionWithFallback(
       result: {
         ok: false,
         reason: `${fallbackReason} Fallback submit did not produce an observed persisted mutation for target session ${request.sessionId}.`,
-        revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+        revealLifecycle
       },
       usedFallback: true,
       fallbackReason
@@ -153,7 +195,7 @@ export async function sendMessageToSessionWithFallback(
           verifiedTarget.session
         ),
         session: verifiedTarget.session,
-        revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+        revealLifecycle
       },
       usedFallback: true,
       fallbackReason
@@ -164,10 +206,21 @@ export async function sendMessageToSessionWithFallback(
     result: {
       ...focusedResult,
       session: verifiedTarget.session,
-      revealLifecycle: revealResult.revealLifecycle ?? focusedResult.revealLifecycle
+      revealLifecycle
     },
     usedFallback: true,
     fallbackReason
+  };
+}
+
+function withFallbackTiming(
+  lifecycle: ChatCommandResult["revealLifecycle"],
+  timingMs: NonNullable<NonNullable<ChatCommandResult["revealLifecycle"]>["timingMs"]>
+): NonNullable<ChatCommandResult["revealLifecycle"]> {
+  return {
+    closedMatchingVisibleTabs: lifecycle?.closedMatchingVisibleTabs ?? 0,
+    closedTabLabels: lifecycle?.closedTabLabels ?? [],
+    timingMs
   };
 }
 
@@ -212,10 +265,31 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function canTrustGenericActiveChatAfterReveal(report: ChatFocusReport | undefined): boolean {
+export function canTrustGenericActiveChatAfterReveal(
+  report: ChatFocusReport | undefined,
+  target?: { sessionId: string; sessionTitle?: string }
+): boolean {
   const activeGroup = report?.groups[report.activeGroupIndex];
   const activeTab = activeGroup?.tabs.find((tab) => tab.isActive);
-  return activeTab?.isLikelyChatEditor === true && normalize(activeTab.label) === "chat";
+  if (activeTab?.isLikelyChatEditor !== true || normalize(activeTab.label) !== "chat") {
+    return false;
+  }
+
+  if (!target?.sessionTitle) {
+    return false;
+  }
+
+  return getLocalChatEditorTabMatchKind(
+    {
+      label: activeTab.label,
+      input: activeTab.input
+    },
+    {
+      sessionId: target.sessionId,
+      sessionTitle: target.sessionTitle,
+      matchMode: "resource-only"
+    }
+  ) === "resource";
 }
 
 function isPersistedMutationTimeout(result: ChatCommandResult): boolean {

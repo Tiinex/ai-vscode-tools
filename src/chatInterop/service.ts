@@ -46,9 +46,9 @@ const NEW_CHAT_EDITOR_COMMAND = "workbench.action.openChat";
 const OPEN_CHAT_COMMAND = "workbench.action.chat.open";
 const DEFAULT_OPEN_DELAY_MS = 200;
 const DEFAULT_POST_CREATE_DELAY_MS = 350;
-// Treat persistence waits as diagnostic gates, not soft fallbacks. Three minutes is long
-// enough for slower hosts while still surfacing real hangs for investigation.
-const DEFAULT_POST_CREATE_TIMEOUT_MS = 180_000;
+// Treat persistence waits as diagnostic gates, not soft fallbacks. Ninety seconds is
+// long enough for slower hosts while surfacing hangs sooner as actionable failures.
+const DEFAULT_POST_CREATE_TIMEOUT_MS = 90_000;
 const DEFAULT_PROMPT_REGISTRATION_DELAY_MS = 350;
 
 export class ChatInteropService implements ChatInteropApi {
@@ -74,6 +74,10 @@ export class ChatInteropService implements ChatInteropApi {
 
   async listChats(): Promise<ChatSessionSummary[]> {
     return this.storage.listSessions();
+  }
+
+  getPostCreateTimeoutMs(): number {
+    return this.postCreateTimeoutMs;
   }
 
   async getExactSessionInteropSupport(): Promise<ExactSessionInteropSupport> {
@@ -115,6 +119,15 @@ export class ChatInteropService implements ChatInteropApi {
       const { session: created, selection, settled } = await this.waitForCreatedSession(before, request, dispatch);
 
       await cleanup?.();
+
+      if (!created) {
+        return {
+          ok: false,
+          reason: "Create chat dispatched but no persisted created session was observed within the expected timeout.",
+          selection,
+          dispatch
+        };
+      }
 
       if (request.blockOnResponse && created && !settled) {
         return {
@@ -276,11 +289,35 @@ export class ChatInteropService implements ChatInteropApi {
         dispatchedPrompt
       };
 
+      let focusedInputMs = 0;
+      let prefillMs = 0;
+      let submitMs = 0;
+      let focusedMutationWaitMs = 0;
+
+      const buildFocusedSendTimingLifecycle = (): NonNullable<ChatCommandResult["revealLifecycle"]> => ({
+        closedMatchingVisibleTabs: 0,
+        closedTabLabels: [],
+        timingMs: {
+          focusedInputMs,
+          prefillMs,
+          submitMs,
+          focusedMutationWaitMs
+        }
+      });
+
+      const focusedInputStartedAt = Date.now();
       await vscode.commands.executeCommand(commandSupport.focusInputCommand);
+      focusedInputMs = Date.now() - focusedInputStartedAt;
       await delay(this.openDelayMs);
+
+      const prefillStartedAt = Date.now();
       await this.prefillFocusedChat(request, dispatchedPrompt);
+      prefillMs = Date.now() - prefillStartedAt;
       await delay(this.openDelayMs);
+
+      const submitStartedAt = Date.now();
       await vscode.commands.executeCommand(commandSupport.submitCommand);
+      submitMs = Date.now() - submitStartedAt;
 
       const beforeById = new Map(before.map((item) => [item.id, item.lastUpdated]));
 
@@ -298,7 +335,8 @@ export class ChatInteropService implements ChatInteropApi {
             reason: buildSelectionEvidenceFailure(selection, false),
             session: candidate,
             selection,
-            dispatch
+            dispatch,
+            revealLifecycle: buildFocusedSendTimingLifecycle()
           };
         }
 
@@ -306,17 +344,21 @@ export class ChatInteropService implements ChatInteropApi {
           ok: true,
           session: candidate,
           selection,
-          dispatch
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
         };
       }
 
+      const focusedMutationWaitStartedAt = Date.now();
       const { session, selection, observedMutation, settled } = await this.waitForFocusedSessionMutation(before, request, dispatch);
+      focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
       if (!session || !observedMutation) {
         return {
           ok: false,
           reason: "Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.",
           selection,
-          dispatch
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
         };
       }
 
@@ -329,7 +371,8 @@ export class ChatInteropService implements ChatInteropApi {
           ),
           session,
           selection,
-          dispatch
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
         };
       }
 
@@ -339,7 +382,8 @@ export class ChatInteropService implements ChatInteropApi {
           reason: buildSelectionEvidenceFailure(selection, false),
           session,
           selection,
-          dispatch
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
         };
       }
 
@@ -347,7 +391,8 @@ export class ChatInteropService implements ChatInteropApi {
         ok: true,
         session,
         selection,
-        dispatch
+        dispatch,
+        revealLifecycle: buildFocusedSendTimingLifecycle()
       };
     } catch (error) {
       return toErrorResult(error);

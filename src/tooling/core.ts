@@ -576,6 +576,117 @@ export async function discoverSessions(extraRoots: string[] = []): Promise<Sessi
   return ordered;
 }
 
+function renderToolRequestCount(count: number): string {
+  return count === 1 ? "a tool" : `${count} tools`;
+}
+
+function describeTranscriptTailGap(entries: ParsedTranscriptEntry[]): string | undefined {
+  let lastUserIndex = -1;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.type === "user.message") {
+      lastUserIndex = index;
+      break;
+    }
+  }
+
+  const relevantEntries = lastUserIndex >= 0 ? entries.slice(lastUserIndex + 1) : entries;
+  const lastRelevantType = relevantEntries.at(-1)?.type;
+  const lastAssistantMessage = [...relevantEntries].reverse().find((entry) => entry.type === "assistant.message");
+  const lastAssistantData = lastAssistantMessage ? asRecord(lastAssistantMessage.data) : undefined;
+  const toolRequestCount = Array.isArray(lastAssistantData?.toolRequests)
+    ? lastAssistantData.toolRequests.length
+    : 0;
+
+  if (toolRequestCount > 0 && lastRelevantType === "assistant.turn_start") {
+    return `Transcript persisted a new assistant turn after an earlier assistant message requested ${renderToolRequestCount(toolRequestCount)}, but no tool result or final answer was ever written.`;
+  }
+
+  if (toolRequestCount > 0) {
+    return `Transcript persisted an unfinished assistant step after requesting ${renderToolRequestCount(toolRequestCount)}.`;
+  }
+
+  if (lastRelevantType === "assistant.turn_start") {
+    return "Transcript persisted an assistant turn start for the latest request, but no matching assistant message or turn end was written.";
+  }
+
+  return undefined;
+}
+
+function snapshotLooksMoreSettledThanTranscript(snapshot: SnapshotResult): boolean {
+  if (snapshot.pendingRequestCount > 0) {
+    return false;
+  }
+
+  if (snapshot.requestCount === 0) {
+    return false;
+  }
+
+  if (snapshot.responseCount < snapshot.requestCount || snapshot.resultCount < snapshot.requestCount) {
+    return false;
+  }
+
+  if (!snapshot.latestAssistantMessage) {
+    return false;
+  }
+
+  if (snapshot.latestUserMessage && snapshot.latestAssistantMessage.lineNo < snapshot.latestUserMessage.lineNo) {
+    return false;
+  }
+
+  return true;
+}
+
+async function buildSessionDerivedTranscriptEvidenceResult(
+  candidate: SessionCandidate,
+  options: {
+    afterLatestCompact: boolean;
+    anchorText?: string;
+    anchorOccurrence?: AnchorOccurrence;
+    maxBlocks?: number;
+    unavailableReason: string;
+    omissions: string[];
+    attemptedPaths?: string[];
+    totalRows?: number;
+    transcriptPath?: string;
+    fallbackSnapshot?: SnapshotResult;
+  }
+): Promise<TranscriptEvidenceResult> {
+  const supplementaryResourcePath = await resolveChatSessionResourcesPath(candidate);
+  const fallbackSnapshot = options.fallbackSnapshot ?? await buildSnapshot({ sessionFile: candidate.jsonlPath });
+  return {
+    candidate,
+    transcriptPath: options.transcriptPath,
+    transcriptAvailable: false,
+    selectorPath: candidate.jsonlPath,
+    totalRows: options.totalRows ?? 0,
+    blocks: [],
+    omissions: options.omissions,
+    unavailableReason: options.unavailableReason,
+    attemptedPaths: options.attemptedPaths,
+    supplementaryResourcePath,
+    fallbackSnapshot,
+    fallbackIndex: !options.afterLatestCompact && !options.anchorText
+      ? await buildIndex({ sessionFile: candidate.jsonlPath, tail: 20 })
+      : undefined,
+    fallbackWindow: options.afterLatestCompact || options.anchorText
+      ? await buildWindow({
+        sessionFile: candidate.jsonlPath,
+        anchorText: options.anchorText,
+        anchorOccurrence: options.anchorOccurrence,
+        afterLatestCompact: options.afterLatestCompact,
+        before: 0,
+        after: options.maxBlocks ? Math.max(0, options.maxBlocks - 1) : 12,
+        maxMatches: 1
+      })
+      : undefined,
+    anchorText: options.anchorText,
+    anchorOccurrence: options.anchorOccurrence,
+    afterLatestCompact: options.afterLatestCompact,
+    maxBlocks: options.maxBlocks,
+    compactionBoundaryApplied: options.afterLatestCompact
+  };
+}
+
 async function discoverSessionsInStorageDir(storageDir: string): Promise<SessionCandidate[]> {
   const chatDir = path.join(storageDir, "chatSessions");
   try {
@@ -2491,38 +2602,17 @@ export async function buildTranscriptEvidence(options: TranscriptEvidenceOptions
     }
 
     candidate = await selectSession(options);
-    const supplementaryResourcePath = await resolveChatSessionResourcesPath(candidate);
-    return {
-      candidate,
-      transcriptAvailable: false,
-      selectorPath: candidate.jsonlPath,
-      totalRows: 0,
-      blocks: [],
-      omissions: [
-        "Transcript artifact was unavailable, so this result falls back to persisted session-derived evidence rather than canonical transcript rows."
-      ],
-      unavailableReason: transcriptError.message,
-      attemptedPaths: transcriptError.attemptedPaths,
-      supplementaryResourcePath,
-      fallbackSnapshot: await buildSnapshot({ sessionFile: candidate.jsonlPath }),
-      fallbackIndex: !afterLatestCompact && !anchorText ? await buildIndex({ sessionFile: candidate.jsonlPath, tail: 20 }) : undefined,
-      fallbackWindow: afterLatestCompact || anchorText
-        ? await buildWindow({
-          sessionFile: candidate.jsonlPath,
-          anchorText,
-          anchorOccurrence,
-          afterLatestCompact,
-          before: 0,
-          after: maxBlocks ? Math.max(0, maxBlocks - 1) : 12,
-          maxMatches: 1
-        })
-        : undefined,
+    return buildSessionDerivedTranscriptEvidenceResult(candidate, {
+      afterLatestCompact,
       anchorText,
       anchorOccurrence,
-      afterLatestCompact,
       maxBlocks,
-      compactionBoundaryApplied: afterLatestCompact
-    };
+      unavailableReason: transcriptError.message,
+      attemptedPaths: transcriptError.attemptedPaths,
+      omissions: [
+        "Transcript artifact was unavailable, so this result falls back to persisted session-derived evidence rather than canonical transcript rows."
+      ]
+    });
   }
 
   const entries: ParsedTranscriptEntry[] = [];
@@ -2531,6 +2621,27 @@ export async function buildTranscriptEvidence(options: TranscriptEvidenceOptions
   for await (const { lineNo, row } of iterJsonlRows(transcriptPath)) {
     totalRows += 1;
     entries.push(parseTranscriptEntry(lineNo, row));
+  }
+
+  const transcriptTailGap = describeTranscriptTailGap(entries);
+  if (transcriptTailGap) {
+    const fallbackSnapshot = await buildSnapshot({ sessionFile: candidate.jsonlPath });
+    if (snapshotLooksMoreSettledThanTranscript(fallbackSnapshot)) {
+      return buildSessionDerivedTranscriptEvidenceResult(candidate, {
+        afterLatestCompact,
+        anchorText,
+        anchorOccurrence,
+        maxBlocks,
+        transcriptPath,
+        attemptedPaths: [transcriptPath],
+        totalRows,
+        fallbackSnapshot,
+        unavailableReason: `Canonical transcript artifact was present at ${normalizeSource(transcriptPath)}, but it ended before the latest settled assistant turn was fully persisted. ${transcriptTailGap}`,
+        omissions: [
+          "Canonical transcript artifact was present but incomplete for the latest settled turn, so this result falls back to persisted session-derived evidence rather than canonical transcript rows."
+        ]
+      });
+    }
   }
 
   const standaloneToolCallIds = new Set<string>();
@@ -2849,6 +2960,7 @@ export async function buildSnapshot(options: SnapshotOptions): Promise<SnapshotR
   let latestAssistantMessage: RecordSummary | undefined;
   let latestToolActivity: RecordSummary | undefined;
   let latestRequest: RecordSummary | undefined;
+  let latestAssistantResponsePreview: string | undefined;
   let pendingRequestCount = 0;
   let pendingRequestIds: string[] = [];
   let requestCount = 0;
@@ -2897,11 +3009,14 @@ export async function buildSnapshot(options: SnapshotOptions): Promise<SnapshotR
     }
     if (summaryKeyMatches(summary, REQUEST_RESPONSE_PATH) || rowContainsResponsePayload(row)) {
       latestToolActivity = withPreview(summary, toolActivityPreview);
+      if (assistantPreview) {
+        latestAssistantResponsePreview = assistantPreview;
+      }
       responseCount += 1;
       toolInvocationCount += countResponseToolInvocations(row);
     }
     if (summaryKeyMatches(summary, REQUEST_RESULT_PATH) || rowContainsResultPayload(row)) {
-      latestAssistantMessage = withPreview(summary, assistantPreview ?? summary.preview) ?? summary;
+      latestAssistantMessage = withPreview(summary, assistantPreview ?? latestAssistantResponsePreview ?? summary.preview) ?? summary;
       resultCount += 1;
     }
   }
@@ -3337,7 +3452,7 @@ export function renderTranscriptEvidenceMarkdown(result: TranscriptEvidenceResul
         ...result.omissions.map((omission) => `- ${omission}`),
         "",
         "## Provenance Summary",
-        "- This compact view is derived from the persisted session JSONL because no canonical transcript artifact was available.",
+        "- This compact view is derived from the persisted session JSONL because no usable canonical transcript artifact was available.",
         "- It preserves the checked transcript paths and a bounded fallback summary without embedding the full snapshot/index sections."
       );
 
@@ -3360,7 +3475,7 @@ export function renderTranscriptEvidenceMarkdown(result: TranscriptEvidenceResul
 
     lines.push(
       "- Current upstream evidence suggests canonical transcript files are hook-gated rather than the default persistence path for ordinary live sessions.",
-      "- For ordinary live sessions, persisted session JSONL is typically the reliable source of truth when no canonical transcript artifact exists."
+      "- For ordinary live sessions, persisted session JSONL is typically the reliable source of truth when no usable canonical transcript artifact exists."
     );
 
     if (result.supplementaryResourcePath) {
@@ -3385,7 +3500,7 @@ export function renderTranscriptEvidenceMarkdown(result: TranscriptEvidenceResul
     lines.push(
       "",
       "## Persisted Session Evidence",
-      "- The sections below are derived directly from the persisted session JSONL and are provided as a bounded fallback when no canonical transcript artifact is present."
+      "- The sections below are derived directly from the persisted session JSONL and are provided as a bounded fallback when no usable canonical transcript artifact is available."
     );
 
     if (result.fallbackSnapshot) {
@@ -3407,7 +3522,7 @@ export function renderTranscriptEvidenceMarkdown(result: TranscriptEvidenceResul
         : "- No supplementary chat-session-resources directory was observed for this session.",
       "",
       "## Provenance Summary",
-      "- This evidence view is derived from the persisted session JSONL rather than a canonical transcript artifact.",
+      "- This evidence view is derived from the persisted session JSONL rather than a usable canonical transcript artifact.",
       "- Session Snapshot and Session Index sections are rendered from the same stored session file used elsewhere in the tooling.",
       "- If VS Code later persists a transcript artifact for this session, the canonical transcript view will replace this session-derived view automatically."
     );

@@ -683,7 +683,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const config = vscode.workspace.getConfiguration("aiRecoveryTooling");
     const chatInteropOptions = {
       workspaceStorageRoots: currentWorkspaceStorageRoots(context),
-      postCreateTimeoutMs: config.get<number>("postCreateTimeoutMs", 180000),
+      postCreateTimeoutMs: config.get<number>("postCreateTimeoutMs", 90000),
       waitForPersistedDefault: config.get<boolean>("waitForPersistedDefault", true)
     };
 

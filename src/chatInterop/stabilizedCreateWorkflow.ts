@@ -8,9 +8,19 @@ export interface StabilizedCreateAndSendResult {
   createResult: ChatCommandResult;
   workflow: SessionSendWorkflowResult;
   seedPrompt: string;
+  realPromptDispatchAttempted: boolean;
   patchedModeId?: string;
   patchedModelId?: string;
   resolvedModeId?: string;
+}
+
+const SEED_SETTLEMENT_POLL_DELAY_MS = 1000;
+const DEFAULT_SEED_SETTLEMENT_TIMEOUT_MS = 90_000;
+
+interface SeedSessionReadiness {
+  session?: ChatSessionSummary;
+  tokenObserved: boolean;
+  observedNonTokenContent: boolean;
 }
 
 export async function createStabilizedChatAndSend(
@@ -24,7 +34,7 @@ export async function createStabilizedChatAndSend(
     mode: request.mode,
     modelSelector: request.modelSelector,
     partialQuery: false,
-    blockOnResponse: true,
+    blockOnResponse: false,
     requireSelectionEvidence: false
   });
 
@@ -35,7 +45,52 @@ export async function createStabilizedChatAndSend(
         result: createResult,
         usedFallback: false
       },
-      seedPrompt
+      seedPrompt,
+      realPromptDispatchAttempted: false
+    };
+  }
+
+  const seedReadiness = await waitForSeedSessionReady(chatInterop, createResult.session, seedPrompt);
+  if (!seedReadiness.session) {
+    return {
+      createResult,
+      workflow: {
+        result: {
+          ok: false,
+          reason: seedReadiness.observedNonTokenContent
+            ? "Seed create session produced non-token content before the real prompt could be sent."
+            : "Seed create session did not reach a settled persisted state before the real prompt could be sent.",
+          session: createResult.session,
+          selection: createResult.selection,
+          revealLifecycle: createResult.revealLifecycle
+        },
+        usedFallback: false
+      },
+      seedPrompt,
+      realPromptDispatchAttempted: false
+    };
+  }
+
+  const settledSeedSession = seedReadiness.session;
+
+  if (seedSessionHasControlThreadArtifacts(settledSeedSession)) {
+    return {
+      createResult: {
+        ...createResult,
+        session: settledSeedSession
+      },
+      workflow: {
+        result: {
+          ok: false,
+          reason: `Seed create session picked up control-thread artifacts before the real prompt was sent: ${(settledSeedSession.controlThreadArtifactKinds ?? []).join(", ") || "unknown"}.`,
+          session: settledSeedSession,
+          selection: createResult.selection,
+          revealLifecycle: createResult.revealLifecycle
+        },
+        usedFallback: false
+      },
+      seedPrompt,
+      realPromptDispatchAttempted: false
     };
   }
 
@@ -66,10 +121,110 @@ export async function createStabilizedChatAndSend(
     createResult,
     workflow,
     seedPrompt,
+    realPromptDispatchAttempted: true,
     patchedModeId,
     patchedModelId,
     resolvedModeId
   };
+}
+
+async function waitForSeedSessionReady(
+  chatInterop: ChatInteropApi,
+  seedSession: ChatSessionSummary,
+  seedPrompt: string
+): Promise<SeedSessionReadiness> {
+  let lastObservedSession: ChatSessionSummary | undefined = seedSession;
+  let observedNonTokenContent = false;
+  const deadline = Date.now() + Math.max(chatInterop.getPostCreateTimeoutMs?.() ?? DEFAULT_SEED_SETTLEMENT_TIMEOUT_MS, SEED_SETTLEMENT_POLL_DELAY_MS);
+
+  while (true) {
+    const session: ChatSessionSummary | undefined = (await chatInterop.listChats()).find((candidate) => candidate.id === seedSession.id) ?? lastObservedSession;
+    lastObservedSession = session;
+    const fileEvidence = await readSeedSessionFileEvidence(seedSession.sessionFile, seedPrompt);
+    observedNonTokenContent = observedNonTokenContent || fileEvidence.observedNonTokenContent;
+
+    if (fileEvidence.tokenObserved) {
+      return {
+        session,
+        tokenObserved: true,
+        observedNonTokenContent
+      };
+    }
+
+    if (fileEvidence.observedNonTokenContent && isSettledSession(session)) {
+      return {
+        session: undefined,
+        tokenObserved: false,
+        observedNonTokenContent: true
+      };
+    }
+
+    if (Date.now() >= deadline) {
+      break;
+    }
+
+    await delaySeedSettlement(SEED_SETTLEMENT_POLL_DELAY_MS);
+  }
+
+  return {
+    session: undefined,
+    tokenObserved: false,
+    observedNonTokenContent
+  };
+}
+
+async function readSeedSessionFileEvidence(
+  sessionFile: string,
+  seedPrompt: string
+): Promise<{ tokenObserved: boolean; observedNonTokenContent: boolean }> {
+  try {
+    const raw = await fs.readFile(sessionFile, "utf8");
+    const token = extractSeedToken(seedPrompt);
+    const tokenObserved = token ? raw.includes(token) : false;
+    const observedNonTokenContent = !tokenObserved && /requests\/0\/(response|result)/.test(raw);
+    return {
+      tokenObserved,
+      observedNonTokenContent
+    };
+  } catch {
+    return {
+      tokenObserved: false,
+      observedNonTokenContent: false
+    };
+  }
+}
+
+function extractSeedToken(seedPrompt: string): string | undefined {
+  const match = seedPrompt.match(/AA_STABLE_INIT_[A-Za-z0-9_]+/);
+  return match?.[0];
+}
+
+function seedSessionHasControlThreadArtifacts(session: ChatSessionSummary): boolean {
+  return session.hasControlThreadArtifacts === true || (session.controlThreadArtifactKinds?.length ?? 0) > 0;
+}
+
+function isSettledSession(session: ChatSessionSummary | undefined): boolean {
+  if (!session) {
+    return false;
+  }
+
+  if ((session.pendingRequestCount ?? 0) > 0) {
+    return false;
+  }
+
+  if (session.lastRequestCompleted === false) {
+    return false;
+  }
+
+  if (session.hasPendingEdits === true) {
+    return session.lastRequestCompleted === true && (session.pendingRequestCount ?? 0) === 0;
+  }
+
+  return true;
+}
+
+function delaySeedSettlement(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildSeedPrompt(): string {
@@ -122,7 +277,7 @@ async function appendModelPatch(
   session: ChatSessionSummary,
   modelSelector: ChatModelSelector
 ): Promise<string | undefined> {
-  const selectedModel = await findSelectedModelPayload(session.sessionFile, modelSelector);
+  const selectedModel = buildSelectedModelPatchPayload(modelSelector);
   if (!selectedModel) {
     return undefined;
   }
@@ -135,62 +290,15 @@ async function appendModelPatch(
   return typeof selectedModel.identifier === "string" ? selectedModel.identifier : normalizeRequestedModelId(modelSelector);
 }
 
-async function findSelectedModelPayload(sessionFile: string, modelSelector: ChatModelSelector): Promise<Record<string, unknown> | undefined> {
+function buildSelectedModelPatchPayload(modelSelector: ChatModelSelector): Record<string, unknown> | undefined {
   const requestedId = normalizeRequestedModelId(modelSelector);
   if (!requestedId) {
     return undefined;
   }
 
-  const directory = path.dirname(sessionFile);
-  const entries = await fs.readdir(directory, { withFileTypes: true });
-  const files = await Promise.all(entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map(async (entry) => {
-      const filePath = path.join(directory, entry.name);
-      const stats = await fs.stat(filePath);
-      return {
-        filePath,
-        mtimeMs: stats.mtimeMs
-      };
-    }));
-
-  files.sort((left, right) => right.mtimeMs - left.mtimeMs);
-
-  for (const file of files) {
-    const payload = await readSelectedModelPayloadFromFile(file.filePath, requestedId);
-    if (payload) {
-      return payload;
-    }
-  }
-
-  return undefined;
-}
-
-async function readSelectedModelPayloadFromFile(
-  filePath: string,
-  requestedId: string
-): Promise<Record<string, unknown> | undefined> {
-  const raw = await fs.readFile(filePath, "utf8");
-  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse();
-
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line);
-      const key = normalizeJsonlKey(parsed?.k);
-      if (key === "inputState/selectedModel" && modelIdentifierMatches(parsed?.v?.identifier, requestedId)) {
-        return parsed.v as Record<string, unknown>;
-      }
-
-      const selectedModel = parsed?.kind === 0 ? parsed?.v?.inputState?.selectedModel : undefined;
-      if (selectedModel && modelIdentifierMatches(selectedModel.identifier, requestedId)) {
-        return selectedModel as Record<string, unknown>;
-      }
-    } catch {
-      // Ignore malformed or unrelated rows.
-    }
-  }
-
-  return undefined;
+  return {
+    identifier: requestedId
+  };
 }
 
 function normalizeRequestedModelId(modelSelector: ChatModelSelector | undefined): string | undefined {
@@ -206,22 +314,6 @@ function normalizeRequestedModelId(modelSelector: ChatModelSelector | undefined)
   return modelSelector.vendor?.trim()
     ? `${modelSelector.vendor.trim()}/${rawId}`
     : rawId;
-}
-
-function modelIdentifierMatches(observed: unknown, requestedId: string): boolean {
-  if (typeof observed !== "string" || !observed.trim()) {
-    return false;
-  }
-
-  return observed.trim().toLowerCase() === requestedId.trim().toLowerCase();
-}
-
-function normalizeJsonlKey(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    return value.join("/");
-  }
-
-  return typeof value === "string" ? value : undefined;
 }
 
 async function appendJsonlRow(sessionFile: string, row: unknown): Promise<void> {

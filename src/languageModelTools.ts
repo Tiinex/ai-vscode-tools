@@ -1,6 +1,6 @@
 import path from "node:path";
 import * as vscode from "vscode";
-import type { ChatCommandResult, ChatInteropApi, ChatSessionSummary, CreateChatRequest, SendChatMessageRequest } from "./chatInterop";
+import { hasObservedCustomAgentMismatch, type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, type CreateChatRequest, type SendChatMessageRequest } from "./chatInterop";
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
 import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
@@ -1049,6 +1049,7 @@ function formatChatMutationResult(
     `- Updated: ${session?.lastUpdated ?? "-"}`,
     `- Mode: ${session?.mode ?? "-"}`,
     `- Agent: ${session?.agent ?? "-"}`,
+    `- Persisted Request Agent: ${formatPersistedRequestAgent(session)}`,
     `- Model: ${session?.model ?? "-"}`,
     ...notes.map((note) => `- ${note}`)
   ];
@@ -1058,6 +1059,19 @@ function formatChatMutationResult(
       `- Closed Matching Visible Tabs Before Reveal: ${revealLifecycle.closedMatchingVisibleTabs}`,
       `- Closed Tab Labels: ${revealLifecycle.closedTabLabels.length > 0 ? revealLifecycle.closedTabLabels.map((label) => JSON.stringify(label)).join(", ") : "-"}`
     );
+
+    if (revealLifecycle.timingMs) {
+      lines.push(
+        `- Fallback Total Duration Ms: ${revealLifecycle.timingMs.totalFallbackMs ?? "-"}`,
+        `- Reveal Duration Ms: ${revealLifecycle.timingMs.revealMs ?? "-"}`,
+        `- Focus Duration Ms: ${revealLifecycle.timingMs.focusMs ?? "-"}`,
+        `- Focused Send Call Duration Ms: ${revealLifecycle.timingMs.focusedSendCallMs ?? "-"}`,
+        `- Focused Input Duration Ms: ${revealLifecycle.timingMs.focusedInputMs ?? "-"}`,
+        `- Focused Prefill Duration Ms: ${revealLifecycle.timingMs.prefillMs ?? "-"}`,
+        `- Focused Submit Duration Ms: ${revealLifecycle.timingMs.submitMs ?? "-"}`,
+        `- Focused Mutation Wait Duration Ms: ${revealLifecycle.timingMs.focusedMutationWaitMs ?? "-"}`
+      );
+    }
   }
 
   if (selection) {
@@ -1091,7 +1105,10 @@ function formatArtifactDeletionNotes(report: ChatCommandResult["artifactDeletion
   ];
 }
 
-function formatStabilizedLifecycleResult(result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>): string {
+function formatStabilizedLifecycleResult(
+  result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>,
+  extraNotes: string[] = []
+): string {
   if (!result.workflow.result.ok) {
     throw new Error(result.workflow.result.reason ?? result.workflow.result.error ?? "Failed to complete stabilized live chat lifecycle.");
   }
@@ -1107,7 +1124,8 @@ function formatStabilizedLifecycleResult(result: Awaited<ReturnType<typeof creat
         "Fallback Used: yes",
         `Fallback Basis: ${result.workflow.fallbackReason}`
       ]
-      : [])
+      : []),
+    ...extraNotes
   ];
 
   return formatChatMutationResult(
@@ -1117,6 +1135,95 @@ function formatStabilizedLifecycleResult(result: Awaited<ReturnType<typeof creat
     result.workflow.result.revealLifecycle,
     notes
   );
+}
+
+const STABILIZED_RECOVERY_POLL_DELAY_MS = 1000;
+const STABILIZED_RECOVERY_POLL_ATTEMPTS = 8;
+
+async function tryRecoverCompletedStabilizedLifecycle(
+  chatInterop: ChatInteropApi,
+  result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>
+): Promise<{ result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>; notes: string[] } | undefined> {
+  if (result.workflow.result.ok) {
+    return undefined;
+  }
+
+  if (result.realPromptDispatchAttempted !== true) {
+    return undefined;
+  }
+
+  const sessionId = result.workflow.result.session?.id ?? result.createResult.session?.id;
+  if (!sessionId) {
+    return undefined;
+  }
+
+  const recoveredSession = await waitForRecoveredSettledSession(chatInterop, sessionId);
+  if (!recoveredSession) {
+    return undefined;
+  }
+
+  return {
+    result: {
+      ...result,
+      workflow: {
+        ...result.workflow,
+        result: {
+          ...result.workflow.result,
+          ok: true,
+          reason: undefined,
+          error: undefined,
+          session: recoveredSession,
+          selection: result.workflow.result.selection ?? result.createResult.selection,
+          revealLifecycle: result.workflow.result.revealLifecycle ?? result.createResult.revealLifecycle
+        }
+      }
+    },
+    notes: [
+      "Completion Recovery: persisted session state settled after the initial tool error, so this result was recovered from stored session evidence."
+    ]
+  };
+}
+
+async function waitForRecoveredSettledSession(
+  chatInterop: ChatInteropApi,
+  sessionId: string
+): Promise<ChatSessionSummary | undefined> {
+  for (let attempt = 0; attempt <= STABILIZED_RECOVERY_POLL_ATTEMPTS; attempt += 1) {
+    const session = (await chatInterop.listChats()).find((candidate) => candidate.id === sessionId);
+    if (isRecoveredSessionSettled(session)) {
+      return session;
+    }
+
+    if (attempt < STABILIZED_RECOVERY_POLL_ATTEMPTS) {
+      await delayStabilizedRecovery(STABILIZED_RECOVERY_POLL_DELAY_MS);
+    }
+  }
+
+  return undefined;
+}
+
+function isRecoveredSessionSettled(session: ChatSessionSummary | undefined): boolean {
+  if (!session) {
+    return false;
+  }
+
+  if ((session.pendingRequestCount ?? 0) > 0) {
+    return false;
+  }
+
+  if (session.lastRequestCompleted === false) {
+    return false;
+  }
+
+  if (session.hasPendingEdits === true) {
+    return session.lastRequestCompleted === true && (session.pendingRequestCount ?? 0) === 0;
+  }
+
+  return true;
+}
+
+function delayStabilizedRecovery(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function throwOnUnsafeStabilizedCreateSelection(
@@ -1133,7 +1240,9 @@ async function throwOnUnsafeStabilizedCreateSelection(
   if (input.mode?.trim() && selection.mode.status !== "verified") {
     failures.push(`Mode selection did not verify: ${formatSelectionCheck(selection.mode)}`);
   }
-  if (input.agentName?.trim() && input.requireSelectionEvidence && selection.agent.status !== "verified") {
+  if (hasObservedCustomAgentMismatch(input.agentName, selection)) {
+    failures.push(`Agent selection resolved to the wrong persisted participant: ${formatSelectionCheck(selection.agent)}`);
+  } else if (input.agentName?.trim() && input.requireSelectionEvidence && selection.agent.status !== "verified") {
     failures.push(`Agent selection did not verify: ${formatSelectionCheck(selection.agent)}`);
   }
   if (input.modelId?.trim() && selection.model.status !== "verified") {
@@ -1163,6 +1272,10 @@ function formatSelectionCheck(check: NonNullable<ChatCommandResult["selection"]>
   const requested = check.requested ? `requested=${JSON.stringify(check.requested)}` : undefined;
   const observed = check.observed ? `observed=${JSON.stringify(check.observed)}` : undefined;
   return [check.status, requested, observed].filter(Boolean).join(" | ");
+}
+
+function formatPersistedRequestAgent(session: ChatSessionSummary | undefined): string {
+  return session?.requestAgentId ?? session?.requestAgentName ?? "-";
 }
 
 async function assertNotSelfTargetingLiveChat(
@@ -1428,9 +1541,11 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           new LiveChatTool<LiveChatMutationInput>(
             () => "Creating a new live agent chat",
             async (input) => {
-              const result = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
+              const initialResult = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
+              const recovered = await tryRecoverCompletedStabilizedLifecycle(chatInterop, initialResult);
+              const result = recovered?.result ?? initialResult;
               await throwOnUnsafeStabilizedCreateSelection(chatInterop, input, result);
-              return formatStabilizedLifecycleResult(result);
+              return formatStabilizedLifecycleResult(result, recovered?.notes);
             }
           )
         ),
@@ -1615,6 +1730,19 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           if (!result.ok) {
             throw new Error(result.reason ?? result.error ?? "Failed to create live agent chat.");
           }
+          if (hasObservedCustomAgentMismatch(input.agentName, result.selection)) {
+            let cleanupNote = "";
+            if (result.session?.id) {
+              const cleanupResult = await chatInterop.closeVisibleTabs(result.session.id);
+              if (cleanupResult.ok) {
+                const closedCount = cleanupResult.revealLifecycle?.closedMatchingVisibleTabs ?? 0;
+                cleanupNote = ` Visible cleanup closed ${closedCount} matching tabs for the mismatched chat.`;
+              }
+            }
+            throw new Error(
+              `Requested agent resolved to the wrong persisted participant: ${formatSelectionCheck(result.selection?.agent ?? { status: "unverified" })}. This run is a setup failure on this build, not valid custom-agent evidence.${cleanupNote}`
+            );
+          }
           return formatChatMutationResult("Live Agent Chat Created", result.session, result.selection, result.revealLifecycle);
         }
       )
@@ -1658,9 +1786,11 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
       new LiveChatTool<StabilizedLiveChatMutationInput>(
         () => "Creating or continuing a live agent chat through the stabilized lifecycle",
         async (input) => {
-          const result = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
+          const initialResult = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
+          const recovered = await tryRecoverCompletedStabilizedLifecycle(chatInterop, initialResult);
+          const result = recovered?.result ?? initialResult;
           await throwOnUnsafeStabilizedCreateSelection(chatInterop, input, result);
-          return formatStabilizedLifecycleResult(result);
+          return formatStabilizedLifecycleResult(result, recovered?.notes);
         }
       )
     ),

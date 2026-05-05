@@ -5,3 +5,5 @@ sandboxed-workspace
 .venv*
 TEMP-*.md
 .tmp*
+*-candidate.*
+*-senior.*

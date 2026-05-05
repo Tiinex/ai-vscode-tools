@@ -4,6 +4,14 @@
   "description": "Optional VS Code recovery tooling for persisted session inspection, artifact-read verification, and Local recovery validation.",
   "version": "0.1.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Tiinex/ai-vscode-tools.git"
+  },
+  "homepage": "https://github.com/Tiinex/ai-vscode-tools",
+  "bugs": {
+    "url": "https://github.com/Tiinex/ai-vscode-tools/issues"
+  },
   "icon": "assets/logo.png",
   "publisher": "local",
   "engines": {
@@ -146,8 +154,8 @@
         ,
         "aiRecoveryTooling.postCreateTimeoutMs": {
           "type": "number",
-          "default": 180000,
-          "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows). Default: 3 minutes."
+          "default": 90000,
+          "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows). Default: 90 seconds."
         },
         "aiRecoveryTooling.waitForPersistedDefault": {
           "type": "boolean",

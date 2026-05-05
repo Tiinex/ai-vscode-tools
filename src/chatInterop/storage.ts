@@ -18,6 +18,8 @@ interface ParsedMetadata {
   title?: string;
   mode?: string;
   agent?: string;
+  requestAgentId?: string;
+  requestAgentName?: string;
   model?: string;
   hasControlThreadArtifacts?: boolean;
   controlThreadArtifactKinds?: string[];
@@ -110,6 +112,8 @@ export class ChatSessionStorage {
         : lastUpdated,
       mode: metadata.mode,
       agent: metadata.agent,
+      requestAgentId: metadata.requestAgentId,
+      requestAgentName: metadata.requestAgentName,
       model: metadata.model,
       hasControlThreadArtifacts: metadata.hasControlThreadArtifacts,
       controlThreadArtifactKinds: metadata.controlThreadArtifactKinds,
@@ -366,6 +370,18 @@ function extractMetadata(fullState: any | undefined, requestRows: any[], deltaSt
     fullState?.agent?.fullName
   );
 
+  const requestAgentId = firstString(
+    requestPayload?.agent?.id,
+    requestPayload?.agentId,
+    requestPayload?.participant
+  );
+
+  const requestAgentName = firstString(
+    requestPayload?.agent?.fullName,
+    requestPayload?.agent?.name,
+    requestPayload?.agentName
+  );
+
   const model = firstString(
     currentInputState?.selectedModel?.identifier,
     requestPayload?.modelId,
@@ -383,19 +399,21 @@ function extractMetadata(fullState: any | undefined, requestRows: any[], deltaSt
     ?? requestCandidates.filter((request) => isRequestCompleted(request) === false).length;
   const lastRequestCompleted = lastRequest ? isRequestCompleted(lastRequest) : undefined;
 
-  return { title, mode, agent, model, hasPendingEdits, pendingRequestCount, lastRequestCompleted };
+  return {
+    title,
+    mode,
+    agent,
+    requestAgentId,
+    requestAgentName,
+    model,
+    hasPendingEdits,
+    pendingRequestCount,
+    lastRequestCompleted
+  };
 }
 
 function detectControlThreadArtifacts(raw: string): string[] {
   const hits: string[] = [];
-
-  if (raw.includes("<reminderInstructions>")) {
-    hits.push("reminderInstructions");
-  }
-
-  if (raw.includes("<importantReminders>")) {
-    hits.push("importantReminders");
-  }
 
   if (raw.includes("<todoList>")) {
     hits.push("todoList");

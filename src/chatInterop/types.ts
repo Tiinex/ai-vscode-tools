@@ -32,9 +32,26 @@ export interface ChatSelectionVerification {
   allRequestedVerified: boolean;
 }
 
+export function hasObservedCustomAgentMismatch(
+  requestedAgentName: string | undefined,
+  selection: ChatSelectionVerification | undefined
+): boolean {
+  return Boolean(requestedAgentName?.trim()) && selection?.agent.status === "mismatch";
+}
+
 export interface ChatRevealLifecycle {
   closedMatchingVisibleTabs: number;
   closedTabLabels: string[];
+  timingMs?: {
+    totalFallbackMs?: number;
+    revealMs?: number;
+    focusMs?: number;
+    focusedSendCallMs?: number;
+    focusedInputMs?: number;
+    prefillMs?: number;
+    submitMs?: number;
+    focusedMutationWaitMs?: number;
+  };
 }
 
 export interface ChatArtifactDeletionReport {
@@ -49,6 +66,8 @@ export interface ChatSessionSummary {
   lastUpdated: string;
   mode?: string;
   agent?: string;
+  requestAgentId?: string;
+  requestAgentName?: string;
   model?: string;
   hasControlThreadArtifacts?: boolean;
   controlThreadArtifactKinds?: string[];
@@ -120,6 +139,7 @@ export interface MutexLease {
 
 export interface ChatInteropApi {
   listChats(): Promise<ChatSessionSummary[]>;
+  getPostCreateTimeoutMs?(): number;
   getExactSessionInteropSupport(): Promise<ExactSessionInteropSupport>;
   getFocusedChatInteropSupport(): Promise<FocusedChatInteropSupport>;
   createChat(request: CreateChatRequest): Promise<ChatCommandResult>;
@@ -181,6 +201,21 @@ function normalizeAgentSelectionValue(value: string | undefined): string | undef
   return normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
+function inferAgentFromModeValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const lastPathSegment = trimmed.replace(/\\/g, "/").split("/").pop() ?? trimmed;
+  const withoutExtension = lastPathSegment.replace(/\.agent\.md$/i, "");
+  if (withoutExtension !== lastPathSegment) {
+    return normalizeAgentSelectionValue(withoutExtension);
+  }
+
+  return undefined;
+}
+
 function modelMatches(requested: ChatModelSelector | undefined, observed: string | undefined): boolean {
   const requestedId = normalizeSelectionValue(requested?.id);
   const requestedVendor = normalizeSelectionValue(requested?.vendor);
@@ -207,7 +242,11 @@ export function buildSelectionVerification(
   const modelObserved = session?.model;
   const requestedAgentLabel = request.agentName?.trim().replace(/^#+/, "");
   const agentRequested = normalizeAgentSelectionValue(requestedAgentLabel);
-  const agentObserved = normalizeAgentSelectionValue(session?.agent);
+  const requestAgentObservedValues = [session?.requestAgentId, session?.requestAgentName]
+    .map((value) => normalizeAgentSelectionValue(value))
+    .filter((value): value is string => Boolean(value));
+  const requestAgentObserved = session?.requestAgentId ?? session?.requestAgentName;
+  const modeObservedAgent = inferAgentFromModeValue(session?.mode);
 
   const mode: ChatSelectionCheck = !modeRequested
     ? { status: "not-requested" }
@@ -230,10 +269,12 @@ export function buildSelectionVerification(
 
   const agent: ChatSelectionCheck = !agentRequested
     ? { status: "not-requested" }
-    : agentObserved === agentRequested
-      ? { status: "verified", requested: `#${requestedAgentLabel}`, observed: session?.agent }
-      : agentObserved
-        ? { status: "mismatch", requested: `#${requestedAgentLabel}`, observed: session?.agent }
+    : requestAgentObservedValues.some((value) => value === agentRequested)
+      ? { status: "verified", requested: `#${requestedAgentLabel}`, observed: requestAgentObserved }
+      : modeObservedAgent === agentRequested
+        ? { status: "verified", requested: `#${requestedAgentLabel}`, observed: session?.mode }
+      : requestAgentObserved
+        ? { status: "mismatch", requested: `#${requestedAgentLabel}`, observed: requestAgentObserved }
         : {
             status: dispatch.surface === "prompt-file-slash-command"
               || dispatch.dispatchedPrompt === `#${requestedAgentLabel}`

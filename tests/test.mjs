@@ -795,6 +795,7 @@ async function runChatInteropSelectionChecks() {
   const {
     buildCreateChatSelectionBlocker,
     buildPromptWithAgentSelector,
+    hasObservedCustomAgentMismatch,
     buildSelectionVerification,
     buildSendChatSelectionBlocker
   } = typesModule;
@@ -831,6 +832,7 @@ async function runChatInteropSelectionChecks() {
       lastUpdated: "2026-04-09T19:00:00.000Z",
       mode: "Agent",
       agent: "agent-architect",
+      requestAgentId: "agent-architect",
       model: "copilot/gpt-5.4",
       archived: false,
       provider: "workspaceStorage",
@@ -897,6 +899,110 @@ async function runChatInteropSelectionChecks() {
     promptArtifactSelection.agent.status === "dispatched-via-artifact",
     "Live chat selection test did not preserve prompt-artifact dispatch evidence when persisted agent metadata was absent."
   );
+  assert(
+    hasObservedCustomAgentMismatch("agent-architect", promptArtifactSelection) === false,
+    "Live chat selection test incorrectly treated prompt-artifact dispatch evidence as a persisted wrong-agent mismatch."
+  );
+
+  const persistedWrongAgentSelection = buildSelectionVerification(
+    {
+      prompt: "Inspect the target artifact.",
+      agentName: "anchor-candidate"
+    },
+    {
+      id: "session-3a",
+      title: "Selection Test",
+      lastUpdated: "2026-04-09T19:00:00.000Z",
+      mode: "agent",
+      agent: "github.copilot.editsAgent",
+      requestAgentId: "github.copilot.editsAgent",
+      requestAgentName: "GitHub Copilot",
+      archived: false,
+      provider: "workspaceStorage",
+      sessionFile: "/tmp/session-3a.jsonl"
+    },
+    {
+      surface: "focused-chat-submit",
+      dispatchedPrompt: "#anchor-candidate\nInspect the target artifact."
+    }
+  );
+  assert(
+    persistedWrongAgentSelection.agent.status === "mismatch",
+    "Live chat selection test did not surface a persisted wrong-agent participant as a mismatch."
+  );
+  assert(
+    hasObservedCustomAgentMismatch("anchor-candidate", persistedWrongAgentSelection) === true,
+    "Live chat selection test did not classify a persisted wrong-agent participant as an observed custom-agent mismatch."
+  );
+
+  const modeBackedCustomAgentSelection = buildSelectionVerification(
+    {
+      prompt: "Inspect the target artifact.",
+      agentName: "anchor-candidate"
+    },
+    {
+      id: "session-3aa",
+      title: "Selection Test",
+      lastUpdated: "2026-04-09T19:00:00.000Z",
+      mode: "file:///tmp/anchor-candidate.agent.md",
+      agent: "anchor-candidate",
+      requestAgentId: "github.copilot.editsAgent",
+      requestAgentName: "GitHub Copilot",
+      archived: false,
+      provider: "workspaceStorage",
+      sessionFile: "/tmp/session-3aa.jsonl"
+    },
+    {
+      surface: "focused-chat-submit",
+      dispatchedPrompt: "#anchor-candidate\nInspect the target artifact."
+    }
+  );
+  assert(
+    modeBackedCustomAgentSelection.agent.status === "verified",
+    "Live chat selection test did not treat matching custom mode evidence as valid custom-agent verification."
+  );
+  assert(
+    modeBackedCustomAgentSelection.agent.observed === "file:///tmp/anchor-candidate.agent.md",
+    "Live chat selection test did not report the matching custom mode as the observed custom-agent evidence."
+  );
+  assert(
+    hasObservedCustomAgentMismatch("anchor-candidate", modeBackedCustomAgentSelection) === false,
+    "Live chat selection test incorrectly treated matching custom mode evidence as a wrong-agent mismatch."
+  );
+
+  const modeInferredAgentSelection = buildSelectionVerification(
+    {
+      prompt: "Inspect the target artifact.",
+      agentName: "anchor-candidate"
+    },
+    {
+      id: "session-3b",
+      title: "Selection Test",
+      lastUpdated: "2026-04-09T19:00:00.000Z",
+      mode: "file:///tmp/anchor-candidate.agent.md",
+      agent: "anchor-candidate",
+      archived: false,
+      provider: "workspaceStorage",
+      sessionFile: "/tmp/session-3b.jsonl"
+    },
+    {
+      surface: "prompt-file-slash-command",
+      dispatchedPrompt: "Inspect the target artifact.",
+      slashCommand: "/aa-live-chat-anchor-candidate-dispatch"
+    }
+  );
+  assert(
+    modeInferredAgentSelection.agent.status === "verified",
+    "Live chat selection test did not treat latest-request custom mode evidence as valid custom-agent verification."
+  );
+  assert(
+    modeInferredAgentSelection.agent.observed === "file:///tmp/anchor-candidate.agent.md",
+    "Live chat selection test did not preserve the latest-request custom mode as the observed agent-selection evidence."
+  );
+  assert(
+    modeInferredAgentSelection.allRequestedVerified === true,
+    "Live chat selection test did not mark custom-agent selection as fully verified when the latest request carried the matching custom mode."
+  );
 
   const slugEquivalentSelection = buildSelectionVerification(
     {
@@ -908,6 +1014,7 @@ async function runChatInteropSelectionChecks() {
       title: "Selection Test",
       lastUpdated: "2026-04-09T19:00:00.000Z",
       agent: "support-doc-fresh-reader",
+      requestAgentId: "support-doc-fresh-reader",
       archived: false,
       provider: "workspaceStorage",
       sessionFile: "/tmp/session-4.jsonl"
@@ -1494,7 +1601,7 @@ async function runCreateChatDirectAgentCommandChecks() {
           provider: 'workspaceStorage',
           sessionFile: '/tmp/session-contaminated.jsonl',
           hasControlThreadArtifacts: true,
-          controlThreadArtifactKinds: ['reminderInstructions', 'manage_todo_list'],
+          controlThreadArtifactKinds: ['manage_todo_list'],
           hasPendingEdits: false,
           pendingRequestCount: 0,
           lastRequestCompleted: true
@@ -1512,7 +1619,7 @@ async function runCreateChatDirectAgentCommandChecks() {
           provider: 'workspaceStorage',
           sessionFile: '/tmp/session-contaminated.jsonl',
           hasControlThreadArtifacts: true,
-          controlThreadArtifactKinds: ['reminderInstructions', 'manage_todo_list'],
+          controlThreadArtifactKinds: ['manage_todo_list'],
           hasPendingEdits: false,
           pendingRequestCount: 0,
           lastRequestCompleted: true
@@ -1546,6 +1653,25 @@ async function runCreateChatDirectAgentCommandChecks() {
 
     assert(cleanResult.ok === true, 'Direct agent-open createChat test did not succeed when a clean session arrived after a contaminated one.');
     assert(cleanResult.session?.id === 'session-clean', `Direct agent-open createChat test did not prefer the clean created session. Got: ${cleanResult.session?.id}`);
+
+    MockChatSessionStorage.setBehaviors([
+      [],
+      []
+    ]);
+
+    const timeoutCreateService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 50 });
+    const timeoutCreateResult = await timeoutCreateService.createChat({
+      prompt: 'This create should time out without any persisted session appearing.',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: false,
+      blockOnResponse: true
+    });
+
+    assert(timeoutCreateResult.ok === false, 'Direct agent-open createChat test incorrectly treated create-time timeout as success.');
+    assert(
+      timeoutCreateResult.reason === 'Create chat dispatched but no persisted created session was observed within the expected timeout.',
+      `Direct agent-open createChat test did not surface the expected create-time timeout failure. Got: ${timeoutCreateResult.reason}`
+    );
   } finally {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
     vscodeModule.commands.executeCommand = originalExecuteCommand;
@@ -1742,7 +1868,7 @@ ${JSON.stringify({
     assert(contaminationSession, 'Storage contamination test did not discover the contaminated temp session.');
     assert(contaminationSession.hasControlThreadArtifacts === true, 'Storage contamination test did not flag control-thread artifacts from raw JSONL.');
     assert(
-    JSON.stringify(contaminationSession.controlThreadArtifactKinds) === JSON.stringify(['reminderInstructions', 'importantReminders', 'todoList', 'manage_todo_list']),
+    JSON.stringify(contaminationSession.controlThreadArtifactKinds) === JSON.stringify(['todoList', 'manage_todo_list']),
     `Storage contamination test did not preserve the detected control-thread artifact kinds. Got: ${JSON.stringify(contaminationSession.controlThreadArtifactKinds)}`
     );
 
@@ -1994,8 +2120,13 @@ async function runStabilizedCreateWorkflowChecks() {
   const expectedAgentFileUri = pathToFileURL(agentFile).href;
 
   const sentRequests = [];
+  const createRequests = [];
+  let seedListChatsCalls = 0;
+  let seedSessionReady = false;
   const chatInterop = {
     async listChats() {
+      seedListChatsCalls += 1;
+      seedSessionReady = seedListChatsCalls >= 2;
       return [{
         id: "session-1",
         title: "Stabilized Session",
@@ -2003,6 +2134,9 @@ async function runStabilizedCreateWorkflowChecks() {
         mode: "agent",
         agent: "github.copilot.editsAgent",
         model: "copilot/gpt-5-mini",
+        hasPendingEdits: !seedSessionReady,
+        pendingRequestCount: seedSessionReady ? 0 : 1,
+        lastRequestCompleted: seedSessionReady,
         archived: false,
         provider: "workspaceStorage",
         sessionFile: targetSessionFile
@@ -2024,7 +2158,8 @@ async function runStabilizedCreateWorkflowChecks() {
         unsupportedReason: undefined
       };
     },
-    async createChat() {
+    async createChat(request) {
+      createRequests.push(request);
       return {
         ok: true,
         session: {
@@ -2050,6 +2185,7 @@ async function runStabilizedCreateWorkflowChecks() {
       };
     },
     async sendMessage(request) {
+      assert(seedSessionReady === true, "Stabilized workflow test sent the real prompt before the seed session had settled.");
       sentRequests.push(request);
       return {
         ok: true,
@@ -2098,6 +2234,9 @@ async function runStabilizedCreateWorkflowChecks() {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line));
+  assert(createRequests.length === 1, "Stabilized workflow test did not issue exactly one seed create request.");
+  assert(createRequests[0].blockOnResponse === false, "Stabilized workflow test did not keep the seed create path non-blocking.");
+  assert(seedListChatsCalls >= 2, `Stabilized workflow test did not wait for the seed session to settle. Got ${seedListChatsCalls} listChats call(s).`);
   assert(sentRequests.length === 1, "Stabilized workflow test did not send the real prompt exactly once.");
   assert(sentRequests[0].prompt === "real prompt", "Stabilized workflow test did not preserve the real prompt for the final send.");
   assert(sentRequests[0].agentName === "support-doc.fresh-reader", "Stabilized workflow test did not preserve the requested agent name for the final send.");
@@ -2106,6 +2245,7 @@ async function runStabilizedCreateWorkflowChecks() {
   assert(result.resolvedModeId === expectedAgentFileUri, `Stabilized workflow test did not resolve the workspace runtime-agent file URI. Got: ${result.resolvedModeId}`);
   assert(result.patchedModeId === expectedAgentFileUri, "Stabilized workflow test did not report the applied mode patch.");
   assert(result.patchedModelId === "copilot/gpt-5.4", "Stabilized workflow test did not report the applied model patch.");
+  assert(result.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after the seed settled.");
   assert(targetSessionRaw.endsWith("\n"), "Stabilized workflow test did not preserve newline-terminated JSONL after patching.");
   assert(parsedPatchedRows.length === 3, `Stabilized workflow test did not keep the session file parseable JSONL. Got ${parsedPatchedRows.length} rows.`);
   assert(targetSessionRaw.includes(`"id":"${expectedAgentFileUri}"`), "Stabilized workflow test did not append the requested mode patch to the session file.");
@@ -2117,8 +2257,10 @@ async function runStabilizedCreateWorkflowChecks() {
   await fs.writeFile(companionOnlySessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-3", requests: [], inputState: {} } }), "utf8");
 
   const companionOnlyRequests = [];
+  const companionOnlyCreateRequests = [];
   const companionOnlyInterop = {
-    async createChat() {
+    async createChat(request) {
+      companionOnlyCreateRequests.push(request);
       return {
         ok: true,
         session: {
@@ -2216,11 +2358,234 @@ async function runStabilizedCreateWorkflowChecks() {
   });
 
   const companionOnlySessionRaw = await fs.readFile(companionOnlySessionFile, "utf8");
+  assert(companionOnlyCreateRequests.length === 1, "Companion-only stabilized workflow test did not issue exactly one seed create request.");
+  assert(companionOnlyCreateRequests[0].blockOnResponse === false, "Companion-only stabilized workflow test did not keep the seed create path non-blocking.");
   assert(companionOnlyRequests.length === 1, "Companion-only stabilized workflow test did not send the real prompt exactly once.");
   assert(companionOnlyRequests[0].mode === undefined, `Companion-only stabilized workflow test should not resolve a workspace runtime mode from a companion file. Got: ${companionOnlyRequests[0].mode}`);
   assert(companionOnlyResult.resolvedModeId === undefined, `Companion-only stabilized workflow test incorrectly resolved a workspace runtime mode from a companion file. Got: ${companionOnlyResult.resolvedModeId}`);
   assert(companionOnlyResult.patchedModeId === undefined, "Companion-only stabilized workflow test should not patch mode from a companion file pretending to be a workspace runtime agent.");
+  assert(companionOnlyResult.realPromptDispatchAttempted === true, "Companion-only stabilized workflow test did not record that the real prompt send was attempted after the seed settled.");
   assert(companionOnlySessionRaw === JSON.stringify({ kind: 0, v: { sessionId: "session-3", requests: [], inputState: {} } }), "Companion-only stabilized workflow test should not patch the session file when no runtime agent exists.");
+
+  const contaminatedSeedSessionFile = path.join(chatSessionsDir, "session-4.jsonl");
+  await fs.writeFile(contaminatedSeedSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-4", requests: [], inputState: {} } }), "utf8");
+  const contaminatedSeedInterop = {
+    async listChats() {
+      return [{
+        id: "session-4",
+        title: "Contaminated Seed Session",
+        lastUpdated: "2026-04-12T22:40:00.000Z",
+        mode: "agent",
+        agent: "github.copilot.editsAgent",
+        model: "copilot/gpt-5-mini",
+        hasControlThreadArtifacts: true,
+        controlThreadArtifactKinds: ["manage_todo_list"],
+        hasPendingEdits: false,
+        pendingRequestCount: 0,
+        lastRequestCompleted: true,
+        archived: false,
+        provider: "workspaceStorage",
+        sessionFile: contaminatedSeedSessionFile
+      }];
+    },
+    async getExactSessionInteropSupport() {
+      return {
+        canRevealExactSession: true,
+        canSendExactSessionMessage: true,
+        revealUnsupportedReason: undefined,
+        sendUnsupportedReason: undefined
+      };
+    },
+    async getFocusedChatInteropSupport() {
+      return {
+        canSubmitFocusedChatMessage: true,
+        focusInputCommand: "workbench.action.chat.focusInput",
+        submitCommand: "workbench.action.chat.submit",
+        unsupportedReason: undefined
+      };
+    },
+    async createChat() {
+      return {
+        ok: true,
+        session: {
+          id: "session-4",
+          title: "Contaminated Seed Session",
+          lastUpdated: "2026-04-12T22:40:00.000Z",
+          mode: "agent",
+          agent: "github.copilot.editsAgent",
+          model: "copilot/gpt-5-mini",
+          archived: false,
+          provider: "workspaceStorage",
+          sessionFile: contaminatedSeedSessionFile
+        },
+        selection: {
+          mode: { status: "verified", requested: undefined, observed: "agent" },
+          model: { status: "verified", requested: undefined, observed: "copilot/gpt-5-mini" },
+          agent: { status: "verified", requested: "#support-doc.fresh-reader", observed: "support-doc.fresh-reader" },
+          dispatchedPrompt: "seed",
+          dispatchSurface: "chat-open",
+          allRequestedVerified: true
+        }
+      };
+    },
+    async sendMessage() {
+      throw new Error("Stabilized workflow test should not send the real prompt into a seed session that already shows control-thread artifacts.");
+    },
+    async sendFocusedMessage() {
+      throw new Error("sendFocusedMessage should not be used in the contaminated-seed stabilized workflow test.");
+    },
+    async closeVisibleTabs() {
+      return { ok: true };
+    },
+    async revealChat() {
+      return { ok: true };
+    }
+  };
+
+  const contaminatedSeedResult = await createStabilizedChatAndSend(contaminatedSeedInterop, {
+    prompt: "real prompt",
+    agentName: "support-doc.fresh-reader",
+    blockOnResponse: true,
+    requireSelectionEvidence: false
+  });
+
+  assert(contaminatedSeedResult.workflow.result.ok === false, "Stabilized workflow test incorrectly continued after the seed session showed control-thread artifacts.");
+  assert(contaminatedSeedResult.realPromptDispatchAttempted === false, "Stabilized workflow test should not record a real prompt send attempt when the seed session is already contaminated.");
+  assert(
+    contaminatedSeedResult.workflow.result.reason?.includes("control-thread artifacts") === true,
+    `Stabilized workflow test did not report seed contamination clearly. Got: ${contaminatedSeedResult.workflow.result.reason}`
+  );
+
+  const lateTokenSessionFile = path.join(chatSessionsDir, "session-5.jsonl");
+  await fs.writeFile(lateTokenSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-5", requests: [], inputState: {} } }), "utf8");
+  let lateTokenListChatsCalls = 0;
+  const lateTokenRequests = [];
+  const lateTokenInterop = {
+    async listChats() {
+      lateTokenListChatsCalls += 1;
+      if (lateTokenListChatsCalls === 2) {
+        await fs.writeFile(
+          lateTokenSessionFile,
+          [
+            JSON.stringify({ kind: 0, v: { sessionId: "session-5", requests: [], inputState: {} } }),
+            JSON.stringify({ kind: 1, k: ["requests", 0, "result"], v: { metadata: {}, value: "GPT-5 mini • 0x" } }),
+            JSON.stringify({ kind: 2, k: ["requests", 0, "response"], v: [{ value: "AA_STABLE_INIT_testtoken_123" }] })
+          ].join("\n") + "\n",
+          "utf8"
+        );
+      }
+
+      return [{
+        id: "session-5",
+        title: "Late Token Session",
+        lastUpdated: "2026-04-12T22:45:00.000Z",
+        mode: "agent",
+        agent: "github.copilot.editsAgent",
+        model: "copilot/gpt-5-mini",
+        hasPendingEdits: true,
+        pendingRequestCount: 1,
+        lastRequestCompleted: false,
+        archived: false,
+        provider: "workspaceStorage",
+        sessionFile: lateTokenSessionFile
+      }];
+    },
+    async getExactSessionInteropSupport() {
+      return {
+        canRevealExactSession: true,
+        canSendExactSessionMessage: true,
+        revealUnsupportedReason: undefined,
+        sendUnsupportedReason: undefined
+      };
+    },
+    async getFocusedChatInteropSupport() {
+      return {
+        canSubmitFocusedChatMessage: true,
+        focusInputCommand: "workbench.action.chat.focusInput",
+        submitCommand: "workbench.action.chat.submit",
+        unsupportedReason: undefined
+      };
+    },
+    async createChat() {
+      return {
+        ok: true,
+        session: {
+          id: "session-5",
+          title: "Late Token Session",
+          lastUpdated: "2026-04-12T22:45:00.000Z",
+          mode: "agent",
+          agent: "github.copilot.editsAgent",
+          model: "copilot/gpt-5-mini",
+          archived: false,
+          provider: "workspaceStorage",
+          sessionFile: lateTokenSessionFile
+        },
+        selection: {
+          mode: { status: "verified", requested: undefined, observed: "agent" },
+          model: { status: "verified", requested: undefined, observed: "copilot/gpt-5-mini" },
+          agent: { status: "verified", requested: "#support-doc.fresh-reader", observed: "support-doc.fresh-reader" },
+          dispatchedPrompt: "seed",
+          dispatchSurface: "chat-open",
+          allRequestedVerified: true
+        }
+      };
+    },
+    async sendMessage(request) {
+      lateTokenRequests.push(request);
+      return {
+        ok: true,
+        session: {
+          id: "session-5",
+          title: "Late Token Session",
+          lastUpdated: "2026-04-12T22:45:05.000Z",
+          mode: expectedAgentFileUri,
+          agent: "support-doc.fresh-reader",
+          model: "copilot/gpt-5-mini",
+          archived: false,
+          provider: "workspaceStorage",
+          sessionFile: lateTokenSessionFile
+        },
+        selection: {
+          mode: { status: "verified", requested: expectedAgentFileUri, observed: expectedAgentFileUri },
+          model: { status: "verified", requested: undefined, observed: "copilot/gpt-5-mini" },
+          agent: { status: "verified", requested: "#support-doc.fresh-reader", observed: "support-doc.fresh-reader" },
+          dispatchedPrompt: request.prompt,
+          dispatchSurface: "chat-open",
+          allRequestedVerified: true
+        }
+      };
+    },
+    async sendFocusedMessage() {
+      throw new Error("sendFocusedMessage should not be used in the late-token stabilized workflow test.");
+    },
+    async closeVisibleTabs() {
+      return { ok: true };
+    },
+    async revealChat() {
+      return { ok: true };
+    }
+  };
+
+  const originalMathRandom = Math.random;
+  const originalDateNow = Date.now;
+  Math.random = () => 123 / 1_000_000;
+  Date.now = () => 1_746_793_600_000;
+  try {
+    const lateTokenResult = await createStabilizedChatAndSend(lateTokenInterop, {
+      prompt: "real prompt",
+      agentName: "support-doc.fresh-reader",
+      blockOnResponse: true,
+      requireSelectionEvidence: false
+    });
+
+    assert(lateTokenResult.workflow.result.ok === true, "Stabilized workflow test did not recover when the seed token persisted before summary settlement flags caught up.");
+    assert(lateTokenResult.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after late seed-token recovery.");
+    assert(lateTokenRequests.length === 1, "Stabilized workflow test did not send the real prompt after observing the persisted seed token.");
+    assert(lateTokenListChatsCalls >= 2, `Stabilized workflow test did not poll for the late seed token. Got ${lateTokenListChatsCalls} listChats call(s).`);
+  } finally {
+    Math.random = originalMathRandom;
+    Date.now = originalDateNow;
+  }
 
   await fs.rm(tempDir, { recursive: true, force: true });
 }
@@ -2304,8 +2669,46 @@ async function runSessionSendWorkflowChecks() {
           ]
         }
       ]
+    }, {
+      sessionId: 'session-generic-no-resource',
+      sessionTitle: 'Live chat support documentation inquiry'
+    }) === false,
+    "Session send workflow test incorrectly trusted a generic active Chat tab without exact Local session-resource evidence."
+  );
+
+  assert(
+    canTrustGenericActiveChatAfterReveal({
+      activeGroupIndex: 0,
+      liveChatTitles: ["Live chat support documentation inquiry"],
+      groups: [
+        {
+          isActive: true,
+          viewColumn: 1,
+          tabs: [
+            {
+              label: "Chat",
+              isActive: true,
+              isDirty: false,
+              isPinned: false,
+              isPreview: false,
+              isLikelyChatEditor: true,
+              input: {
+                kind: "custom:chat-view",
+                constructorName: "ChatEditorInput",
+                uri: "vscode-chat-session://local/c2Vzc2lvbi1nZW5lcmljLXJlc291cmNl",
+                viewType: "chat-view",
+                stringHints: ["chat"],
+                objectKeys: []
+              }
+            }
+          ]
+        }
+      ]
+    }, {
+      sessionId: 'session-generic-resource',
+      sessionTitle: 'Live chat support documentation inquiry'
     }) === true,
-    "Session send workflow test did not accept a generic active Chat tab after exact reveal when chat-editor evidence was present."
+    "Session send workflow test did not trust a generic active Chat tab when exact Local session-resource evidence was present."
   );
 
   assert(
@@ -2516,6 +2919,101 @@ async function runSessionSendWorkflowChecks() {
     assert(retriedFocusResult.result.ok === true, 'Session send workflow test did not recover by revealing the target chat again after focus was lost.');
     assert(revealCalls === 2, `Session send workflow test did not retry reveal after the first focus miss. Got: ${revealCalls}`);
     assert(focusedSendCalls === 1, `Session send workflow test did not send exactly once after the reveal retry. Got: ${focusedSendCalls}`);
+
+    const originalSetTimeout = global.setTimeout;
+    let optimisticListChatsCalls = 0;
+    activeChatLabel = 'Optimistic Target';
+    global.setTimeout = ((callback, _ms, ...args) => {
+      if (typeof callback === 'function') {
+        callback(...args);
+      }
+      return 0;
+    });
+
+    try {
+      const optimisticInterop = {
+        async listChats() {
+          optimisticListChatsCalls += 1;
+          return [{
+            id: 'session-optimistic',
+            title: 'Optimistic Target',
+            lastUpdated: optimisticListChatsCalls >= 2 ? '2026-04-11T04:10:02.000Z' : '2026-04-11T04:10:01.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            hasPendingEdits: false,
+            pendingRequestCount: optimisticListChatsCalls >= 2 ? 0 : 1,
+            lastRequestCompleted: optimisticListChatsCalls >= 2,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-optimistic.jsonl'
+          }];
+        },
+        async getExactSessionInteropSupport() {
+          return {
+            canRevealExactSession: true,
+            canSendExactSessionMessage: false,
+            revealUnsupportedReason: undefined,
+            sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+          };
+        },
+        async revealChat() {
+          return {
+            ok: true,
+            session: {
+              id: 'session-optimistic',
+              title: 'Optimistic Target',
+              lastUpdated: '2026-04-11T04:10:00.000Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: '/tmp/session-optimistic.jsonl'
+            },
+            revealLifecycle: {
+              closedMatchingVisibleTabs: 0,
+              closedTabLabels: []
+            }
+          };
+        },
+        async sendFocusedMessage() {
+          return {
+            ok: true,
+            session: {
+              id: 'session-optimistic',
+              title: 'Optimistic Target',
+              lastUpdated: '2026-04-11T04:10:01.000Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              hasPendingEdits: false,
+              pendingRequestCount: 1,
+              lastRequestCompleted: false,
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: '/tmp/session-optimistic.jsonl'
+            },
+            dispatch: {
+              surface: 'focused-chat-submit',
+              dispatchedPrompt: 'optimistic prompt'
+            }
+          };
+        }
+      };
+
+      const optimisticResult = await sendMessageToSessionWithFallback(optimisticInterop, {
+        sessionId: 'session-optimistic',
+        prompt: 'optimistic prompt',
+        blockOnResponse: true
+      });
+
+      assert(optimisticResult.result.ok === true, 'Session send workflow test did not wait for the optimistic same-session focused-send result to settle.');
+      assert(optimisticResult.result.session?.lastRequestCompleted === true, 'Session send workflow test returned before the optimistic same-session target session settled.');
+      assert((optimisticResult.result.session?.pendingRequestCount ?? -1) === 0, 'Session send workflow test did not return the settled target session summary after an optimistic same-session focused-send result.');
+    } finally {
+      global.setTimeout = originalSetTimeout;
+    }
 
     let timeoutListChatsCalls = 0;
     activeChatLabel = 'Timeout Target';
@@ -3486,6 +3984,47 @@ async function runPendingRequestHeuristicChecks() {
     "Transcript summary markdown must omit verbatim fenced payload bodies."
   );
 
+  const laggingTranscriptRoot = path.join(tempDir, "lagging-transcript");
+  const laggingSessionFile = path.join(laggingTranscriptRoot, "chatSessions", "lagging.jsonl");
+  const laggingTranscriptFile = path.join(laggingTranscriptRoot, "GitHub.copilot-chat", "transcripts", "lagging.jsonl");
+  await fs.mkdir(path.dirname(laggingSessionFile), { recursive: true });
+  await fs.mkdir(path.dirname(laggingTranscriptFile), { recursive: true });
+  await fs.writeFile(laggingSessionFile, [
+    JSON.stringify({ kind: 0, v: { version: 3, creationDate: 1, sessionId: "lagging", responderUsername: "GitHub Copilot" } }),
+    JSON.stringify({ kind: 2, k: ["requests"], v: [{ requestId: "request-1", timestamp: 1, message: { text: "hello" } }] }),
+    JSON.stringify({ kind: 1, k: ["requests", 0, "response"], v: [{ value: "Final answer from session JSONL" }] }),
+    JSON.stringify({ kind: 1, k: ["requests", 0, "result"], v: { metadata: {}, value: "GPT-5 mini • 0x" } })
+  ].join("\n") + "\n", "utf-8");
+  await fs.writeFile(laggingTranscriptFile, [
+    JSON.stringify({ type: "session.start", data: { sessionId: "lagging" } }),
+    JSON.stringify({ type: "user.message", data: { content: "hello" } }),
+    JSON.stringify({ type: "assistant.turn_start", data: { turnId: "0" } })
+  ].join("\n") + "\n", "utf-8");
+
+  const laggingTranscriptEvidence = await buildTranscriptEvidence({ sessionFile: laggingSessionFile });
+  assert(
+    laggingTranscriptEvidence.transcriptAvailable === false,
+    "Transcript evidence must fall back to session-derived evidence when the transcript file stalls before the latest settled assistant turn."
+  );
+  assert(
+    typeof laggingTranscriptEvidence.unavailableReason === "string"
+      && laggingTranscriptEvidence.unavailableReason.includes("latest settled assistant turn"),
+    "Transcript fallback must explain that the canonical transcript ended before the latest settled assistant turn."
+  );
+  assert(
+    laggingTranscriptEvidence.fallbackSnapshot?.latestAssistantMessage?.preview.includes("Final answer from session JSONL"),
+    "Transcript fallback must expose the settled assistant answer from the session JSONL snapshot."
+  );
+  const laggingTranscriptMarkdown = renderTranscriptEvidenceMarkdown(laggingTranscriptEvidence, { detailLevel: "summary" });
+  assert(
+    laggingTranscriptMarkdown.includes("# Session-Derived Evidence"),
+    "Transcript fallback markdown must switch to the session-derived evidence view when the transcript artifact is incomplete."
+  );
+  assert(
+    laggingTranscriptMarkdown.includes("## Persisted Session Summary"),
+    "Transcript fallback markdown must render the persisted session summary for an incomplete transcript artifact."
+  );
+
   const contextEstimate = await buildContextEstimate({
     sessionFile: benchmarkSessionFile,
     assumedWindowTokens: 400000
@@ -4252,6 +4791,10 @@ async function runRoutingGuardChecks() {
   assert(
     readme.includes("Bounded inspection surfaces should be preferred over opening raw session JSONL directly."),
     "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
+  );
+  assert(
+    languageModelToolsSource.includes("result.realPromptDispatchAttempted !== true"),
+    "Language-model stabilized recovery must refuse seed-only completion recovery when the real prompt was never dispatched."
   );
   assert(
     languageModelToolsSource.includes("Prefer snapshot, index, window, profile, transcript, or export surfaces over opening raw session files"),
