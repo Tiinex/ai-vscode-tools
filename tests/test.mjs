@@ -2921,6 +2921,8 @@ async function runSessionSendWorkflowChecks() {
     assert(focusedSendCalls === 1, `Session send workflow test did not send exactly once after the reveal retry. Got: ${focusedSendCalls}`);
 
     const originalSetTimeout = global.setTimeout;
+    let targetedFallbackListChatsCalls = 0;
+    let targetedFallbackFocusedRequest;
     let optimisticListChatsCalls = 0;
     activeChatLabel = 'Optimistic Target';
     global.setTimeout = ((callback, _ms, ...args) => {
@@ -2931,6 +2933,90 @@ async function runSessionSendWorkflowChecks() {
     });
 
     try {
+      const targetedFallbackInterop = {
+        async listChats() {
+          targetedFallbackListChatsCalls += 1;
+          const settled = targetedFallbackListChatsCalls >= 3;
+          return [{
+            id: 'session-targeted-fallback',
+            title: 'Targeted Fallback',
+            lastUpdated: settled ? '2026-04-11T04:05:02.000Z' : '2026-04-11T04:05:00.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            hasPendingEdits: false,
+            pendingRequestCount: settled ? 0 : 1,
+            lastRequestCompleted: settled,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-targeted-fallback.jsonl'
+          }];
+        },
+        async getExactSessionInteropSupport() {
+          return {
+            canRevealExactSession: true,
+            canSendExactSessionMessage: false,
+            revealUnsupportedReason: undefined,
+            sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+          };
+        },
+        async revealChat() {
+          return {
+            ok: true,
+            session: {
+              id: 'session-targeted-fallback',
+              title: 'Targeted Fallback',
+              lastUpdated: '2026-04-11T04:05:00.000Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: '/tmp/session-targeted-fallback.jsonl'
+            },
+            revealLifecycle: {
+              closedMatchingVisibleTabs: 0,
+              closedTabLabels: []
+            }
+          };
+        },
+        async sendFocusedMessage(request) {
+          targetedFallbackFocusedRequest = request;
+          return {
+            ok: true,
+            session: {
+              id: 'session-targeted-fallback',
+              title: 'Targeted Fallback',
+              lastUpdated: '2026-04-11T04:05:00.000Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              hasPendingEdits: false,
+              pendingRequestCount: 1,
+              lastRequestCompleted: false,
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: '/tmp/session-targeted-fallback.jsonl'
+            },
+            dispatch: {
+              surface: 'focused-chat-submit',
+              dispatchedPrompt: 'targeted fallback prompt'
+            }
+          };
+        }
+      };
+
+      const targetedFallbackResult = await sendMessageToSessionWithFallback(targetedFallbackInterop, {
+        sessionId: 'session-targeted-fallback',
+        prompt: 'targeted fallback prompt',
+        blockOnResponse: true
+      });
+
+      assert(targetedFallbackFocusedRequest?.waitForPersisted === false, 'Session send workflow test did not disable the redundant generic focused-send persistence wait for exact-target fallback.');
+      assert(targetedFallbackResult.result.ok === true, 'Session send workflow test did not preserve target-session settlement verification after disabling the generic focused-send persistence wait.');
+      assert(targetedFallbackResult.result.session?.lastRequestCompleted === true, 'Session send workflow test did not return the settled target session after exact-target fallback verification.');
+      assert(targetedFallbackListChatsCalls === 3, `Session send workflow test did not wait through the exact target-session verification path after disabling the generic focused-send persistence wait. Got: ${targetedFallbackListChatsCalls}`);
+
       const optimisticInterop = {
         async listChats() {
           optimisticListChatsCalls += 1;
@@ -3624,8 +3710,13 @@ async function runSelfTargetGuardChecks() {
   );
 
   assert(
-    getExactSelfTargetingReason(chats, "recent-session", "close-visible-tabs", now)?.includes("currently invoking conversation") === true,
-    "Self-target guard test did not preserve blocking semantics for exact close of the likely invoking chat."
+    getExactSelfTargetingReason(chats, "recent-session", "close-visible-tabs", now) === undefined,
+    "Self-target guard test incorrectly blocked exact close-visible-tabs cleanup for the likely invoking chat heuristic case."
+  );
+
+  assert(
+    getExactSelfTargetingReason(chats, "recent-session", "delete-artifacts", now) === undefined,
+    "Self-target guard test incorrectly blocked exact delete-artifacts cleanup for the likely invoking chat heuristic case."
   );
 
   assert(

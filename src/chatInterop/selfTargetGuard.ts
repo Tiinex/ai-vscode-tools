@@ -8,6 +8,10 @@ export function getExactSelfTargetingReason(
   operation: "reveal" | "send" | "close-visible-tabs" | "delete-artifacts",
   now = Date.now()
 ): string | undefined {
+  if (operation === "close-visible-tabs" || operation === "delete-artifacts") {
+    return undefined;
+  }
+
   const latest = findRecentLikelyInvokingChat(chats, now);
   if (!latest || !sessionIdMatches(targetSessionId, latest.id)) {
     return undefined;

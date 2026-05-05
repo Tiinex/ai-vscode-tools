@@ -605,7 +605,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "close_visible_live_chat_tabs",
     displayName: "Close Visible Live Chat Tabs",
     userDescription: "Close visible editor-hosted live chat tabs for one exact session.",
-    modelDescription: "Close visible editor-hosted live chat tabs for an exact or prefix session identifier without deleting the persisted session itself. Use this for safe Local cleanup after probes or tests when the target chat may still be open in editor tabs. This tool affects the VS Code UI and uses the same exact-session self-targeting guard as other live-chat mutation routes.",
+    modelDescription: "Close visible editor-hosted live chat tabs for an exact or prefix session identifier without deleting the persisted session itself. Use this for safe Local cleanup after probes or tests when the target chat may still be open in editor tabs. This tool affects the VS Code UI and relies on exact tab-matching checks in the close path rather than the heuristic exact-session self-targeting guard.",
     toolReferenceName: "close-visible-live-chat-tabs",
     inputSchema: {
       type: "object",
@@ -622,7 +622,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "delete_live_agent_chat_artifacts",
     displayName: "Delete Live Agent Chat Artifacts",
     userDescription: "Close visible editor-hosted tabs and delete persisted artifacts for one live chat session.",
-    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier and then delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI, uses the exact-session self-targeting guard, and does not attempt to delete the currently invoking conversation.",
+    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier and then delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard.",
     toolReferenceName: "delete-live-agent-chat-artifacts",
     inputSchema: {
       type: "object",
@@ -866,7 +866,6 @@ const LOCAL_CHAT_CONTROL_TOOL_NAMES = new Set([
 
 const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
   "create_live_agent_chat",
-  "delete_live_agent_chat_artifacts",
   "send_message_to_live_agent_chat",
   "send_message_to_focused_live_chat"
 ]);

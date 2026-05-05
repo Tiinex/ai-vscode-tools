@@ -109,7 +109,12 @@ export async function sendMessageToSessionWithFallback(
     modelSelector: request.modelSelector,
     partialQuery: request.partialQuery,
     blockOnResponse: request.blockOnResponse,
-    requireSelectionEvidence: request.requireSelectionEvidence
+    requireSelectionEvidence: request.requireSelectionEvidence,
+    // This fallback path already knows the exact target session id and performs
+    // explicit target-session mutation verification below. Avoid paying for an
+    // additional generic listSessions()-based wait unless selection evidence
+    // for the focused surface was explicitly requested.
+    waitForPersisted: request.requireSelectionEvidence === true ? undefined : false
   });
   focusedSendCallMs = Date.now() - focusedSendStartedAt;
   const focusedSendTiming = focusedResult.revealLifecycle?.timingMs;
