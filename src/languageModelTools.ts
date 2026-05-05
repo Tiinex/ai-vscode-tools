@@ -1069,7 +1069,9 @@ function formatChatMutationResult(
         `- Focused Input Duration Ms: ${revealLifecycle.timingMs.focusedInputMs ?? "-"}`,
         `- Focused Prefill Duration Ms: ${revealLifecycle.timingMs.prefillMs ?? "-"}`,
         `- Focused Submit Duration Ms: ${revealLifecycle.timingMs.submitMs ?? "-"}`,
-        `- Focused Mutation Wait Duration Ms: ${revealLifecycle.timingMs.focusedMutationWaitMs ?? "-"}`
+        `- Focused Mutation Wait Duration Ms: ${revealLifecycle.timingMs.focusedMutationWaitMs ?? "-"}`,
+        `- Focused Mutation Poll Count: ${revealLifecycle.timingMs.focusedMutationPollCount ?? "-"}`,
+        `- Focused Mutation Storage Scan Ms: ${revealLifecycle.timingMs.focusedMutationScanMs ?? "-"}`
       );
     }
   }

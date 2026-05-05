@@ -124,7 +124,9 @@ export async function sendMessageToSessionWithFallback(
       focusedInputMs: focusedSendTiming?.focusedInputMs,
       prefillMs: focusedSendTiming?.prefillMs,
       submitMs: focusedSendTiming?.submitMs,
-      focusedMutationWaitMs: focusedSendTiming?.focusedMutationWaitMs
+      focusedMutationWaitMs: focusedSendTiming?.focusedMutationWaitMs,
+      focusedMutationPollCount: focusedSendTiming?.focusedMutationPollCount,
+      focusedMutationScanMs: focusedSendTiming?.focusedMutationScanMs
     }
   );
 

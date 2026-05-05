@@ -293,6 +293,8 @@ export class ChatInteropService implements ChatInteropApi {
       let prefillMs = 0;
       let submitMs = 0;
       let focusedMutationWaitMs = 0;
+      let focusedMutationPollCount = 0;
+      let focusedMutationScanMs = 0;
 
       const buildFocusedSendTimingLifecycle = (): NonNullable<ChatCommandResult["revealLifecycle"]> => ({
         closedMatchingVisibleTabs: 0,
@@ -301,7 +303,9 @@ export class ChatInteropService implements ChatInteropApi {
           focusedInputMs,
           prefillMs,
           submitMs,
-          focusedMutationWaitMs
+          focusedMutationWaitMs,
+          focusedMutationPollCount,
+          focusedMutationScanMs
         }
       });
 
@@ -350,8 +354,17 @@ export class ChatInteropService implements ChatInteropApi {
       }
 
       const focusedMutationWaitStartedAt = Date.now();
-      const { session, selection, observedMutation, settled } = await this.waitForFocusedSessionMutation(before, request, dispatch);
+      const {
+        session,
+        selection,
+        observedMutation,
+        settled,
+        pollCount,
+        scanMs
+      } = await this.waitForFocusedSessionMutation(before, request, dispatch);
       focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
+      focusedMutationPollCount = pollCount;
+      focusedMutationScanMs = scanMs;
       if (!session || !observedMutation) {
         return {
           ok: false,
@@ -851,16 +864,28 @@ export class ChatInteropService implements ChatInteropApi {
     before: ChatSessionSummary[],
     request: CreateChatRequest,
     dispatch: ChatDispatchInfo
-  ): Promise<{ session: ChatSessionSummary | undefined; selection: ReturnType<typeof buildSelectionVerification>; observedMutation: boolean; settled: boolean }> {
+  ): Promise<{
+    session: ChatSessionSummary | undefined;
+    selection: ReturnType<typeof buildSelectionVerification>;
+    observedMutation: boolean;
+    settled: boolean;
+    pollCount: number;
+    scanMs: number;
+  }> {
     const beforeById = new Map(before.map((item) => [item.id, item.lastUpdated]));
     const deadline = Date.now() + this.postCreateTimeoutMs;
     let candidate: ChatSessionSummary | undefined;
     let observedMutation = false;
+    let pollCount = 0;
+    let scanMs = 0;
     const requireSettled = request.blockOnResponse === true;
 
     while (Date.now() <= deadline) {
       await delay(this.postCreateDelayMs);
+      pollCount += 1;
+      const scanStartedAt = Date.now();
       const after = await this.storage.listSessions();
+      scanMs += Date.now() - scanStartedAt;
 
       const touched = pickTouchedSession(beforeById, after);
       if (touched) {
@@ -876,13 +901,13 @@ export class ChatInteropService implements ChatInteropApi {
 
       if (!request.requireSelectionEvidence) {
         if (settled && clean) {
-          return { session: candidate, selection, observedMutation, settled };
+          return { session: candidate, selection, observedMutation, settled, pollCount, scanMs };
         }
         continue;
       }
 
       if (candidate && selection.allRequestedVerified && settled && clean) {
-        return { session: candidate, selection, observedMutation, settled };
+        return { session: candidate, selection, observedMutation, settled, pollCount, scanMs };
       }
     }
 
@@ -890,7 +915,9 @@ export class ChatInteropService implements ChatInteropApi {
       session: candidate,
       selection: buildSelectionVerification(request, candidate, dispatch),
       observedMutation,
-      settled: observedMutation && (!requireSettled || isSessionSettled(candidate))
+      settled: observedMutation && (!requireSettled || isSessionSettled(candidate)),
+      pollCount,
+      scanMs
     };
   }
 

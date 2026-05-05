@@ -51,6 +51,8 @@ export interface ChatRevealLifecycle {
     prefillMs?: number;
     submitMs?: number;
     focusedMutationWaitMs?: number;
+    focusedMutationPollCount?: number;
+    focusedMutationScanMs?: number;
   };
 }
 
