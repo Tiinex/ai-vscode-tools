@@ -288,3 +288,7 @@ This project is distributed under the Apache License 2.0.
 
 - [LICENSE](LICENSE)
 - [NOTICE](NOTICE)
+
+## Support
+
+If you find this work valuable and want to support its continued development: https://ko-fi.com/Tiinusen
