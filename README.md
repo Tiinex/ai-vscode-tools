@@ -235,9 +235,9 @@ Each platform lane below is tracked as a checklist.
 		- [ ] Use Case: create chat opens a new Local chat with the requested prompt on the current Windows host.
 		- [ ] Use Case: requested agent selection is preserved or explicitly reported as unverified on the current Windows host.
 		- [ ] Use Case: follow-up send reaches the intended Local chat session without retarget drift on the current Windows host.
-		- [ ] Unit Test: `create-chat-direct-agent-command` passes as an approved reliability gate rather than only existing and being exercised.
-		- [ ] Unit Test: `stabilized-create-workflow` passes as an approved reliability gate rather than only existing and being exercised.
-		- [ ] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
+		- [x] Unit Test: `create-chat-direct-agent-command` passes as an approved reliability gate rather than only existing and being exercised.
+		- [x] Unit Test: `stabilized-create-workflow` passes as an approved reliability gate rather than only existing and being exercised.
+		- [x] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
 		- [ ] Manual Test: create-and-send flow is revalidated end-to-end on the current Windows host.
 		- [ ] Skill: role-facing guidance exists for exact live-chat create and send.
 		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current behavior.
@@ -246,7 +246,7 @@ Each platform lane below is tracked as a checklist.
 	- Windows
 		- [ ] Use Case: focused send reaches the intended visible Local chat without silently targeting the wrong thread.
 		- [ ] Use Case: focused send reports unverified or blocked selection state instead of implying stronger targeting than the host can prove.
-		- [ ] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
+		- [x] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
 		- [ ] Manual Test: focused-send behavior is revalidated on the current Windows host.
 		- [ ] Skill: role-facing guidance exists for focused live-chat send.
 		- [ ] Skill Test: focused live-chat send guidance has been validated against current behavior.

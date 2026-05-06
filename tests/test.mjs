@@ -2698,11 +2698,11 @@ async function runStabilizedCreateWorkflowChecks() {
     requireSelectionEvidence: false
   });
 
-  assert(contaminatedSeedResult.workflow.result.ok === false, "Stabilized workflow test incorrectly continued after the seed session showed control-thread artifacts.");
+  assert(contaminatedSeedResult.workflow.ok === false, "Stabilized workflow test incorrectly continued after the seed session showed control-thread artifacts.");
   assert(contaminatedSeedResult.realPromptDispatchAttempted === false, "Stabilized workflow test should not record a real prompt send attempt when the seed session is already contaminated.");
   assert(
-    contaminatedSeedResult.workflow.result.reason?.includes("control-thread artifacts") === true,
-    `Stabilized workflow test did not report seed contamination clearly. Got: ${contaminatedSeedResult.workflow.result.reason}`
+    contaminatedSeedResult.workflow.reason?.includes("control-thread artifacts") === true,
+    `Stabilized workflow test did not report seed contamination clearly. Got: ${contaminatedSeedResult.workflow.reason}`
   );
 
   const lateTokenSessionFile = path.join(chatSessionsDir, "session-5.jsonl");
@@ -2718,7 +2718,7 @@ async function runStabilizedCreateWorkflowChecks() {
           [
             JSON.stringify({ kind: 0, v: { sessionId: "session-5", requests: [], inputState: {} } }),
             JSON.stringify({ kind: 1, k: ["requests", 0, "result"], v: { metadata: {}, value: "GPT-5 mini • 0x" } }),
-            JSON.stringify({ kind: 2, k: ["requests", 0, "response"], v: [{ value: "AA_STABLE_INIT_testtoken_123" }] })
+            JSON.stringify({ kind: 2, k: ["requests", 0, "response"], v: [{ value: "AA_STABLE_INIT_magrt3wg_005qlc" }] })
           ].join("\n") + "\n",
           "utf8"
         );
@@ -2827,7 +2827,7 @@ async function runStabilizedCreateWorkflowChecks() {
         requireSelectionEvidence: false
       });
 
-      assert(lateTokenResult.workflow.result.ok === true, "Stabilized workflow test did not recover when the seed token persisted before summary settlement flags caught up.");
+      assert(lateTokenResult.workflow.ok === true, "Stabilized workflow test did not recover when the seed token persisted before summary settlement flags caught up.");
       assert(lateTokenResult.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after late seed-token recovery.");
       assert(lateTokenRequests.length === 1, "Stabilized workflow test did not send the real prompt after observing the persisted seed token.");
       assert(lateTokenListChatsCalls >= 2, `Stabilized workflow test did not poll for the late seed token. Got ${lateTokenListChatsCalls} listChats call(s).`);
@@ -3094,544 +3094,96 @@ async function runDisposableDeleteProbeChecks() {
 
 async function runSessionSendWorkflowChecks() {
   const workflowModule = await import(pathToFileURL(distChatInteropSessionSendWorkflow).href);
-  const { canTrustGenericActiveChatAfterReveal, sendMessageToSessionWithFallback } = workflowModule;
+  const { sendMessageToSession } = workflowModule;
 
-  assert(
-    canTrustGenericActiveChatAfterReveal({
-      activeGroupIndex: 0,
-      liveChatTitles: ["Live chat support documentation inquiry"],
-      groups: [
-        {
-          isActive: true,
-          viewColumn: 1,
-          tabs: [
-            {
-              label: "Chat",
-              isActive: true,
-              isDirty: false,
-              isPinned: false,
-              isPreview: false,
-              isLikelyChatEditor: true,
-              input: {
-                kind: "custom:chat-view",
-                constructorName: "ChatEditorInput",
-                uri: undefined,
-                viewType: "chat-view",
-                stringHints: ["chat"],
-                objectKeys: []
-              }
-            }
-          ]
-        }
-      ]
-    }, {
-      sessionId: 'session-generic-no-resource',
-      sessionTitle: 'Live chat support documentation inquiry'
-    }) === false,
-    "Session send workflow test incorrectly trusted a generic active Chat tab without exact Local session-resource evidence."
-  );
-
-  assert(
-    canTrustGenericActiveChatAfterReveal({
-      activeGroupIndex: 0,
-      liveChatTitles: ["Live chat support documentation inquiry"],
-      groups: [
-        {
-          isActive: true,
-          viewColumn: 1,
-          tabs: [
-            {
-              label: "Chat",
-              isActive: true,
-              isDirty: false,
-              isPinned: false,
-              isPreview: false,
-              isLikelyChatEditor: true,
-              input: {
-                kind: "custom:chat-view",
-                constructorName: "ChatEditorInput",
-                uri: "vscode-chat-session://local/c2Vzc2lvbi1nZW5lcmljLXJlc291cmNl",
-                viewType: "chat-view",
-                stringHints: ["chat"],
-                objectKeys: []
-              }
-            }
-          ]
-        }
-      ]
-    }, {
-      sessionId: 'session-generic-resource',
-      sessionTitle: 'Live chat support documentation inquiry'
-    }) === true,
-    "Session send workflow test did not trust a generic active Chat tab when exact Local session-resource evidence was present."
-  );
-
-  assert(
-    canTrustGenericActiveChatAfterReveal({
-      activeGroupIndex: 0,
-      liveChatTitles: ["Live chat support documentation inquiry"],
-      groups: [
-        {
-          isActive: true,
-          viewColumn: 1,
-          tabs: [
-            {
-              label: "Chat",
-              isActive: true,
-              isDirty: false,
-              isPinned: false,
-              isPreview: false,
-              isLikelyChatEditor: false,
-              input: {
-                kind: "Sm",
-                constructorName: "Sm",
-                uri: undefined,
-                viewType: undefined,
-                stringHints: [],
-                objectKeys: []
-              }
-            }
-          ]
-        }
-      ]
-    }) === false,
-    "Session send workflow test incorrectly trusted a generic Chat label without chat-editor evidence after reveal."
-  );
-
-  assert(
-    canTrustGenericActiveChatAfterReveal({
-      activeGroupIndex: 0,
-      liveChatTitles: ["Live chat support documentation inquiry"],
-      groups: [
-        {
-          isActive: true,
-          viewColumn: 1,
-          tabs: [
-            {
-              label: "README.md",
-              isActive: true,
-              isDirty: false,
-              isPinned: false,
-              isPreview: false,
-              isLikelyChatEditor: false,
-              input: {
-                kind: "TabInputText",
-                constructorName: "TabInputText",
-                uri: "file:///tmp/README.md",
-                viewType: undefined,
-                stringHints: [],
-                objectKeys: []
-              }
-            }
-          ]
-        }
-      ]
-    }) === false,
-    "Session send workflow test incorrectly trusted a non-chat active tab after reveal."
-  );
-
-  const { createRequire } = await import('module');
-  const require = createRequire(import.meta.url);
-  const vscodeModule = require('vscode');
-  const originalWindow = vscodeModule.window;
-  const originalExecuteCommand = vscodeModule.commands.executeCommand;
-  const originalGetCommands = vscodeModule.commands.getCommands;
-
-  let revealCalls = 0;
-  let focusedSendCalls = 0;
-  let sessionLastUpdated = '2026-04-11T04:00:00.000Z';
-  let activeChatLabel = 'Retry Target';
-
-  try {
-    vscodeModule.window = vscodeModule.window || {};
-    Object.defineProperty(vscodeModule.window, 'tabGroups', {
-      configurable: true,
-      value: {
-        get all() {
-          if (revealCalls < 2) {
-            return [
-              {
-                isActive: true,
-                viewColumn: 1,
-                tabs: [
-                  {
-                    label: 'README.md',
-                    isActive: true,
-                    isDirty: false,
-                    isPinned: false,
-                    isPreview: false,
-                    input: {
-                      constructor: { name: 'TabInputText' },
-                      uri: { toString: () => 'file:///tmp/README.md' }
-                    }
-                  }
-                ]
-              }
-            ];
-          }
-
-          return [
-            {
-              isActive: true,
-              viewColumn: 1,
-              tabs: [
-                {
-                  label: activeChatLabel,
-                  isActive: true,
-                  isDirty: false,
-                  isPinned: false,
-                  isPreview: false,
-                  input: {
-                    constructor: { name: 'TabInputCustom' },
-                    viewType: 'github.copilot.chat.editor'
-                  }
-                }
-              ]
-            }
-          ];
-        }
-      }
-    });
-    vscodeModule.commands.getCommands = async () => ['workbench.action.focusActiveEditorGroup'];
-    vscodeModule.commands.executeCommand = async () => undefined;
-
-    const retryInterop = {
-      async listChats() {
-        return [{
-          id: 'session-retry',
-          title: 'Retry Target',
-          lastUpdated: sessionLastUpdated,
-          mode: 'agent',
-          agent: 'github.copilot.editsAgent',
-          model: 'copilot/gpt-5-mini',
-          archived: false,
-          provider: 'workspaceStorage',
-          sessionFile: '/tmp/session-retry.jsonl'
-        }];
-      },
-      async getExactSessionInteropSupport() {
-        return {
-          canRevealExactSession: true,
-          canSendExactSessionMessage: false,
-          revealUnsupportedReason: undefined,
-          sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
-        };
-      },
-      async revealChat() {
-        revealCalls += 1;
-        return {
-          ok: true,
-          session: {
-            id: 'session-retry',
-            title: 'Retry Target',
-            lastUpdated: sessionLastUpdated,
-            mode: 'agent',
-            agent: 'github.copilot.editsAgent',
-            model: 'copilot/gpt-5-mini',
-            archived: false,
-            provider: 'workspaceStorage',
-            sessionFile: '/tmp/session-retry.jsonl'
-          },
-          revealLifecycle: {
-            closedMatchingVisibleTabs: 0,
-            closedTabLabels: []
-          }
-        };
-      },
-      async sendFocusedMessage() {
-        focusedSendCalls += 1;
-        sessionLastUpdated = '2026-04-11T04:00:01.000Z';
-        return {
-          ok: true,
-          session: {
-            id: 'session-retry',
-            title: 'Retry Target',
-            lastUpdated: sessionLastUpdated,
-            mode: 'agent',
-            agent: 'github.copilot.editsAgent',
-            model: 'copilot/gpt-5-mini',
-            hasPendingEdits: false,
-            pendingRequestCount: 0,
-            lastRequestCompleted: true,
-            archived: false,
-            provider: 'workspaceStorage',
-            sessionFile: '/tmp/session-retry.jsonl'
-          },
-          dispatch: {
-            surface: 'focused-chat-submit',
-            dispatchedPrompt: 'retry prompt'
-          }
-        };
-      }
-    };
-
-    const retriedFocusResult = await sendMessageToSessionWithFallback(retryInterop, {
-      sessionId: 'session-retry',
-      prompt: 'retry prompt',
-      blockOnResponse: false
-    });
-
-    assert(retriedFocusResult.result.ok === true, 'Session send workflow test did not recover by revealing the target chat again after focus was lost.');
-    assert(revealCalls === 2, `Session send workflow test did not retry reveal after the first focus miss. Got: ${revealCalls}`);
-    assert(focusedSendCalls === 1, `Session send workflow test did not send exactly once after the reveal retry. Got: ${focusedSendCalls}`);
-
-    const originalSetTimeout = global.setTimeout;
-    let targetedFallbackListChatsCalls = 0;
-    let targetedFallbackFocusedRequest;
-    let optimisticListChatsCalls = 0;
-    activeChatLabel = 'Optimistic Target';
-    global.setTimeout = ((callback, _ms, ...args) => {
-      if (typeof callback === 'function') {
-        callback(...args);
-      }
-      return 0;
-    });
-
-    try {
-      const targetedFallbackInterop = {
-        async listChats() {
-          targetedFallbackListChatsCalls += 1;
-          const settled = targetedFallbackListChatsCalls >= 3;
-          return [{
-            id: 'session-targeted-fallback',
-            title: 'Targeted Fallback',
-            lastUpdated: settled ? '2026-04-11T04:05:02.000Z' : '2026-04-11T04:05:00.000Z',
-            mode: 'agent',
-            agent: 'github.copilot.editsAgent',
-            model: 'copilot/gpt-5-mini',
-            hasPendingEdits: false,
-            pendingRequestCount: settled ? 0 : 1,
-            lastRequestCompleted: settled,
-            archived: false,
-            provider: 'workspaceStorage',
-            sessionFile: '/tmp/session-targeted-fallback.jsonl'
-          }];
-        },
-        async getExactSessionInteropSupport() {
-          return {
-            canRevealExactSession: true,
-            canSendExactSessionMessage: false,
-            revealUnsupportedReason: undefined,
-            sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
-          };
-        },
-        async revealChat() {
-          return {
-            ok: true,
-            session: {
-              id: 'session-targeted-fallback',
-              title: 'Targeted Fallback',
-              lastUpdated: '2026-04-11T04:05:00.000Z',
-              mode: 'agent',
-              agent: 'github.copilot.editsAgent',
-              model: 'copilot/gpt-5-mini',
-              archived: false,
-              provider: 'workspaceStorage',
-              sessionFile: '/tmp/session-targeted-fallback.jsonl'
-            },
-            revealLifecycle: {
-              closedMatchingVisibleTabs: 0,
-              closedTabLabels: []
-            }
-          };
-        },
-        async sendFocusedMessage(request) {
-          targetedFallbackFocusedRequest = request;
-          return {
-            ok: true,
-            session: {
-              id: 'session-targeted-fallback',
-              title: 'Targeted Fallback',
-              lastUpdated: '2026-04-11T04:05:00.000Z',
-              mode: 'agent',
-              agent: 'github.copilot.editsAgent',
-              model: 'copilot/gpt-5-mini',
-              hasPendingEdits: false,
-              pendingRequestCount: 1,
-              lastRequestCompleted: false,
-              archived: false,
-              provider: 'workspaceStorage',
-              sessionFile: '/tmp/session-targeted-fallback.jsonl'
-            },
-            dispatch: {
-              surface: 'focused-chat-submit',
-              dispatchedPrompt: 'targeted fallback prompt'
-            }
-          };
-        }
-      };
-
-      const targetedFallbackResult = await sendMessageToSessionWithFallback(targetedFallbackInterop, {
-        sessionId: 'session-targeted-fallback',
-        prompt: 'targeted fallback prompt',
-        blockOnResponse: true
-      });
-
-      assert(targetedFallbackFocusedRequest?.waitForPersisted === false, 'Session send workflow test did not disable the redundant generic focused-send persistence wait for exact-target fallback.');
-      assert(targetedFallbackResult.result.ok === true, 'Session send workflow test did not preserve target-session settlement verification after disabling the generic focused-send persistence wait.');
-      assert(targetedFallbackResult.result.session?.lastRequestCompleted === true, 'Session send workflow test did not return the settled target session after exact-target fallback verification.');
-      assert(targetedFallbackListChatsCalls === 3, `Session send workflow test did not wait through the exact target-session verification path after disabling the generic focused-send persistence wait. Got: ${targetedFallbackListChatsCalls}`);
-
-      const optimisticInterop = {
-        async listChats() {
-          optimisticListChatsCalls += 1;
-          return [{
-            id: 'session-optimistic',
-            title: 'Optimistic Target',
-            lastUpdated: optimisticListChatsCalls >= 2 ? '2026-04-11T04:10:02.000Z' : '2026-04-11T04:10:01.000Z',
-            mode: 'agent',
-            agent: 'github.copilot.editsAgent',
-            model: 'copilot/gpt-5-mini',
-            hasPendingEdits: false,
-            pendingRequestCount: optimisticListChatsCalls >= 2 ? 0 : 1,
-            lastRequestCompleted: optimisticListChatsCalls >= 2,
-            archived: false,
-            provider: 'workspaceStorage',
-            sessionFile: '/tmp/session-optimistic.jsonl'
-          }];
-        },
-        async getExactSessionInteropSupport() {
-          return {
-            canRevealExactSession: true,
-            canSendExactSessionMessage: false,
-            revealUnsupportedReason: undefined,
-            sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
-          };
-        },
-        async revealChat() {
-          return {
-            ok: true,
-            session: {
-              id: 'session-optimistic',
-              title: 'Optimistic Target',
-              lastUpdated: '2026-04-11T04:10:00.000Z',
-              mode: 'agent',
-              agent: 'github.copilot.editsAgent',
-              model: 'copilot/gpt-5-mini',
-              archived: false,
-              provider: 'workspaceStorage',
-              sessionFile: '/tmp/session-optimistic.jsonl'
-            },
-            revealLifecycle: {
-              closedMatchingVisibleTabs: 0,
-              closedTabLabels: []
-            }
-          };
-        },
-        async sendFocusedMessage() {
-          return {
-            ok: true,
-            session: {
-              id: 'session-optimistic',
-              title: 'Optimistic Target',
-              lastUpdated: '2026-04-11T04:10:01.000Z',
-              mode: 'agent',
-              agent: 'github.copilot.editsAgent',
-              model: 'copilot/gpt-5-mini',
-              hasPendingEdits: false,
-              pendingRequestCount: 1,
-              lastRequestCompleted: false,
-              archived: false,
-              provider: 'workspaceStorage',
-              sessionFile: '/tmp/session-optimistic.jsonl'
-            },
-            dispatch: {
-              surface: 'focused-chat-submit',
-              dispatchedPrompt: 'optimistic prompt'
-            }
-          };
-        }
-      };
-
-      const optimisticResult = await sendMessageToSessionWithFallback(optimisticInterop, {
-        sessionId: 'session-optimistic',
-        prompt: 'optimistic prompt',
-        blockOnResponse: true
-      });
-
-      assert(optimisticResult.result.ok === true, 'Session send workflow test did not wait for the optimistic same-session focused-send result to settle.');
-      assert(optimisticResult.result.session?.lastRequestCompleted === true, 'Session send workflow test returned before the optimistic same-session target session settled.');
-      assert((optimisticResult.result.session?.pendingRequestCount ?? -1) === 0, 'Session send workflow test did not return the settled target session summary after an optimistic same-session focused-send result.');
-    } finally {
-      global.setTimeout = originalSetTimeout;
+  const forwardedRequests = [];
+  const forwardedResult = {
+    ok: true,
+    session: {
+      id: 'session-exact',
+      title: 'Exact Target',
+      lastUpdated: '2026-05-07T10:00:00.000Z',
+      mode: 'agent',
+      agent: 'github.copilot.editsAgent',
+      model: 'copilot/gpt-5-mini',
+      archived: false,
+      provider: 'workspaceStorage',
+      sessionFile: '/tmp/session-exact.jsonl'
+    },
+    selection: {
+      mode: { status: 'verified', requested: undefined, observed: 'agent' },
+      model: { status: 'verified', requested: undefined, observed: 'copilot/gpt-5-mini' },
+      agent: { status: 'verified', requested: '#agent-architect', observed: 'agent-architect' },
+      dispatchedPrompt: 'exact prompt',
+      dispatchSurface: 'chat-open',
+      allRequestedVerified: true
     }
+  };
+  const exactRequest = {
+    sessionId: 'session-exact',
+    prompt: 'exact prompt',
+    agentName: 'agent-architect',
+    blockOnResponse: true,
+    requireSelectionEvidence: false
+  };
 
-    let timeoutListChatsCalls = 0;
-    activeChatLabel = 'Timeout Target';
-    const timeoutInterop = {
-      async listChats() {
-        timeoutListChatsCalls += 1;
-        return [{
-          id: 'session-timeout',
-          title: 'Timeout Target',
-          lastUpdated: timeoutListChatsCalls >= 2 ? '2026-04-11T05:00:01.000Z' : '2026-04-11T05:00:00.000Z',
-          mode: 'agent',
-          agent: 'github.copilot.editsAgent',
-          model: 'copilot/gpt-5-mini',
-          hasPendingEdits: false,
-          pendingRequestCount: 0,
-          lastRequestCompleted: true,
-          archived: false,
-          provider: 'workspaceStorage',
-          sessionFile: '/tmp/session-timeout.jsonl'
-        }];
-      },
-      async getExactSessionInteropSupport() {
-        return {
-          canRevealExactSession: true,
-          canSendExactSessionMessage: false,
-          revealUnsupportedReason: undefined,
-          sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
-        };
-      },
-      async revealChat() {
-        return {
-          ok: true,
-          session: {
-            id: 'session-timeout',
-            title: 'Timeout Target',
-            lastUpdated: '2026-04-11T05:00:00.000Z',
-            mode: 'agent',
-            agent: 'github.copilot.editsAgent',
-            model: 'copilot/gpt-5-mini',
-            archived: false,
-            provider: 'workspaceStorage',
-            sessionFile: '/tmp/session-timeout.jsonl'
-          },
-          revealLifecycle: {
-            closedMatchingVisibleTabs: 0,
-            closedTabLabels: []
-          }
-        };
-      },
-      async sendFocusedMessage() {
-        return {
-          ok: false,
-          reason: 'Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.'
-        };
-      }
-    };
+  const exactInterop = {
+    async getExactSessionInteropSupport() {
+      return {
+        canRevealExactSession: true,
+        canSendExactSessionMessage: true,
+        revealUnsupportedReason: undefined,
+        sendUnsupportedReason: undefined
+      };
+    },
+    async sendMessage(request) {
+      forwardedRequests.push(request);
+      return forwardedResult;
+    }
+  };
 
-    const timedOutResult = await sendMessageToSessionWithFallback(timeoutInterop, {
-      sessionId: 'session-timeout',
-      prompt: 'timeout prompt',
-      blockOnResponse: true
-    });
+  const exactSendResult = await sendMessageToSession(exactInterop, exactRequest);
+  assert(exactSendResult.ok === true, 'Session send workflow test did not forward exact-session sends when exact support was available.');
+  assert(forwardedRequests.length === 1, `Session send workflow test did not forward exactly one exact-session send request. Got: ${forwardedRequests.length}`);
+  assert(forwardedRequests[0].sessionId === 'session-exact', 'Session send workflow test did not preserve the target session id when exact send was available.');
+  assert(forwardedRequests[0].prompt === 'exact prompt', 'Session send workflow test did not preserve the prompt when exact send was available.');
+  assert(forwardedRequests[0].agentName === 'agent-architect', 'Session send workflow test did not preserve the requested agent name when exact send was available.');
 
-    assert(timedOutResult.result.ok === false, 'Session send workflow test incorrectly continued after a focused-send timeout.');
-    assert(
-      typeof timedOutResult.result.reason === 'string' && timedOutResult.result.reason.includes('diagnostic failures'),
-      'Session send workflow test did not mark timeout as a diagnostic failure.'
-    );
-    assert(
-      typeof timedOutResult.result.reason === 'string' && timedOutResult.result.reason.includes('mutated and settled after the timeout'),
-      'Session send workflow test did not preserve late-mutation diagnostics after timeout.'
-    );
-  } finally {
-    vscodeModule.window = originalWindow;
-    vscodeModule.commands.executeCommand = originalExecuteCommand;
-    vscodeModule.commands.getCommands = originalGetCommands;
-  }
+  let unsupportedSendCalls = 0;
+  const unsupportedResult = await sendMessageToSession({
+    async getExactSessionInteropSupport() {
+      return {
+        canRevealExactSession: true,
+        canSendExactSessionMessage: false,
+        revealUnsupportedReason: undefined,
+        sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+      };
+    },
+    async sendMessage() {
+      unsupportedSendCalls += 1;
+      throw new Error('Session send workflow test should not call sendMessage when exact session send is unsupported.');
+    }
+  }, {
+    sessionId: 'session-unsupported',
+    prompt: 'unsupported prompt',
+    blockOnResponse: true,
+    requireSelectionEvidence: false
+  });
+
+  assert(unsupportedResult.ok === false, 'Session send workflow test incorrectly reported success when exact session send was unsupported.');
+  assert(unsupportedSendCalls === 0, `Session send workflow test called sendMessage despite missing exact-session support. Got: ${unsupportedSendCalls}`);
+  assert(
+    unsupportedResult.reason?.includes('Exact session-targeted Local send is unsupported on this build.') === true,
+    `Session send workflow test did not preserve the unsupported-build diagnostic. Got: ${unsupportedResult.reason}`
+  );
+  assert(
+    unsupportedResult.reason?.includes('Reveal plus focused-submit fallback has been removed') === true,
+    `Session send workflow test did not explain that reveal-plus-focused fallback is intentionally removed. Got: ${unsupportedResult.reason}`
+  );
+  assert(
+    unsupportedResult.reason?.includes('Fix exact-session support instead of guessing.') === true,
+    `Session send workflow test did not keep the explicit non-guessing guidance. Got: ${unsupportedResult.reason}`
+  );
 }
 
 async function runChatFocusTargetChecks() {
