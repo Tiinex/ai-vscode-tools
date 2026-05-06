@@ -1,11 +1,11 @@
-# Tiinex — AI — VS Code — Tooling
+# Tiinex — AI — VS Code — Tools
 
 - Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 - Companion AI repo this tooling primarily supports: https://github.com/Tiinex/ai
 
-![Tiinex AI VS Code Tooling logo](assets/logo.png)
+![Tiinex — AI — VS Code — Tools — logo](assets/logo.png)
 
-Tiinex AI VS Code Tooling is a VS Code extension for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging. It is built for people who need to understand what actually happened in Local chat state, recover from drift or compaction, and perform bounded operational actions without guessing.
+Tiinex — AI — VS Code — Tools is a VS Code extension for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging. It is built for people who need to understand what actually happened in Local chat state, recover from drift or compaction, and perform bounded operational actions without guessing.
 
 For everyday users, that means fast inspection and safer cleanup. For VS Code Copilot developers and developers targeting other IDEs, it also means there is a concrete, portable model here for how to separate persisted evidence, live-session operations, and offline cleanup.
 
