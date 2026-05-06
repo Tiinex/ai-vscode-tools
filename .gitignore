@@ -8,3 +8,4 @@ TEMP-*.md
 *-candidate.*
 *-senior.*
 *-junior.*
+.github/instructions/*.temporary.instructions.md

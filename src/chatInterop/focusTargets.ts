@@ -354,6 +354,14 @@ function collectStringHints(input: unknown, maxHints = 12): string[] {
       return;
     }
 
+    const rendered = prefix ? stringifyUri(value) : undefined;
+    if (rendered) {
+      hints.push(`${prefix}=${rendered}`);
+      if (hints.length >= maxHints) {
+        return;
+      }
+    }
+
     seen.add(value);
     const record = asRecord(value);
     if (!record) {

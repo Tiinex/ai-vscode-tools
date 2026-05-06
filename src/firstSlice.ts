@@ -29,6 +29,7 @@ const LOCAL_CHAT_CONTROL_COMMANDS = new Set([
 ]);
 
 const LOCAL_CHAT_MUTATION_COMMANDS = new Set([
+  "aiRecoveryTooling.createDisposableLocalDeleteProbe",
   "aiRecoveryTooling.createLiveChat",
   "aiRecoveryTooling.deleteLiveChatArtifacts",
   "aiRecoveryTooling.sendMessageToLiveChat",

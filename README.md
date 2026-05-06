@@ -2,9 +2,9 @@
 
 Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 
-![AI Recovery Tooling logo](assets/logo.png)
+![AI VS Code Tooling logo](assets/logo.png)
 
-AI Recovery Tooling is the current VS Code extension inside this repo. It provides persisted Local chat inspection and bounded recovery work when chat state has drifted, compacted, reset, or become operationally unclear.
+AI VS Code Tooling is the current VS Code extension inside this repo. It provides persisted Local chat inspection and bounded recovery work when chat state has drifted, compacted, reset, or become operationally unclear.
 
 This is a tooling repo. It is not an agent-authoring framework and it does not claim a broad Agent Architect product surface.
 
@@ -13,13 +13,14 @@ This is a tooling repo. It is not an agent-authoring framework and it does not c
 - Lists stored Local chat sessions from the current workspace or all local workspaceStorage roots.
 - Opens snapshots, tail indexes, context estimates, profiles, transcript evidence, and a last-resort raw session file view.
 - Reveals, closes, deletes, or schedules offline cleanup for matching Local chat artifacts.
+- Scheduled offline cleanup now queues exact session targets, deletes the queued Local chat artifacts offline, and merges multiple pending cleanup requests after VS Code fully exits instead of pruning by a broad inverse keep-list.
 - Creates a Local chat and sends bounded follow-up messages to a selected or focused Local chat.
 
 ## Why It Exists
 
 When Local chat continuity becomes unreliable, the missing piece is usually not more chat guesswork. It is a fast way to recover the right session evidence from persisted artifacts and take a small next action from that evidence.
 
-AI Recovery Tooling is built for that narrower job.
+AI VS Code Tooling is built for that narrower job.
 
 ## Known Limits
 
@@ -35,28 +36,28 @@ AI Recovery Tooling is built for that narrower job.
 
 Session inspection:
 
-- `AI Recovery Tooling: Refresh Sessions`
-- `AI Recovery Tooling: Open Latest Snapshot`
-- `AI Recovery Tooling: Open Latest Evidence Transcript`
-- `AI Recovery Tooling: Open Latest Context Estimate`
-- `AI Recovery Tooling: Open Latest Profile`
-- `AI Recovery Tooling: Open Session Snapshot`
-- `AI Recovery Tooling: Open Session Index`
-- `AI Recovery Tooling: Open Session Evidence Transcript`
-- `AI Recovery Tooling: Open Session Context Estimate`
-- `AI Recovery Tooling: Open Session Profile`
-- `AI Recovery Tooling: Open Raw Session File (Last Resort)`
+- `AI VS Code Tooling: Refresh Sessions`
+- `AI VS Code Tooling: Open Latest Snapshot`
+- `AI VS Code Tooling: Open Latest Evidence Transcript`
+- `AI VS Code Tooling: Open Latest Context Estimate`
+- `AI VS Code Tooling: Open Latest Profile`
+- `AI VS Code Tooling: Open Session Snapshot`
+- `AI VS Code Tooling: Open Session Index`
+- `AI VS Code Tooling: Open Session Evidence Transcript`
+- `AI VS Code Tooling: Open Session Context Estimate`
+- `AI VS Code Tooling: Open Session Profile`
+- `AI VS Code Tooling: Open Raw Session File (Last Resort)`
 
 Local chat recovery:
 
-- `AI Recovery Tooling: List Local Chats`
-- `AI Recovery Tooling: Reveal Local Chat`
-- `AI Recovery Tooling: Close Visible Local Chat Tabs`
-- `AI Recovery Tooling: Delete Local Chat Artifacts`
-- `AI Recovery Tooling: Schedule Offline Local Chat Cleanup`
-- `AI Recovery Tooling: Create Local Chat`
-- `AI Recovery Tooling: Send Message To Local Chat`
-- `AI Recovery Tooling: Send Message To Focused Local Chat`
+- `AI VS Code Tooling: List Local Chats`
+- `AI VS Code Tooling: Reveal Local Chat`
+- `AI VS Code Tooling: Close Visible Local Chat Tabs`
+- `AI VS Code Tooling: Delete Local Chat Artifacts`
+- `AI VS Code Tooling: Schedule Offline Local Chat Cleanup`
+- `AI VS Code Tooling: Create Local Chat`
+- `AI VS Code Tooling: Send Message To Local Chat`
+- `AI VS Code Tooling: Send Message To Focused Local Chat`
 
 ## Recovery Sessions View
 
@@ -76,15 +77,15 @@ npm install
 npm run test
 ```
 
-On Windows, load the checkout into the main VS Code host with:
+On Windows, link the local checkout into the main VS Code host for development with:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/ensure-main-host-link.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ensure-windows-main-host-dev-extension-link.ps1
 ```
 
-That script also repairs leftover `local.agent-architect-tools` registry metadata in `.vscode\extensions\extensions.json` from the old extension name.
+That Windows-only dev bootstrap script also repairs leftover `local.ai-vscode-recovery-tooling` and `local.agent-architect-tools` registry metadata in `.vscode\extensions\extensions.json` from older extension identities.
 
-Then reload VS Code and search for `AI Recovery Tooling:` in the Command Palette.
+Then reload VS Code and search for `AI VS Code Tooling:` in the Command Palette.
 
 ## License
 

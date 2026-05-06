@@ -4,8 +4,8 @@ import { promises as fs } from "node:fs";
 import readline from "node:readline";
 import * as vscode from "vscode";
 import { registerChatInterop } from "./chatInterop";
-import type { ChatCommandResult, ChatInteropApi, ChatSessionSummary } from "./chatInterop";
-import { sendMessageToSessionWithFallback } from "./chatInterop/sessionSendWorkflow";
+import type { ChatCommandResult, ChatInteropApi, ChatSessionSummary, CreateChatRequest } from "./chatInterop";
+import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
 import { getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
 import { SessionToolingAdapter, type SessionDescriptor } from "./coreAdapter";
 import {
@@ -16,11 +16,13 @@ import {
 } from "./firstSlice";
 import { registerLanguageModelTools } from "./languageModelTools";
 import {
+  buildWorkspaceStorageOfflineLocalChatCleanupRequest,
   formatOfflineLocalChatCleanupSummary,
-  getOfflineLocalChatCleanupReportPath,
   launchOfflineLocalChatCleanup,
-  readAndDeleteOfflineLocalChatCleanupReport
+  queueOfflineLocalChatCleanupRequest,
+  readAndDeleteOfflineLocalChatCleanupReports
 } from "./offlineLocalChatCleanup";
+import { buildDisposableDeleteProbeSpec, type DisposableDeleteProbeSpec } from "./disposableDeleteProbe";
 import { loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
 
@@ -37,6 +39,18 @@ interface ExtensionError extends Error {
 
 type DiscoveryScope = "current-workspace" | "all-local";
 
+interface DisposableDeleteProbeCommandRequest extends Omit<CreateChatRequest, "prompt"> {
+  anchor?: string;
+  prompt?: string;
+  showNotification?: boolean;
+}
+
+interface DisposableDeleteProbeCommandResult {
+  anchor: string;
+  prompt: string;
+  result: ChatCommandResult;
+}
+
 async function openMarkdownDocument(content: string): Promise<void> {
   const document = await vscode.workspace.openTextDocument({
     language: "markdown",
@@ -49,8 +63,8 @@ async function openMarkdownDocument(content: string): Promise<void> {
 }
 
 async function maybeReportOfflineLocalChatCleanup(context: vscode.ExtensionContext): Promise<void> {
-  const summary = await readAndDeleteOfflineLocalChatCleanupReport(
-    getOfflineLocalChatCleanupReportPath(context.globalStorageUri.fsPath)
+  const summary = await readAndDeleteOfflineLocalChatCleanupReports(
+    context.globalStorageUri.fsPath
   );
 
   if (!summary) {
@@ -335,6 +349,28 @@ function renderChatListMarkdown(chats: ChatSessionSummary[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+async function createDisposableDeleteProbe(
+  chatInterop: ChatInteropApi,
+  request?: DisposableDeleteProbeCommandRequest
+): Promise<DisposableDeleteProbeCommandResult> {
+  const probe = buildDisposableDeleteProbeSpec(request);
+  const result = await runWithProgress("Creating disposable Local delete probe", () => chatInterop.createChat({
+    prompt: probe.prompt,
+    agentName: request?.agentName,
+    mode: request?.mode,
+    modelSelector: request?.modelSelector,
+    partialQuery: request?.partialQuery,
+    blockOnResponse: request?.blockOnResponse ?? false,
+    requireSelectionEvidence: request?.requireSelectionEvidence ?? false,
+    waitForPersisted: request?.waitForPersisted
+  }));
+  return {
+    anchor: probe.anchor,
+    prompt: probe.prompt,
+    result
+  };
+}
+
 async function promptForChatPrompt(title: string, value = ""): Promise<string | undefined> {
   const prompt = await vscode.window.showInputBox({
     title,
@@ -344,6 +380,17 @@ async function promptForChatPrompt(title: string, value = ""): Promise<string | 
     validateInput: (input) => input.trim() ? undefined : "A prompt is required."
   });
   return prompt?.trim() ? prompt.trim() : undefined;
+}
+
+async function promptForAgentName(title: string, value = ""): Promise<string | undefined> {
+  const agentName = await vscode.window.showInputBox({
+    title,
+    prompt: "Enter the agent name to use for safe new-chat creation on this host.",
+    value,
+    ignoreFocusOut: true,
+    validateInput: (input) => input.trim() ? undefined : "An explicit agent name is required for safe new-chat creation on this host."
+  });
+  return agentName?.trim() ? agentName.trim() : undefined;
 }
 
 async function runWithProgress<T>(title: string, task: () => Promise<T>): Promise<T> {
@@ -536,17 +583,16 @@ function registerCommands(
             ? await vscode.window.showInformationMessage(message, scheduleAction)
             : await vscode.window.showInformationMessage(message);
           if (choice === scheduleAction) {
-            const liveChats = await chatInterop.listChats();
-            const keepSessionIds = liveChats
-              .filter((item) => item.provider === "workspaceStorage" && item.workspaceId === resolved.workspaceStorageDir.split(path.sep).at(-1))
-              .map((item) => item.id);
+            await queueOfflineLocalChatCleanupRequest(
+              context.globalStorageUri.fsPath,
+              buildWorkspaceStorageOfflineLocalChatCleanupRequest(resolved.workspaceStorageDir, resolved.sessionId)
+            );
             launchOfflineLocalChatCleanup({
               extensionRoot: context.extensionPath,
-              workspaceStorageDir: resolved.workspaceStorageDir,
-              keepSessionIds,
-              reportFilePath: getOfflineLocalChatCleanupReportPath(context.globalStorageUri.fsPath)
+              globalStorageDir: context.globalStorageUri.fsPath,
+              waitForPid: process.pid
             });
-            void vscode.window.showInformationMessage("Offline Local chat cleanup scheduled. Close VS Code completely to let the helper finish pruning workspace state.");
+            void vscode.window.showInformationMessage("Offline Local chat cleanup queued for the exact session target. Close VS Code completely to let the helper delete queued Local chat artifacts and prune scheduled workspace state.");
           }
         }, resolved);
       }),
@@ -556,17 +602,16 @@ function registerCommands(
           return;
         }
         await runCommand(async () => {
-          const liveChats = await chatInterop.listChats();
-          const keepSessionIds = liveChats
-            .filter((item) => item.provider === "workspaceStorage" && item.workspaceId === resolved.workspaceStorageDir.split(path.sep).at(-1))
-            .map((item) => item.id);
+          await queueOfflineLocalChatCleanupRequest(
+            context.globalStorageUri.fsPath,
+            buildWorkspaceStorageOfflineLocalChatCleanupRequest(resolved.workspaceStorageDir, resolved.sessionId)
+          );
           launchOfflineLocalChatCleanup({
             extensionRoot: context.extensionPath,
-            workspaceStorageDir: resolved.workspaceStorageDir,
-            keepSessionIds,
-            reportFilePath: getOfflineLocalChatCleanupReportPath(context.globalStorageUri.fsPath)
+            globalStorageDir: context.globalStorageUri.fsPath,
+            waitForPid: process.pid
           });
-          void vscode.window.showInformationMessage("Offline Local chat cleanup scheduled. Close VS Code completely to let the helper finish pruning workspace state.");
+          void vscode.window.showInformationMessage("Offline Local chat cleanup queued for the exact session target. Close VS Code completely to let the helper delete queued Local chat artifacts and prune scheduled workspace state.");
         }, resolved);
       })
     );
@@ -574,14 +619,62 @@ function registerCommands(
 
   if (LOCAL_CHAT_MUTATION_SURFACES_ENABLED) {
     context.subscriptions.push(
+      vscode.commands.registerCommand("aiRecoveryTooling.createDisposableLocalDeleteProbe", async (request?: DisposableDeleteProbeCommandRequest) => {
+        const showNotification = request?.showNotification ?? true;
+        const agentName = request?.agentName?.trim() || (showNotification ? await promptForAgentName("Create Disposable Local Delete Probe") : undefined);
+        if (!agentName) {
+          return {
+            anchor: request?.anchor?.trim() ?? "",
+            prompt: request?.prompt?.trim() ?? "",
+            result: {
+              ok: false,
+              reason: "An explicit agent name is required for safe disposable probe creation on this host."
+            }
+          } satisfies DisposableDeleteProbeCommandResult;
+        }
+        try {
+          const output = await createDisposableDeleteProbe(chatInterop, {
+            ...request,
+            agentName
+          });
+          if (showNotification) {
+            const message = output.result.ok
+              ? `${commandResultMessage(output.result, "Created disposable Local delete probe")} | anchor=${output.anchor}`
+              : `${commandResultMessage(output.result, "Unable to create disposable Local delete probe")} | anchor=${output.anchor}`;
+            if (output.result.ok) {
+              void vscode.window.showInformationMessage(message);
+            } else {
+              void vscode.window.showErrorMessage(message);
+            }
+          }
+          return output;
+        } catch (error) {
+          if (showNotification) {
+            await reportCommandError(error);
+          }
+          return {
+            anchor: request?.anchor?.trim() ?? "",
+            prompt: request?.prompt?.trim() ?? "",
+            result: {
+              ok: false,
+              error: errorMessage(error)
+            }
+          } satisfies DisposableDeleteProbeCommandResult;
+        }
+      }),
       vscode.commands.registerCommand("aiRecoveryTooling.createLiveChat", async () => {
         const prompt = await promptForChatPrompt("Create Local Chat");
         if (!prompt) {
           return;
         }
+        const agentName = await promptForAgentName("Create Local Chat");
+        if (!agentName) {
+          return;
+        }
         await runCommand(async () => {
           const result = await runWithProgress("Creating Local chat", () => chatInterop.createChat({
             prompt,
+            agentName,
             blockOnResponse: false
           }));
           if (!result.ok) {
@@ -604,20 +697,18 @@ function registerCommands(
           if (selfTargetReason) {
             throw new Error(selfTargetReason);
           }
-          const workflow = await runWithProgress("Sending message to Local chat", () => sendMessageToSessionWithFallback(chatInterop, {
+          const result = await runWithProgress("Sending message to Local chat", () => sendMessageToSession(chatInterop, {
             sessionId: resolved.sessionId,
             prompt,
             blockOnResponse: false
           }));
-          if (!workflow.result.ok) {
-            throw new Error(commandResultMessage(workflow.result, "Unable to send message to Local chat"));
+          if (!result.ok) {
+            throw new Error(commandResultMessage(result, "Unable to send message to Local chat"));
           }
           void vscode.window.showInformationMessage(
             commandResultMessage(
-              workflow.result,
-              workflow.usedFallback
-                ? "Sent message to Local chat via reveal + focused-chat fallback"
-                : "Sent message to Local chat"
+              result,
+              "Sent message to Local chat"
             )
           );
         }, resolved);

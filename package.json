@@ -1,6 +1,6 @@
 {
-  "name": "ai-vscode-recovery-tooling",
-  "displayName": "AI Recovery Tooling",
+  "name": "ai-vscode-tooling",
+  "displayName": "AI VS Code Tooling",
   "description": "Optional VS Code recovery tooling for persisted session inspection, artifact-read verification, and Local recovery validation.",
   "version": "0.1.0",
   "private": true,
@@ -30,9 +30,11 @@
     "onLanguageModelTool:get_agent_session_profile",
     "onLanguageModelTool:survey_agent_sessions",
     "onLanguageModelTool:list_live_agent_chats",
+    "onLanguageModelTool:create_disposable_local_delete_probe",
     "onLanguageModelTool:create_live_agent_chat",
     "onLanguageModelTool:close_visible_live_chat_tabs",
     "onLanguageModelTool:delete_live_agent_chat_artifacts",
+    "onLanguageModelTool:schedule_offline_live_agent_chat_cleanup",
     "onLanguageModelTool:send_message_to_live_agent_chat",
     "onLanguageModelTool:send_message_to_focused_live_chat",
     "onLanguageModelTool:reveal_live_agent_chat"
@@ -46,83 +48,87 @@
     "commands": [
       {
         "command": "aiRecoveryTooling.refreshSessions",
-        "title": "AI Recovery Tooling: Refresh Sessions"
+        "title": "AI VS Code Tooling: Refresh Sessions"
       },
       {
         "command": "aiRecoveryTooling.openLatestSnapshot",
-        "title": "AI Recovery Tooling: Open Latest Snapshot"
+        "title": "AI VS Code Tooling: Open Latest Snapshot"
       },
       {
         "command": "aiRecoveryTooling.openLatestTranscriptEvidence",
-        "title": "AI Recovery Tooling: Open Latest Evidence Transcript"
+        "title": "AI VS Code Tooling: Open Latest Evidence Transcript"
       },
       {
         "command": "aiRecoveryTooling.openLatestContextEstimate",
-        "title": "AI Recovery Tooling: Open Latest Context Estimate"
+        "title": "AI VS Code Tooling: Open Latest Context Estimate"
       },
       {
         "command": "aiRecoveryTooling.openLatestProfile",
-        "title": "AI Recovery Tooling: Open Latest Profile"
+        "title": "AI VS Code Tooling: Open Latest Profile"
       },
       {
         "command": "aiRecoveryTooling.surveyRecentSessions",
-        "title": "AI Recovery Tooling: Survey Recent Sessions"
+        "title": "AI VS Code Tooling: Survey Recent Sessions"
       },
       {
         "command": "aiRecoveryTooling.openTranscriptEvidence",
-        "title": "AI Recovery Tooling: Open Session Evidence Transcript"
+        "title": "AI VS Code Tooling: Open Session Evidence Transcript"
       },
       {
         "command": "aiRecoveryTooling.openSnapshot",
-        "title": "AI Recovery Tooling: Open Session Snapshot"
+        "title": "AI VS Code Tooling: Open Session Snapshot"
       },
       {
         "command": "aiRecoveryTooling.openContextEstimate",
-        "title": "AI Recovery Tooling: Open Session Context Estimate"
+        "title": "AI VS Code Tooling: Open Session Context Estimate"
       },
       {
         "command": "aiRecoveryTooling.openProfile",
-        "title": "AI Recovery Tooling: Open Session Profile"
+        "title": "AI VS Code Tooling: Open Session Profile"
       },
       {
         "command": "aiRecoveryTooling.openIndex",
-        "title": "AI Recovery Tooling: Open Session Index"
+        "title": "AI VS Code Tooling: Open Session Index"
       },
       {
         "command": "aiRecoveryTooling.openSessionFile",
-        "title": "AI Recovery Tooling: Open Raw Session File (Last Resort)"
+        "title": "AI VS Code Tooling: Open Raw Session File (Last Resort)"
       },
       {
         "command": "aiRecoveryTooling.listLiveChats",
-        "title": "AI Recovery Tooling: List Local Chats"
+        "title": "AI VS Code Tooling: List Local Chats"
       },
       {
         "command": "aiRecoveryTooling.revealLiveChat",
-        "title": "AI Recovery Tooling: Reveal Local Chat"
+        "title": "AI VS Code Tooling: Reveal Local Chat"
       },
       {
         "command": "aiRecoveryTooling.closeVisibleLiveChatTabs",
-        "title": "AI Recovery Tooling: Close Visible Local Chat Tabs"
+        "title": "AI VS Code Tooling: Close Visible Local Chat Tabs"
       },
       {
         "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
-        "title": "AI Recovery Tooling: Delete Local Chat Artifacts"
+        "title": "AI VS Code Tooling: Delete Local Chat Artifacts"
       },
       {
         "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
-        "title": "AI Recovery Tooling: Schedule Offline Local Chat Cleanup"
+        "title": "AI VS Code Tooling: Schedule Offline Local Chat Cleanup"
+      },
+      {
+        "command": "aiRecoveryTooling.createDisposableLocalDeleteProbe",
+        "title": "AI VS Code Tooling: Create Disposable Local Delete Probe"
       },
       {
         "command": "aiRecoveryTooling.createLiveChat",
-        "title": "AI Recovery Tooling: Create Local Chat"
+        "title": "AI VS Code Tooling: Create Local Chat"
       },
       {
         "command": "aiRecoveryTooling.sendMessageToLiveChat",
-        "title": "AI Recovery Tooling: Send Message To Local Chat"
+        "title": "AI VS Code Tooling: Send Message To Local Chat"
       },
       {
         "command": "aiRecoveryTooling.sendMessageToFocusedLiveChat",
-        "title": "AI Recovery Tooling: Send Message To Focused Local Chat"
+        "title": "AI VS Code Tooling: Send Message To Focused Local Chat"
       }
     ],
     "views": {
@@ -135,7 +141,7 @@
       ]
     },
     "configuration": {
-      "title": "AI Recovery Tooling",
+      "title": "AI VS Code Tooling",
       "properties": {
         "aiRecoveryTooling.showSessionsView": {
           "type": "boolean",
@@ -150,8 +156,7 @@
           ],
           "default": "current-workspace",
           "description": "Choose whether the Explorer session view and workspace commands use only the current workspace's session storage or all local workspaceStorage roots."
-        }
-        ,
+        },
         "aiRecoveryTooling.postCreateTimeoutMs": {
           "type": "number",
           "default": 90000,
@@ -168,6 +173,11 @@
       "view/title": [
         {
           "command": "aiRecoveryTooling.refreshSessions",
+          "when": "view == aiRecoveryTooling.sessions",
+          "group": "navigation"
+        },
+        {
+          "command": "aiRecoveryTooling.createDisposableLocalDeleteProbe",
           "when": "view == aiRecoveryTooling.sessions",
           "group": "navigation"
         },
@@ -753,6 +763,55 @@
         }
       },
       {
+        "name": "create_disposable_local_delete_probe",
+        "displayName": "Create Disposable Local Delete Probe",
+        "userDescription": "Create a disposable Local probe chat for destructive delete verification.",
+        "modelDescription": "Create a disposable Local probe chat specifically for destructive delete verification. This route generates or carries a unique anchor, uses the extension-hosted create path, and returns structured probe details so the target can be verified in persisted state before any destructive cleanup step. Prefer this over shell-side bootstrap helpers when you need a disposable test chat rather than a general new Local chat.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "create-disposable-local-delete-probe",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "anchor": {
+              "type": "string",
+              "description": "Optional explicit anchor to embed in the disposable probe prompt. If omitted, a unique delete-probe anchor is generated."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "Optional probe prompt body. If omitted, the default READY probe prompt is used and prefixed with the anchor."
+            },
+            "agentName": {
+              "type": "string",
+              "description": "Optional custom agent selector to prefix as #agentName in the dispatched probe prompt."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Optional chat mode, for example Agent."
+            },
+            "modelId": {
+              "type": "string",
+              "description": "Optional model identifier to select for the disposable probe chat."
+            },
+            "modelVendor": {
+              "type": "string",
+              "description": "Optional model vendor for the probe model selector."
+            },
+            "partialQuery": {
+              "type": "boolean",
+              "description": "Open the probe with a partial query instead of dispatching a full request when supported."
+            },
+            "blockOnResponse": {
+              "type": "boolean",
+              "description": "Block until the probe response is produced when supported by the underlying chat command."
+            },
+            "requireSelectionEvidence": {
+              "type": "boolean",
+              "description": "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
+            }
+          }
+        }
+      },
+      {
         "name": "create_live_agent_chat",
         "displayName": "Create Live Agent Chat",
         "userDescription": "Low-level new-chat create route. Prefer Send Message With Lifecycle when agent or model stability matters.",
@@ -833,6 +892,26 @@
             "sessionId": {
               "type": "string",
               "description": "Exact session identifier for the live chat whose persisted artifacts should be deleted from disk. Prefixes are rejected for this destructive route."
+            }
+          },
+          "required": [
+            "sessionId"
+          ]
+        }
+      },
+      {
+        "name": "schedule_offline_live_agent_chat_cleanup",
+        "displayName": "Schedule Offline Live Chat Cleanup",
+        "userDescription": "Queue exact offline cleanup for one live chat session after VS Code exits.",
+        "modelDescription": "Queue exact offline cleanup for one Local live chat session after VS Code exits. This destructive route requires the full session id, derives exact artifact paths for the target workspaceStorage session, and launches the detached offline cleanup runtime that waits for VS Code to close before pruning queued artifacts and state. Use this when direct delete should not run immediately or when you want the same exact-target semantics preserved for deferred cleanup.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "schedule-offline-live-chat-cleanup",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Exact session identifier for the live chat whose offline cleanup should be queued. Prefixes are rejected for this destructive route."
             }
           },
           "required": [

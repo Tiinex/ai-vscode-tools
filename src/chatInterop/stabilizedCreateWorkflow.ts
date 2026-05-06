@@ -1,12 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { sendMessageToSessionWithFallback, type SessionSendWorkflowResult } from "./sessionSendWorkflow";
+import { sendMessageToSession } from "./sessionSendWorkflow";
 import type { ChatCommandResult, ChatInteropApi, ChatModelSelector, ChatSessionSummary, CreateChatRequest } from "./types";
 
 export interface StabilizedCreateAndSendResult {
   createResult: ChatCommandResult;
-  workflow: SessionSendWorkflowResult;
+  workflow: ChatCommandResult;
   seedPrompt: string;
   realPromptDispatchAttempted: boolean;
   patchedModeId?: string;
@@ -41,10 +41,7 @@ export async function createStabilizedChatAndSend(
   if (!createResult.ok || !createResult.session) {
     return {
       createResult,
-      workflow: {
-        result: createResult,
-        usedFallback: false
-      },
+      workflow: createResult,
       seedPrompt,
       realPromptDispatchAttempted: false
     };
@@ -55,16 +52,13 @@ export async function createStabilizedChatAndSend(
     return {
       createResult,
       workflow: {
-        result: {
-          ok: false,
-          reason: seedReadiness.observedNonTokenContent
-            ? "Seed create session produced non-token content before the real prompt could be sent."
-            : "Seed create session did not reach a settled persisted state before the real prompt could be sent.",
-          session: createResult.session,
-          selection: createResult.selection,
-          revealLifecycle: createResult.revealLifecycle
-        },
-        usedFallback: false
+        ok: false,
+        reason: seedReadiness.observedNonTokenContent
+          ? "Seed create session produced non-token content before the real prompt could be sent."
+          : "Seed create session did not reach a settled persisted state before the real prompt could be sent.",
+        session: createResult.session,
+        selection: createResult.selection,
+        revealLifecycle: createResult.revealLifecycle
       },
       seedPrompt,
       realPromptDispatchAttempted: false
@@ -80,14 +74,11 @@ export async function createStabilizedChatAndSend(
         session: settledSeedSession
       },
       workflow: {
-        result: {
-          ok: false,
-          reason: `Seed create session picked up control-thread artifacts before the real prompt was sent: ${(settledSeedSession.controlThreadArtifactKinds ?? []).join(", ") || "unknown"}.`,
-          session: settledSeedSession,
-          selection: createResult.selection,
-          revealLifecycle: createResult.revealLifecycle
-        },
-        usedFallback: false
+        ok: false,
+        reason: `Seed create session picked up control-thread artifacts before the real prompt was sent: ${(settledSeedSession.controlThreadArtifactKinds ?? []).join(", ") || "unknown"}.`,
+        session: settledSeedSession,
+        selection: createResult.selection,
+        revealLifecycle: createResult.revealLifecycle
       },
       seedPrompt,
       realPromptDispatchAttempted: false
@@ -103,7 +94,7 @@ export async function createStabilizedChatAndSend(
     ? await appendModelPatch(createResult.session, request.modelSelector)
     : undefined;
 
-  const workflow = await sendMessageToSessionWithFallback(chatInterop, {
+  const workflow = await sendMessageToSession(chatInterop, {
     sessionId: createResult.session.id,
     prompt: request.prompt,
     agentName: request.agentName,
@@ -147,6 +138,14 @@ async function waitForSeedSessionReady(
       return {
         session,
         tokenObserved: true,
+        observedNonTokenContent
+      };
+    }
+
+    if (!fileEvidence.observedNonTokenContent && isSettledSession(session)) {
+      return {
+        session,
+        tokenObserved: false,
         observedNonTokenContent
       };
     }

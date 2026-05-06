@@ -5,7 +5,7 @@ import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
 import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
 import { probeLocalReopenCandidates, renderLocalReopenProbeMarkdown } from "./chatInterop/reopenProbe";
-import { sendMessageToSessionWithFallback } from "./chatInterop/sessionSendWorkflow";
+import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
 import { createStabilizedChatAndSend } from "./chatInterop/stabilizedCreateWorkflow";
 import { getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
 import {
@@ -28,6 +28,11 @@ import {
   LOCAL_CHAT_RUNTIME_SURFACES_ENABLED,
   isFirstSliceSessionTool
 } from "./firstSlice";
+import {
+  buildWorkspaceStorageOfflineLocalChatCleanupRequest,
+  launchOfflineLocalChatCleanup,
+  queueOfflineLocalChatCleanupRequest
+} from "./offlineLocalChatCleanup";
 
 type JsonSchema = Record<string, unknown>;
 type DetailLevel = "summary" | "full";
@@ -149,6 +154,10 @@ interface DeleteLiveChatArtifactsInput {
   sessionId: string;
 }
 
+interface ScheduleOfflineLiveChatCleanupInput {
+  sessionId: string;
+}
+
 interface FocusedEditorChatSelectionInput {
   sessionId?: string;
 }
@@ -162,6 +171,17 @@ interface LiveChatMutationInput {
   partialQuery?: boolean;
   blockOnResponse?: boolean;
   requireSelectionEvidence?: boolean;
+}
+
+interface CreateDisposableLocalDeleteProbeInput extends Omit<LiveChatMutationInput, "prompt"> {
+  prompt?: string;
+  anchor?: string;
+}
+
+interface DisposableDeleteProbeCommandResult {
+  anchor: string;
+  prompt: string;
+  result: ChatCommandResult;
 }
 
 interface StabilizedLiveChatMutationInput extends LiveChatMutationInput {}
@@ -602,6 +622,54 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: "create_disposable_local_delete_probe",
+    displayName: "Create Disposable Local Delete Probe",
+    userDescription: "Create a disposable Local probe chat for destructive delete verification.",
+    modelDescription: "Create a disposable Local probe chat specifically for destructive delete verification. This route generates or carries a unique anchor, uses the extension-hosted create path, and returns structured probe details so the target can be verified in persisted state before any destructive cleanup step. Prefer this over shell-side bootstrap helpers when you need a disposable test chat rather than a general new Local chat.",
+    toolReferenceName: "create-disposable-local-delete-probe",
+    inputSchema: {
+      type: "object",
+      properties: {
+        anchor: {
+          type: "string",
+          description: "Optional explicit anchor to embed in the disposable probe prompt. If omitted, a unique delete-probe anchor is generated."
+        },
+        prompt: {
+          type: "string",
+          description: "Optional probe prompt body. If omitted, the default READY probe prompt is used and prefixed with the anchor."
+        },
+        agentName: {
+          type: "string",
+          description: "Optional custom agent selector to prefix as #agentName in the dispatched probe prompt."
+        },
+        mode: {
+          type: "string",
+          description: "Optional chat mode, for example Agent."
+        },
+        modelId: {
+          type: "string",
+          description: "Optional model identifier to select for the disposable probe chat."
+        },
+        modelVendor: {
+          type: "string",
+          description: "Optional model vendor for the probe model selector."
+        },
+        partialQuery: {
+          type: "boolean",
+          description: "Open the probe with a partial query instead of dispatching a full request when supported."
+        },
+        blockOnResponse: {
+          type: "boolean",
+          description: "Block until the probe response is produced when supported by the underlying chat command."
+        },
+        requireSelectionEvidence: {
+          type: "boolean",
+          description: "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
+        }
+      }
+    }
+  },
+  {
     name: "close_visible_live_chat_tabs",
     displayName: "Close Visible Live Chat Tabs",
     userDescription: "Close visible editor-hosted live chat tabs for one exact session.",
@@ -674,6 +742,23 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         }
       },
       required: ["prompt"]
+    }
+  },
+  {
+    name: "schedule_offline_live_agent_chat_cleanup",
+    displayName: "Schedule Offline Live Chat Cleanup",
+    userDescription: "Queue exact offline cleanup for one live chat session after VS Code exits.",
+    modelDescription: "Queue exact offline cleanup for one Local live chat session after VS Code exits. This destructive route requires the full session id, derives exact artifact paths for the target workspaceStorage session, and launches the detached offline cleanup runtime that waits for VS Code to close before pruning queued artifacts and state. Use this when direct delete should not run immediately or when you want the same exact-target semantics preserved for deferred cleanup.",
+    toolReferenceName: "schedule-offline-live-chat-cleanup",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "Exact session identifier for the live chat whose offline cleanup should be queued. Prefixes are rejected for this destructive route."
+        }
+      },
+      required: ["sessionId"]
     }
   },
   {
@@ -985,6 +1070,20 @@ function toCreateChatRequest(input: LiveChatMutationInput): CreateChatRequest {
   };
 }
 
+function toDisposableDeleteProbeCommandRequest(input: CreateDisposableLocalDeleteProbeInput): Record<string, unknown> {
+  return {
+    anchor: input.anchor,
+    prompt: input.prompt,
+    agentName: input.agentName,
+    mode: input.mode,
+    modelSelector: input.modelId ? { id: input.modelId, vendor: input.modelVendor } : undefined,
+    partialQuery: input.partialQuery,
+    blockOnResponse: input.blockOnResponse,
+    requireSelectionEvidence: input.requireSelectionEvidence,
+    showNotification: false
+  };
+}
+
 function toSendChatMessageRequest(input: SendLiveChatMessageInput): SendChatMessageRequest {
   return {
     sessionId: input.sessionId,
@@ -1024,7 +1123,6 @@ async function tryPrepareLatestSessionTransportWorkaround(
   if (!decoyResult.ok || !decoyResult.session?.id) {
     throw new Error(decoyResult.reason ?? decoyResult.error ?? "Failed to create the transport decoy chat needed to break latest-session ambiguity.");
   }
-
   return [
     "Transport Workaround Used: latest-session decoy",
     `Transport Decoy Session ID: ${decoyResult.session.id}`,
@@ -1093,6 +1191,19 @@ function formatChatMutationResult(
   return lines.join("\n");
 }
 
+function formatDisposableDeleteProbeResult(output: DisposableDeleteProbeCommandResult): string {
+  return formatChatMutationResult(
+    "Disposable Local Delete Probe Created",
+    output.result.session,
+    output.result.selection,
+    output.result.revealLifecycle,
+    [
+      `Probe Anchor: ${output.anchor}`,
+      `Probe Prompt: ${JSON.stringify(output.prompt)}`
+    ]
+  );
+}
+
 function formatArtifactDeletionNotes(report: ChatCommandResult["artifactDeletion"]): string[] {
   if (!report) {
     return [];
@@ -1110,8 +1221,8 @@ function formatStabilizedLifecycleResult(
   result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>,
   extraNotes: string[] = []
 ): string {
-  if (!result.workflow.result.ok) {
-    throw new Error(result.workflow.result.reason ?? result.workflow.result.error ?? "Failed to complete stabilized live chat lifecycle.");
+  if (!result.workflow.ok) {
+    throw new Error(result.workflow.reason ?? result.workflow.error ?? "Failed to complete stabilized live chat lifecycle.");
   }
 
   const notes = [
@@ -1120,20 +1231,14 @@ function formatStabilizedLifecycleResult(
     `Resolved Mode For Stabilization: ${result.resolvedModeId ?? "-"}`,
     `Persisted Mode Patch Applied: ${result.patchedModeId ?? "no"}`,
     `Persisted Model Patch Applied: ${result.patchedModelId ?? "no"}`,
-    ...(result.workflow.usedFallback && result.workflow.fallbackReason
-      ? [
-        "Fallback Used: yes",
-        `Fallback Basis: ${result.workflow.fallbackReason}`
-      ]
-      : []),
     ...extraNotes
   ];
 
   return formatChatMutationResult(
     "Live Agent Chat Updated Via Stabilized Lifecycle",
-    result.workflow.result.session,
-    result.workflow.result.selection,
-    result.workflow.result.revealLifecycle,
+    result.workflow.session,
+    result.workflow.selection,
+    result.workflow.revealLifecycle,
     notes
   );
 }
@@ -1145,7 +1250,7 @@ async function tryRecoverCompletedStabilizedLifecycle(
   chatInterop: ChatInteropApi,
   result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>
 ): Promise<{ result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>; notes: string[] } | undefined> {
-  if (result.workflow.result.ok) {
+  if (result.workflow.ok) {
     return undefined;
   }
 
@@ -1153,7 +1258,7 @@ async function tryRecoverCompletedStabilizedLifecycle(
     return undefined;
   }
 
-  const sessionId = result.workflow.result.session?.id ?? result.createResult.session?.id;
+  const sessionId = result.workflow.session?.id ?? result.createResult.session?.id;
   if (!sessionId) {
     return undefined;
   }
@@ -1168,15 +1273,12 @@ async function tryRecoverCompletedStabilizedLifecycle(
       ...result,
       workflow: {
         ...result.workflow,
-        result: {
-          ...result.workflow.result,
-          ok: true,
-          reason: undefined,
-          error: undefined,
-          session: recoveredSession,
-          selection: result.workflow.result.selection ?? result.createResult.selection,
-          revealLifecycle: result.workflow.result.revealLifecycle ?? result.createResult.revealLifecycle
-        }
+        ok: true,
+        reason: undefined,
+        error: undefined,
+        session: recoveredSession,
+        selection: result.workflow.selection ?? result.createResult.selection,
+        revealLifecycle: result.workflow.revealLifecycle ?? result.createResult.revealLifecycle
       }
     },
     notes: [
@@ -1232,7 +1334,7 @@ async function throwOnUnsafeStabilizedCreateSelection(
   input: LiveChatMutationInput,
   result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>
 ): Promise<void> {
-  const selection = result.workflow.result.selection;
+  const selection = result.workflow.selection;
   if (!selection) {
     return;
   }
@@ -1254,7 +1356,7 @@ async function throwOnUnsafeStabilizedCreateSelection(
     return;
   }
 
-  const sessionId = result.workflow.result.session?.id ?? result.createResult.session?.id;
+  const sessionId = result.workflow.session?.id ?? result.createResult.session?.id;
   let cleanupNote = "";
   if (sessionId) {
     const cleanupResult = await chatInterop.closeVisibleTabs(sessionId);
@@ -1289,6 +1391,78 @@ async function assertNotSelfTargetingLiveChat(
   if (reason) {
     throw new Error(reason);
   }
+}
+
+function tryGetWorkspaceStorageDir(session: ChatSessionSummary): string | undefined {
+  if (session.provider !== "workspaceStorage") {
+    return undefined;
+  }
+
+  return path.dirname(path.dirname(session.sessionFile));
+}
+
+async function resolveExactWorkspaceStorageLiveChatForOfflineCleanup(
+  chatInterop: ChatInteropApi,
+  targetSessionId: string
+): Promise<{ session: ChatSessionSummary; workspaceStorageDir: string }> {
+  const chats = await chatInterop.listChats();
+  const exact = chats.find((chat) => chat.id === targetSessionId);
+  if (!exact) {
+    const prefixMatches = chats.filter((chat) => chat.id.startsWith(targetSessionId));
+    if (prefixMatches.length > 0) {
+      throw new Error(`Scheduled offline cleanup requires the full session id. Prefix ${JSON.stringify(targetSessionId)} matched ${prefixMatches.length} live chat(s).`);
+    }
+    throw new Error(`No live agent chat with exact session id ${JSON.stringify(targetSessionId)} was found.`);
+  }
+
+  const workspaceStorageDir = tryGetWorkspaceStorageDir(exact);
+  if (!workspaceStorageDir) {
+    throw new Error(`Live chat ${JSON.stringify(targetSessionId)} is not backed by workspaceStorage and cannot be queued for offline cleanup.`);
+  }
+
+  return {
+    session: exact,
+    workspaceStorageDir
+  };
+}
+
+function formatOfflineCleanupQueuedResult(
+  session: ChatSessionSummary,
+  workspaceStorageDir: string,
+  requestsPath: string,
+  globalStorageDir: string
+): string {
+  return [
+    "# Offline Live Chat Cleanup Queued",
+    "",
+    `- Session ID: ${session.id}`,
+    `- Title: ${session.title ?? "-"}`,
+    `- Workspace Storage Dir: ${workspaceStorageDir}`,
+    `- Queue File: ${requestsPath}`,
+    `- Global Storage Dir: ${globalStorageDir}`,
+    "- Next Step: close VS Code completely so the detached offline cleanup runtime can delete queued artifacts and prune scheduled workspace state."
+  ].join("\n");
+}
+
+async function scheduleOfflineLiveChatCleanup(
+  context: vscode.ExtensionContext,
+  chatInterop: ChatInteropApi,
+  targetSessionId: string
+): Promise<string> {
+  // This route only queues exact-target cleanup for after VS Code exits, so it
+  // must not inherit the live delete self-target heuristic.
+  const { session, workspaceStorageDir } = await resolveExactWorkspaceStorageLiveChatForOfflineCleanup(chatInterop, targetSessionId);
+  const globalStorageDir = context.globalStorageUri.fsPath;
+  const requestsPath = await queueOfflineLocalChatCleanupRequest(
+    globalStorageDir,
+    buildWorkspaceStorageOfflineLocalChatCleanupRequest(workspaceStorageDir, session.id)
+  );
+  launchOfflineLocalChatCleanup({
+    extensionRoot: context.extensionPath,
+    globalStorageDir,
+    waitForPid: process.pid
+  });
+  return formatOfflineCleanupQueuedResult(session, workspaceStorageDir, requestsPath, globalStorageDir);
 }
 
 async function assertFocusedLiveChatNotSelfTargeting(
@@ -1485,6 +1659,22 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           )
         ),
         vscode.lm.registerTool(
+          "create_disposable_local_delete_probe",
+          new LiveChatTool<CreateDisposableLocalDeleteProbeInput>(
+            () => "Creating a disposable Local delete probe",
+            async (input) => {
+              const output = await vscode.commands.executeCommand(
+                "aiRecoveryTooling.createDisposableLocalDeleteProbe",
+                toDisposableDeleteProbeCommandRequest(input)
+              ) as DisposableDeleteProbeCommandResult | undefined;
+              if (!output || !output.result.ok) {
+                throw new Error(output?.result.reason ?? output?.result.error ?? "Failed to create disposable Local delete probe.");
+              }
+              return formatDisposableDeleteProbeResult(output);
+            }
+          )
+        ),
+        vscode.lm.registerTool(
           "close_visible_live_chat_tabs",
           new LiveChatTool<CloseVisibleLiveChatTabsInput>(
             (input) => `Closing visible live chat tabs for ${JSON.stringify(input.sessionId)}`,
@@ -1516,6 +1706,13 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
                 formatArtifactDeletionNotes(result.artifactDeletion)
               );
             }
+          )
+        ),
+        vscode.lm.registerTool(
+          "schedule_offline_live_agent_chat_cleanup",
+          new LiveChatTool<ScheduleOfflineLiveChatCleanupInput>(
+            (input) => `Queueing offline live chat cleanup for ${JSON.stringify(input.sessionId)}`,
+            async (input) => scheduleOfflineLiveChatCleanup(context, chatInterop, input.sessionId)
           )
         ),
         vscode.lm.registerTool(
@@ -1557,26 +1754,16 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             async (input) => {
               const request = toSendChatMessageRequest(input);
               const transportNotes = await tryPrepareLatestSessionTransportWorkaround(chatInterop, request);
-              const workflow = await sendMessageToSessionWithFallback(chatInterop, request);
-              if (!workflow.result.ok) {
-                throw new Error(workflow.result.reason ?? workflow.result.error ?? `Failed to send a message to live agent chat ${input.sessionId}.`);
+              const result = await sendMessageToSession(chatInterop, request);
+              if (!result.ok) {
+                throw new Error(result.reason ?? result.error ?? `Failed to send a message to live agent chat ${input.sessionId}.`);
               }
               return formatChatMutationResult(
-                workflow.usedFallback
-                  ? "Live Agent Chat Updated Via Reveal And Focused Editor Fallback"
-                  : "Live Agent Chat Updated",
-                workflow.result.session,
-                workflow.result.selection,
-                workflow.result.revealLifecycle,
-                [
-                  ...(workflow.usedFallback && workflow.fallbackReason
-                    ? [
-                      `Fallback Used: yes`,
-                      `Fallback Basis: ${workflow.fallbackReason}`
-                    ]
-                    : []),
-                  ...transportNotes
-                ]
+                "Live Agent Chat Updated",
+                result.session,
+                result.selection,
+                result.revealLifecycle,
+                transportNotes
               );
             }
           )
@@ -1716,131 +1903,6 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
       )
     ),
     vscode.lm.registerTool(
-      "list_live_agent_chats",
-      new LiveChatTool<ListLiveChatsInput>(
-        () => "Listing live agent chat sessions",
-        async (input) => renderLiveChatList(await chatInterop.listChats(), input.limit ?? 20)
-      )
-    ),
-    vscode.lm.registerTool(
-      "create_live_agent_chat",
-      new LiveChatTool<LiveChatMutationInput>(
-        () => "Creating a new live agent chat",
-        async (input) => {
-          const result = await chatInterop.createChat(toCreateChatRequest(input));
-          if (!result.ok) {
-            throw new Error(result.reason ?? result.error ?? "Failed to create live agent chat.");
-          }
-          if (hasObservedCustomAgentMismatch(input.agentName, result.selection)) {
-            let cleanupNote = "";
-            if (result.session?.id) {
-              const cleanupResult = await chatInterop.closeVisibleTabs(result.session.id);
-              if (cleanupResult.ok) {
-                const closedCount = cleanupResult.revealLifecycle?.closedMatchingVisibleTabs ?? 0;
-                cleanupNote = ` Visible cleanup closed ${closedCount} matching tabs for the mismatched chat.`;
-              }
-            }
-            throw new Error(
-              `Requested agent resolved to the wrong persisted participant: ${formatSelectionCheck(result.selection?.agent ?? { status: "unverified" })}. This run is a setup failure on this build, not valid custom-agent evidence.${cleanupNote}`
-            );
-          }
-          return formatChatMutationResult("Live Agent Chat Created", result.session, result.selection, result.revealLifecycle);
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "close_visible_live_chat_tabs",
-      new LiveChatTool<CloseVisibleLiveChatTabsInput>(
-        (input) => `Closing visible live chat tabs for ${JSON.stringify(input.sessionId)}`,
-        async (input) => {
-          await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "close-visible-tabs");
-          const result = await chatInterop.closeVisibleTabs(input.sessionId);
-          if (!result.ok) {
-            throw new Error(result.reason ?? result.error ?? `Failed to close visible live chat tabs for ${input.sessionId}.`);
-          }
-          return formatChatMutationResult("Visible Live Chat Tabs Closed", result.session, result.selection, result.revealLifecycle);
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "delete_live_agent_chat_artifacts",
-      new LiveChatTool<DeleteLiveChatArtifactsInput>(
-        (input) => `Deleting live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
-        async (input) => {
-          await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "delete-artifacts");
-          const result = await chatInterop.deleteChat(input.sessionId);
-          if (!result.ok) {
-            throw new Error(result.reason ?? result.error ?? `Failed to delete live agent chat artifacts for ${input.sessionId}.`);
-          }
-          return formatChatMutationResult(
-            "Live Agent Chat Artifacts Deleted",
-            result.session,
-            result.selection,
-            result.revealLifecycle,
-            formatArtifactDeletionNotes(result.artifactDeletion)
-          );
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "send_message_with_lifecycle",
-      new LiveChatTool<StabilizedLiveChatMutationInput>(
-        () => "Creating or continuing a live agent chat through the stabilized lifecycle",
-        async (input) => {
-          const initialResult = await createStabilizedChatAndSend(chatInterop, toCreateChatRequest(input));
-          const recovered = await tryRecoverCompletedStabilizedLifecycle(chatInterop, initialResult);
-          const result = recovered?.result ?? initialResult;
-          await throwOnUnsafeStabilizedCreateSelection(chatInterop, input, result);
-          return formatStabilizedLifecycleResult(result, recovered?.notes);
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "send_message_to_live_agent_chat",
-      new LiveChatTool<SendLiveChatMessageInput>(
-        (input) => `Sending a message to live agent chat ${JSON.stringify(input.sessionId)}`,
-        async (input) => {
-          const request = toSendChatMessageRequest(input);
-          const transportNotes = await tryPrepareLatestSessionTransportWorkaround(chatInterop, request);
-          const workflow = await sendMessageToSessionWithFallback(chatInterop, request);
-          if (!workflow.result.ok) {
-            throw new Error(workflow.result.reason ?? workflow.result.error ?? `Failed to send a message to live agent chat ${input.sessionId}.`);
-          }
-          return formatChatMutationResult(
-            workflow.usedFallback
-              ? "Live Agent Chat Updated Via Reveal And Focused Editor Fallback"
-              : "Live Agent Chat Updated",
-            workflow.result.session,
-            workflow.result.selection,
-            workflow.result.revealLifecycle,
-            [
-              ...(workflow.usedFallback && workflow.fallbackReason
-                ? [
-                  `Fallback Used: yes`,
-                  `Fallback Basis: ${workflow.fallbackReason}`
-                ]
-                : []),
-              ...transportNotes
-            ]
-          );
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "send_message_to_focused_live_chat",
-      new LiveChatTool<FocusedLiveChatMutationInput>(
-        () => "Sending a message to the currently focused live chat",
-        async (input) => {
-          await assertFocusedLiveChatNotSelfTargeting(chatInterop, "focused-send");
-          const result = await chatInterop.sendFocusedMessage(toCreateChatRequest(input));
-          if (!result.ok) {
-            throw new Error(result.reason ?? result.error ?? "Failed to send a message to the currently focused live chat.");
-          }
-          return formatChatMutationResult("Focused Live Agent Chat Updated", result.session, result.selection, result.revealLifecycle);
-        }
-      )
-    ),
-    vscode.lm.registerTool(
       "focus_visible_editor_live_chat",
       new LiveChatTool<FocusedEditorChatSelectionInput>(
         (input) => input.sessionId
@@ -1877,20 +1939,6 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             throw new Error(result.reason ?? result.error ?? "Failed to send a message to the focused editor chat.");
           }
           return formatChatMutationResult("Focused Editor Live Agent Chat Updated", result.session, result.selection, result.revealLifecycle);
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "reveal_live_agent_chat",
-      new LiveChatTool<LiveChatSelectionInput>(
-        (input) => `Revealing live agent chat ${JSON.stringify(input.sessionId)}`,
-        async (input) => {
-          await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "reveal");
-          const result = await chatInterop.revealChat(input.sessionId);
-          if (!result.ok) {
-            throw new Error(result.reason ?? result.error ?? `Failed to reveal live agent chat ${input.sessionId}.`);
-          }
-          return formatChatMutationResult("Live Agent Chat Revealed", result.session, result.selection, result.revealLifecycle);
         }
       )
     )

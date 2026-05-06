@@ -1,6 +1,6 @@
 const GENERIC_SESSION_OPEN_COMMAND_CANDIDATES = [
-  "workbench.action.chat.openSession",
-  "workbench.action.chat.openSessionInEditorGroup"
+  "workbench.action.chat.openSessionInEditorGroup",
+  "workbench.action.chat.openSession"
 ] as const;
 
 const GENERIC_SESSION_OPEN_WITH_PROMPT_COMMAND_CANDIDATES = [

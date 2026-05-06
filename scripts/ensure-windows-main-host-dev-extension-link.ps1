@@ -6,8 +6,11 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $extensionsRoot = Join-Path $env:USERPROFILE '.vscode\extensions'
-$linkPath = Join-Path $extensionsRoot 'local.ai-vscode-recovery-tooling'
-$legacyLinkPath = Join-Path $extensionsRoot 'local.agent-architect-tools'
+$linkPath = Join-Path $extensionsRoot 'local.ai-vscode-tooling'
+$legacyLinkPaths = @(
+    (Join-Path $extensionsRoot 'local.ai-vscode-recovery-tooling'),
+    (Join-Path $extensionsRoot 'local.agent-architect-tools')
+)
 $extensionsJsonPath = Join-Path $extensionsRoot 'extensions.json'
 $distEntry = Join-Path $repoRoot 'dist\extension.js'
 
@@ -47,7 +50,7 @@ function Remove-LegacyExtensionLinkIfSafe {
         return $false
     }
 
-    Remove-Item $Path -Force
+    Remove-Item $Path -Force -Recurse
     return $true
 }
 
@@ -154,9 +157,15 @@ function Repair-ExtensionRegistryMetadata {
         return $false
     }
 
-    $targetId = 'local.ai-vscode-recovery-tooling'
-    $legacyId = 'local.agent-architect-tools'
-    $updatedRaw = $raw.Replace($legacyId, $targetId)
+    $targetId = 'local.ai-vscode-tooling'
+    $legacyIds = @(
+        'local.ai-vscode-recovery-tooling',
+        'local.agent-architect-tools'
+    )
+    $updatedRaw = $raw
+    foreach ($legacyId in $legacyIds) {
+        $updatedRaw = $updatedRaw.Replace($legacyId, $targetId)
+    }
     if ($updatedRaw -eq $raw) {
         return $false
     }
@@ -168,7 +177,12 @@ function Repair-ExtensionRegistryMetadata {
 
 New-Item -ItemType Directory -Force -Path $extensionsRoot | Out-Null
 
-$legacyLinkRemoved = Remove-LegacyExtensionLinkIfSafe -Path $legacyLinkPath
+$legacyLinkRemoved = $false
+foreach ($legacyLinkPath in $legacyLinkPaths) {
+    if (Remove-LegacyExtensionLinkIfSafe -Path $legacyLinkPath) {
+        $legacyLinkRemoved = $true
+    }
+}
 
 if (Test-Path $linkPath) {
     $existing = Get-Item $linkPath -Force

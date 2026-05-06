@@ -298,6 +298,7 @@ export class ChatSessionStorage {
 
     if (session.provider === "workspaceStorage") {
       const storageDir = path.dirname(path.dirname(session.sessionFile));
+      attemptedPaths.add(path.join(storageDir, "chatEditingSessions", session.id));
       attemptedPaths.add(path.join(storageDir, "chatEditingSessions", `${session.id}.jsonl`));
       attemptedPaths.add(path.join(storageDir, "transcripts", `${session.id}.jsonl`));
       attemptedPaths.add(path.join(storageDir, "GitHub.copilot-chat", "transcripts", `${session.id}.jsonl`));

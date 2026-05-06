@@ -29,8 +29,9 @@ export function getLocalChatEditorTabMatchKind(
   const input = summarizeTabInput(tab.input);
   const resourceValues = [input.uri, ...input.stringHints].filter((value): value is string => Boolean(value));
   const targetResource = normalize(toLocalChatSessionResourceString(request.sessionId));
-  const hasAnyLocalSessionResource = resourceValues.some((value) => normalize(value).includes("vscode-chat-session://local/"));
-  if (resourceValues.some((value) => normalize(value).includes(targetResource))) {
+  const extractedLocalResources = resourceValues.flatMap(extractLocalSessionResources).map(normalize);
+  const hasAnyLocalSessionResource = extractedLocalResources.length > 0;
+  if (extractedLocalResources.some((value) => value === targetResource)) {
     return "resource";
   }
 
@@ -49,6 +50,10 @@ export function getLocalChatEditorTabMatchKind(
   return matchesChatFocusTargetTitle(toChatFocusTabSummary(tab, input), request.sessionTitle)
     ? "title"
     : "none";
+}
+
+function extractLocalSessionResources(value: string): string[] {
+  return [...value.matchAll(/vscode-chat-session:\/\/local\/[A-Za-z0-9+/=]+/g)].map((match) => match[0]);
 }
 
 function toChatFocusTabSummary(

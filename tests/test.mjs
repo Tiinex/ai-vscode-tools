@@ -13,6 +13,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(scriptDir, "..");
 const workspaceRoot = packageRoot;
 const distCli = path.join(packageRoot, "dist", "tooling", "cli.js");
+const distOfflineLocalChatCleanupCli = path.join(packageRoot, "dist", "tooling", "offlineLocalChatCleanupCli.js");
 const distServer = path.join(packageRoot, "dist", "tooling", "mcp-server.js");
 const benchmarkSessionFile = path.join(
   workspaceRoot,
@@ -33,6 +34,7 @@ const distChatInteropStorage = path.join(packageRoot, "dist", "chatInterop", "st
 const distChatInteropSessionSendWorkflow = path.join(packageRoot, "dist", "chatInterop", "sessionSendWorkflow.js");
 const distChatInteropStabilizedCreateWorkflow = path.join(packageRoot, "dist", "chatInterop", "stabilizedCreateWorkflow.js");
 const distOfflineLocalChatCleanup = path.join(packageRoot, "dist", "offlineLocalChatCleanup.js");
+const distDisposableDeleteProbe = path.join(packageRoot, "dist", "disposableDeleteProbe.js");
 const distFirstSlice = path.join(packageRoot, "dist", "firstSlice.js");
 const distCopilotCliSummary = path.join(packageRoot, "dist", "chatInterop", "copilotCliSummary.js");
 const distLocalToCopilotCliHandoff = path.join(packageRoot, "dist", "chatInterop", "localToCopilotCliHandoff.js");
@@ -41,7 +43,9 @@ const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "toolin
 const distToolingCore = path.join(packageRoot, "dist", "tooling", "core.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
+const toolingInstructionPath = path.join(packageRoot, ".github", "instructions", "fix-and-improve-tooling.temporary.instructions.md");
 const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
+const disposableProbeFallbackScriptPath = path.join(packageRoot, "tools", "create-disposable-local-chat-probe.ps1");
 const sqlJsDistRoot = path.join(packageRoot, "node_modules", "sql.js", "dist");
 const expectedToolNames = [
   "listSessions",
@@ -68,9 +72,11 @@ const expectedLanguageModelToolNames = [
   "get_agent_session_profile",
   "survey_agent_sessions",
   "list_live_agent_chats",
+  "create_disposable_local_delete_probe",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",
+  "schedule_offline_live_agent_chat_cleanup",
   "send_message_to_live_agent_chat",
   "send_message_to_focused_live_chat",
   "reveal_live_agent_chat"
@@ -94,6 +100,7 @@ const expectedExtensionCommandNames = [
   "aiRecoveryTooling.closeVisibleLiveChatTabs",
   "aiRecoveryTooling.deleteLiveChatArtifacts",
   "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
+  "aiRecoveryTooling.createDisposableLocalDeleteProbe",
   "aiRecoveryTooling.createLiveChat",
   "aiRecoveryTooling.sendMessageToLiveChat",
   "aiRecoveryTooling.sendMessageToFocusedLiveChat"
@@ -105,6 +112,12 @@ function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function countRegisterToolOccurrences(sourceText, toolName) {
+  const escapedToolName = toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`registerTool\\(\\s*\"${escapedToolName}\"`, "g");
+  return Array.from(sourceText.matchAll(pattern)).length;
 }
 
 async function getSqlJs() {
@@ -484,6 +497,27 @@ async function runCli(args, expectSuccess = true) {
   }
 }
 
+async function runOfflineCleanupCli(args, expectSuccess = true) {
+  try {
+    const result = await execFileAsync("node", [distOfflineLocalChatCleanupCli, ...args], {
+      cwd: packageRoot,
+      maxBuffer: 2_000_000,
+      windowsHide: true
+    });
+    if (!expectSuccess) {
+      throw new Error(`Expected offline cleanup CLI failure but command succeeded: ${args.join(" ")}`);
+    }
+    return result;
+  } catch (error) {
+    if (expectSuccess) {
+      throw error;
+    }
+    const stdout = typeof error.stdout === "string" ? error.stdout : "";
+    const stderr = typeof error.stderr === "string" ? error.stderr : "";
+    return { stdout, stderr };
+  }
+}
+
 async function runCliChecks() {
   const snapshot = await runCli([
     "snapshot",
@@ -706,12 +740,20 @@ async function runChatInteropCapabilityChecks() {
 
   assert(
     findExactSessionOpenCommand(["workbench.action.chat.openSession"]) === "workbench.action.chat.openSession",
-    "Chat interop capability test did not prefer the generic openSession command when it exists."
+    "Chat interop capability test did not accept the generic openSession command when it is the only reveal surface."
   );
 
   assert(
     findExactSessionOpenCommand(["workbench.action.chat.openSessionInEditorGroup"]) === "workbench.action.chat.openSessionInEditorGroup",
     "Chat interop capability test did not accept the editor-group session-open command as a valid Local reveal surface."
+  );
+
+  assert(
+    findExactSessionOpenCommand([
+      "workbench.action.chat.openSession",
+      "workbench.action.chat.openSessionInEditorGroup"
+    ]) === "workbench.action.chat.openSessionInEditorGroup",
+    "Chat interop capability test did not prefer the editor-group session-open command when both reveal surfaces exist."
   );
 
   assert(
@@ -1679,6 +1721,207 @@ async function runCreateChatDirectAgentCommandChecks() {
   }
 }
 
+async function runDeleteChatSafetyChecks() {
+  const { createRequire } = await import('module');
+  const require = createRequire(import.meta.url);
+  const vscodeModule = require('vscode');
+  const storageModule = require(distChatInteropStorage);
+  const originalChatSessionStorage = storageModule.ChatSessionStorage;
+
+  class MockChatSessionStorage {
+    constructor(_context, _options) {}
+    static setSessions(sessions) {
+      MockChatSessionStorage._sessions = sessions.map((session) => ({ ...session }));
+      MockChatSessionStorage._deletedSessionIds = [];
+    }
+    static getDeletedSessionIds() {
+      return [...(MockChatSessionStorage._deletedSessionIds ?? [])];
+    }
+    async listSessions() {
+      return (MockChatSessionStorage._sessions ?? []).map((session) => ({ ...session }));
+    }
+    async getSessionById(sessionId) {
+      return (MockChatSessionStorage._sessions ?? []).find((session) => session.id === sessionId || session.id.startsWith(sessionId));
+    }
+    async getExactSessionById(sessionId) {
+      return (MockChatSessionStorage._sessions ?? []).find((session) => session.id === sessionId);
+    }
+    async deleteSessionArtifacts(session) {
+      MockChatSessionStorage._deletedSessionIds = [...(MockChatSessionStorage._deletedSessionIds ?? []), session.id];
+      MockChatSessionStorage._sessions = (MockChatSessionStorage._sessions ?? []).filter((candidate) => candidate.id !== session.id);
+      return {
+        attemptedPaths: [session.sessionFile],
+        deletedPaths: [session.sessionFile],
+        missingPaths: []
+      };
+    }
+  }
+
+  const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
+  const closedTabs = [];
+
+  storageModule.ChatSessionStorage = MockChatSessionStorage;
+
+  try {
+    const serviceModule = await import(pathToFileURL(distChatInteropService).href);
+    const { ChatInteropService } = serviceModule;
+    const baseSessions = [
+      {
+        id: 'session-delete-target',
+        title: 'Delete Target',
+        lastUpdated: '2026-05-06T10:00:00.000Z',
+        mode: 'agent',
+        agent: 'github.copilot.editsAgent',
+        model: 'copilot/gpt-5-mini',
+        archived: false,
+        provider: 'workspaceStorage',
+        sessionFile: '/tmp/session-delete-target.jsonl'
+      },
+      {
+        id: 'session-delete-target-sibling',
+        title: 'Delete Target Sibling',
+        lastUpdated: '2026-05-06T09:59:00.000Z',
+        mode: 'agent',
+        agent: 'github.copilot.editsAgent',
+        model: 'copilot/gpt-5-mini',
+        archived: false,
+        provider: 'workspaceStorage',
+        sessionFile: '/tmp/session-delete-target-sibling.jsonl'
+      }
+    ];
+
+    Object.defineProperty(vscodeModule.window, 'tabGroups', {
+      configurable: true,
+      value: {
+        all: [],
+        close: async (tabs) => {
+          closedTabs.push(...tabs.map((tab) => tab.label));
+        }
+      }
+    });
+
+    MockChatSessionStorage.setSessions(baseSessions);
+    const serviceExact = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const exactResult = await serviceExact.deleteChat('session-delete-target');
+    assert(exactResult.ok === true, 'Delete safety test expected the exact session id to delete successfully.');
+    assert(MockChatSessionStorage.getDeletedSessionIds().includes('session-delete-target') === true, 'Delete safety test did not delete the exact target session id.');
+    assert(MockChatSessionStorage.getDeletedSessionIds().includes('session-delete-target-sibling') === false, 'Delete safety test incorrectly deleted the prefix sibling session.');
+
+    MockChatSessionStorage.setSessions(baseSessions);
+    const servicePrefix = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const prefixResult = await servicePrefix.deleteChat('session-delete-target-sib');
+    assert(prefixResult.ok === false, 'Delete safety test incorrectly accepted a prefix session id.');
+    assert(
+      typeof prefixResult.reason === 'string' && prefixResult.reason.includes('requires an exact session id'),
+      'Delete safety test did not explain that deleteChat requires an exact session id.'
+    );
+    assert(MockChatSessionStorage.getDeletedSessionIds().length === 0, 'Delete safety test should not delete anything when the input is only a prefix.');
+
+    MockChatSessionStorage.setSessions(baseSessions);
+    closedTabs.length = 0;
+    Object.defineProperty(vscodeModule.window, 'tabGroups', {
+      configurable: true,
+      value: {
+        all: [
+          {
+            isActive: true,
+            viewColumn: 1,
+            tabs: [
+              {
+                label: 'Delete Target',
+                isActive: true,
+                isDirty: false,
+                isPinned: false,
+                isPreview: false,
+                input: {
+                  constructor: { name: 'ChatEditorInput' },
+                  viewType: 'chat-view'
+                }
+              }
+            ]
+          }
+        ],
+        close: async (tabs) => {
+          closedTabs.push(...tabs.map((tab) => tab.label));
+        }
+      }
+    });
+
+    const serviceTitleOnly = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const titleOnlyResult = await serviceTitleOnly.deleteChat('session-delete-target');
+    assert(titleOnlyResult.ok === false, 'Delete safety test incorrectly deleted when only a title-only tab match was visible.');
+    assert(
+      typeof titleOnlyResult.reason === 'string' && titleOnlyResult.reason.includes('matched only by title'),
+      'Delete safety test did not explain the title-only tab attribution block.'
+    );
+    assert(MockChatSessionStorage.getDeletedSessionIds().length === 0, 'Delete safety test should not delete artifacts when only a title-only tab match is visible.');
+    assert(closedTabs.length === 0, 'Delete safety test should not close tabs before failing on a title-only tab match.');
+
+    MockChatSessionStorage.setSessions(baseSessions);
+    closedTabs.length = 0;
+    const targetResource = 'vscode-chat-session://local/c2Vzc2lvbi1kZWxldGUtdGFyZ2V0';
+    const siblingResource = 'vscode-chat-session://local/c2Vzc2lvbi1kZWxldGUtdGFyZ2V0LXNpYmxpbmc=';
+    let visibleTabs = [
+      {
+        label: 'Delete Target',
+        isActive: true,
+        isDirty: false,
+        isPinned: false,
+        isPreview: false,
+        input: {
+          constructor: { name: 'ChatEditorInput' },
+          viewType: 'chat-view',
+          uri: { toString: () => targetResource }
+        }
+      },
+      {
+        label: 'Delete Target Sibling',
+        isActive: false,
+        isDirty: false,
+        isPinned: false,
+        isPreview: false,
+        input: {
+          constructor: { name: 'ChatEditorInput' },
+          viewType: 'chat-view',
+          uri: { toString: () => siblingResource }
+        }
+      }
+    ];
+    Object.defineProperty(vscodeModule.window, 'tabGroups', {
+      configurable: true,
+      value: {
+        get all() {
+          return [
+            {
+              isActive: true,
+              viewColumn: 1,
+              tabs: visibleTabs
+            }
+          ];
+        },
+        close: async (tabs) => {
+          closedTabs.push(...tabs.map((tab) => tab.label));
+          const labelsToClose = new Set(tabs.map((tab) => tab.label));
+          visibleTabs = visibleTabs.filter((tab) => !labelsToClose.has(tab.label));
+        }
+      }
+    });
+
+    const serviceResourceOnly = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const resourceOnlyResult = await serviceResourceOnly.deleteChat('session-delete-target');
+    assert(resourceOnlyResult.ok === true, 'Delete safety test did not delete when an exact resource-matched tab could be closed safely.');
+    assert(MockChatSessionStorage.getDeletedSessionIds().includes('session-delete-target') === true, 'Delete safety test did not delete the exact resource-matched target session.');
+    assert(MockChatSessionStorage.getDeletedSessionIds().includes('session-delete-target-sibling') === false, 'Delete safety test incorrectly deleted the resource-matched sibling session.');
+    assert(closedTabs.includes('Delete Target') === true, 'Delete safety test did not close the exact resource-matched tab before deleting.');
+    assert(closedTabs.includes('Delete Target Sibling') === false, 'Delete safety test incorrectly closed the sibling tab during exact resource-only delete.');
+  } finally {
+    storageModule.ChatSessionStorage = originalChatSessionStorage;
+    if (originalTabGroupsDescriptor) {
+      Object.defineProperty(vscodeModule.window, 'tabGroups', originalTabGroupsDescriptor);
+    }
+  }
+}
+
 async function runChatSessionStorageDeltaChecks() {
   const storageModule = await import(pathToFileURL(distChatInteropStorage).href);
   const { ChatSessionStorage } = storageModule;
@@ -1905,17 +2148,20 @@ ${JSON.stringify({
   assert(stalePendingSession.lastRequestCompleted === true, 'Storage delta test did not preserve lastRequestCompleted for stale pending full-state sessions.');
 
     const deleteTargetSessionFile = path.join(chatSessionsDir, 'session-3.jsonl');
+    const deleteTargetEditingDir = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3');
     const deleteTargetEditingFile = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3.jsonl');
     const deleteTargetTranscriptFile = path.join(scopedWorkspaceRoot, 'transcripts', 'session-3.jsonl');
     const deleteTargetNestedTranscriptFile = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'transcripts', 'session-3.jsonl');
     const deleteTargetResourceDir = path.join(scopedWorkspaceRoot, 'GitHub.copilot-chat', 'chat-session-resources', 'session-3');
     const stateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb');
     const backupStateDbPath = path.join(scopedWorkspaceRoot, 'state.vscdb.backup');
-    await fs.mkdir(path.dirname(deleteTargetEditingFile), { recursive: true });
+    await fs.mkdir(path.join(deleteTargetEditingDir, 'contents'), { recursive: true });
     await fs.mkdir(path.dirname(deleteTargetTranscriptFile), { recursive: true });
     await fs.mkdir(path.dirname(deleteTargetNestedTranscriptFile), { recursive: true });
     await fs.mkdir(deleteTargetResourceDir, { recursive: true });
     await fs.writeFile(deleteTargetSessionFile, `${JSON.stringify({ kind: 0, v: { sessionId: 'session-3', requests: [], inputState: {} } })}\n`, 'utf8');
+    await fs.writeFile(path.join(deleteTargetEditingDir, 'state.json'), '{}\n', 'utf8');
+    await fs.writeFile(path.join(deleteTargetEditingDir, 'contents', 'chunk.md'), 'probe', 'utf8');
     await fs.writeFile(deleteTargetEditingFile, '{}\n', 'utf8');
     await fs.writeFile(deleteTargetTranscriptFile, '{}\n', 'utf8');
     await fs.writeFile(deleteTargetNestedTranscriptFile, '{}\n', 'utf8');
@@ -2044,11 +2290,13 @@ ${JSON.stringify({
 
     const deletionReport = await storage.deleteSessionArtifacts(deleteTargetSession);
     assert(deletionReport.deletedPaths.includes(deleteTargetSessionFile), 'Storage deletion test did not delete the chatSessions JSONL file.');
+    assert(deletionReport.deletedPaths.includes(deleteTargetEditingDir), 'Storage deletion test did not delete the chatEditingSessions directory.');
     assert(deletionReport.deletedPaths.includes(deleteTargetEditingFile), 'Storage deletion test did not delete the chatEditingSessions JSONL file.');
     assert(deletionReport.deletedPaths.includes(deleteTargetTranscriptFile), 'Storage deletion test did not delete the top-level transcript JSONL file.');
     assert(deletionReport.deletedPaths.includes(deleteTargetNestedTranscriptFile), 'Storage deletion test did not delete the nested GitHub.copilot-chat transcript JSONL file.');
     assert(deletionReport.deletedPaths.includes(deleteTargetResourceDir), 'Storage deletion test did not delete the chat-session-resources directory.');
     await assertMissing(deleteTargetSessionFile, 'Storage deletion test left the chatSessions JSONL file on disk.');
+    await assertMissing(deleteTargetEditingDir, 'Storage deletion test left the chatEditingSessions directory on disk.');
     await assertMissing(deleteTargetEditingFile, 'Storage deletion test left the chatEditingSessions JSONL file on disk.');
     await assertMissing(deleteTargetTranscriptFile, 'Storage deletion test left the top-level transcript JSONL file on disk.');
     await assertMissing(deleteTargetNestedTranscriptFile, 'Storage deletion test left the nested transcript JSONL file on disk.');
@@ -2098,163 +2346,164 @@ async function runStabilizedCreateWorkflowChecks() {
   const { createStabilizedChatAndSend } = workflowModule;
 
   const tempDir = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-stabilized-flow-"));
-  const workspaceRuntimeAgentDir = path.join(tempDir, ".github", "agents");
-  const companionDir = path.join(workspaceRuntimeAgentDir, "companions");
-  const chatSessionsDir = path.join(tempDir, "chatSessions");
-  await fs.mkdir(workspaceRuntimeAgentDir, { recursive: true });
-  await fs.mkdir(companionDir, { recursive: true });
-  await fs.mkdir(chatSessionsDir, { recursive: true });
+  try {
+    const workspaceRuntimeAgentDir = path.join(tempDir, ".github", "agents");
+    const companionDir = path.join(workspaceRuntimeAgentDir, "companions");
+    const chatSessionsDir = path.join(tempDir, "chatSessions");
+    await fs.mkdir(workspaceRuntimeAgentDir, { recursive: true });
+    await fs.mkdir(companionDir, { recursive: true });
+    await fs.mkdir(chatSessionsDir, { recursive: true });
 
-  const agentFile = path.join(workspaceRuntimeAgentDir, "support-doc.fresh-reader.agent.md");
-  await fs.writeFile(agentFile, "# test\n", "utf8");
-  const targetSessionFile = path.join(chatSessionsDir, "session-1.jsonl");
-  await fs.writeFile(targetSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-1", requests: [], inputState: {} } }), "utf8");
-  const siblingModelFile = path.join(chatSessionsDir, "session-2.jsonl");
-  await fs.writeFile(
-    siblingModelFile,
-    `${JSON.stringify({ kind: 1, k: ["inputState", "selectedModel"], v: { identifier: "copilot/gpt-5.4", metadata: { name: "GPT-5.4" } } })}\n`,
-    "utf8"
-  );
+    const agentFile = path.join(workspaceRuntimeAgentDir, "support-doc.fresh-reader.agent.md");
+    await fs.writeFile(agentFile, "# test\n", "utf8");
+    const targetSessionFile = path.join(chatSessionsDir, "session-1.jsonl");
+    await fs.writeFile(targetSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-1", requests: [], inputState: {} } }), "utf8");
+    const siblingModelFile = path.join(chatSessionsDir, "session-2.jsonl");
+    await fs.writeFile(
+      siblingModelFile,
+      `${JSON.stringify({ kind: 1, k: ["inputState", "selectedModel"], v: { identifier: "copilot/gpt-5.4", metadata: { name: "GPT-5.4" } } })}\n`,
+      "utf8"
+    );
 
-  vscodeModule.workspace.workspaceFolders = [{ uri: { fsPath: tempDir } }];
-  const expectedAgentFileUri = pathToFileURL(agentFile).href;
+    vscodeModule.workspace.workspaceFolders = [{ uri: { fsPath: tempDir } }];
+    const expectedAgentFileUri = pathToFileURL(agentFile).href;
 
-  const sentRequests = [];
-  const createRequests = [];
-  let seedListChatsCalls = 0;
-  let seedSessionReady = false;
-  const chatInterop = {
-    async listChats() {
-      seedListChatsCalls += 1;
-      seedSessionReady = seedListChatsCalls >= 2;
-      return [{
-        id: "session-1",
-        title: "Stabilized Session",
-        lastUpdated: "2026-04-11T20:30:00.000Z",
-        mode: "agent",
-        agent: "github.copilot.editsAgent",
-        model: "copilot/gpt-5-mini",
-        hasPendingEdits: !seedSessionReady,
-        pendingRequestCount: seedSessionReady ? 0 : 1,
-        lastRequestCompleted: seedSessionReady,
-        archived: false,
-        provider: "workspaceStorage",
-        sessionFile: targetSessionFile
-      }];
-    },
-    async getExactSessionInteropSupport() {
-      return {
-        canRevealExactSession: true,
-        canSendExactSessionMessage: true,
-        revealUnsupportedReason: undefined,
-        sendUnsupportedReason: undefined
-      };
-    },
-    async getFocusedChatInteropSupport() {
-      return {
-        canSubmitFocusedChatMessage: true,
-        focusInputCommand: "workbench.action.chat.focusInput",
-        submitCommand: "workbench.action.chat.submit",
-        unsupportedReason: undefined
-      };
-    },
-    async createChat(request) {
-      createRequests.push(request);
-      return {
-        ok: true,
-        session: {
+    const sentRequests = [];
+    const createRequests = [];
+    let seedListChatsCalls = 0;
+    let seedSessionReady = false;
+    const chatInterop = {
+      async listChats() {
+        seedListChatsCalls += 1;
+        seedSessionReady = seedListChatsCalls >= 2;
+        return [{
           id: "session-1",
           title: "Stabilized Session",
           lastUpdated: "2026-04-11T20:30:00.000Z",
           mode: "agent",
           agent: "github.copilot.editsAgent",
           model: "copilot/gpt-5-mini",
+          hasPendingEdits: !seedSessionReady,
+          pendingRequestCount: seedSessionReady ? 0 : 1,
+          lastRequestCompleted: seedSessionReady,
           archived: false,
           provider: "workspaceStorage",
           sessionFile: targetSessionFile
-        },
-        selection: {
-          mode: { status: "mismatch", requested: expectedAgentFileUri, observed: "agent" },
-          model: { status: "mismatch", requested: "copilot/gpt-5.4", observed: "copilot/gpt-5-mini" },
-          agent: { status: "mismatch", requested: "#support-doc.fresh-reader", observed: "github.copilot.editsAgent" },
-          dispatchedPrompt: "seed",
-          dispatchSurface: "prompt-file-slash-command",
-          dispatchedSlashCommand: "/tmp",
-          allRequestedVerified: false
-        }
-      };
-    },
-    async sendMessage(request) {
-      assert(seedSessionReady === true, "Stabilized workflow test sent the real prompt before the seed session had settled.");
-      sentRequests.push(request);
-      return {
-        ok: true,
-        session: {
-          id: "session-1",
-          title: "Stabilized Session",
-          lastUpdated: "2026-04-11T20:31:00.000Z",
-          mode: expectedAgentFileUri,
-          agent: "support-doc.fresh-reader",
-          model: "copilot/gpt-5.4",
-          archived: false,
-          provider: "workspaceStorage",
-          sessionFile: targetSessionFile
-        },
-        selection: {
-          mode: { status: "verified", requested: expectedAgentFileUri, observed: expectedAgentFileUri },
-          model: { status: "verified", requested: "copilot/gpt-5.4", observed: "copilot/gpt-5.4" },
-          agent: { status: "verified", requested: "#support-doc.fresh-reader", observed: "support-doc.fresh-reader" },
-          dispatchedPrompt: request.prompt,
-          dispatchSurface: "chat-open",
-          allRequestedVerified: true
-        }
-      };
-    },
-    async sendFocusedMessage() {
-      throw new Error("sendFocusedMessage should not be used when exact send is available in the stabilized workflow test.");
-    },
-    async closeVisibleTabs() {
-      return { ok: true };
-    },
-    async revealChat() {
-      return { ok: true };
-    }
-  };
+        }];
+      },
+      async getExactSessionInteropSupport() {
+        return {
+          canRevealExactSession: true,
+          canSendExactSessionMessage: true,
+          revealUnsupportedReason: undefined,
+          sendUnsupportedReason: undefined
+        };
+      },
+      async getFocusedChatInteropSupport() {
+        return {
+          canSubmitFocusedChatMessage: true,
+          focusInputCommand: "workbench.action.chat.focusInput",
+          submitCommand: "workbench.action.chat.submit",
+          unsupportedReason: undefined
+        };
+      },
+      async createChat(request) {
+        createRequests.push(request);
+        return {
+          ok: true,
+          session: {
+            id: "session-1",
+            title: "Stabilized Session",
+            lastUpdated: "2026-04-11T20:30:00.000Z",
+            mode: "agent",
+            agent: "github.copilot.editsAgent",
+            model: "copilot/gpt-5-mini",
+            archived: false,
+            provider: "workspaceStorage",
+            sessionFile: targetSessionFile
+          },
+          selection: {
+            mode: { status: "mismatch", requested: expectedAgentFileUri, observed: "agent" },
+            model: { status: "mismatch", requested: "copilot/gpt-5.4", observed: "copilot/gpt-5-mini" },
+            agent: { status: "mismatch", requested: "#support-doc.fresh-reader", observed: "github.copilot.editsAgent" },
+            dispatchedPrompt: "seed",
+            dispatchSurface: "prompt-file-slash-command",
+            dispatchedSlashCommand: "/tmp",
+            allRequestedVerified: false
+          }
+        };
+      },
+      async sendMessage(request) {
+        assert(seedSessionReady === true, "Stabilized workflow test sent the real prompt before the seed session had settled.");
+        sentRequests.push(request);
+        return {
+          ok: true,
+          session: {
+            id: "session-1",
+            title: "Stabilized Session",
+            lastUpdated: "2026-04-11T20:31:00.000Z",
+            mode: expectedAgentFileUri,
+            agent: "support-doc.fresh-reader",
+            model: "copilot/gpt-5.4",
+            archived: false,
+            provider: "workspaceStorage",
+            sessionFile: targetSessionFile
+          },
+          selection: {
+            mode: { status: "verified", requested: expectedAgentFileUri, observed: expectedAgentFileUri },
+            model: { status: "verified", requested: "copilot/gpt-5.4", observed: "copilot/gpt-5.4" },
+            agent: { status: "verified", requested: "#support-doc.fresh-reader", observed: "support-doc.fresh-reader" },
+            dispatchedPrompt: request.prompt,
+            dispatchSurface: "chat-open",
+            allRequestedVerified: true
+          }
+        };
+      },
+      async sendFocusedMessage() {
+        throw new Error("sendFocusedMessage should not be used when exact send is available in the stabilized workflow test.");
+      },
+      async closeVisibleTabs() {
+        return { ok: true };
+      },
+      async revealChat() {
+        return { ok: true };
+      }
+    };
 
-  const result = await createStabilizedChatAndSend(chatInterop, {
-    prompt: "real prompt",
-    agentName: "support-doc.fresh-reader",
-    modelSelector: { id: "gpt-5.4", vendor: "copilot" },
-    blockOnResponse: true,
-    requireSelectionEvidence: false
-  });
+    const result = await createStabilizedChatAndSend(chatInterop, {
+      prompt: "real prompt",
+      agentName: "support-doc.fresh-reader",
+      modelSelector: { id: "gpt-5.4", vendor: "copilot" },
+      blockOnResponse: true,
+      requireSelectionEvidence: false
+    });
 
-  const targetSessionRaw = await fs.readFile(targetSessionFile, "utf8");
-  const parsedPatchedRows = targetSessionRaw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  assert(createRequests.length === 1, "Stabilized workflow test did not issue exactly one seed create request.");
-  assert(createRequests[0].blockOnResponse === false, "Stabilized workflow test did not keep the seed create path non-blocking.");
-  assert(seedListChatsCalls >= 2, `Stabilized workflow test did not wait for the seed session to settle. Got ${seedListChatsCalls} listChats call(s).`);
-  assert(sentRequests.length === 1, "Stabilized workflow test did not send the real prompt exactly once.");
-  assert(sentRequests[0].prompt === "real prompt", "Stabilized workflow test did not preserve the real prompt for the final send.");
-  assert(sentRequests[0].agentName === "support-doc.fresh-reader", "Stabilized workflow test did not preserve the requested agent name for the final send.");
-  assert(sentRequests[0].mode === undefined, `Stabilized workflow test should keep the follow-up send prompt-only after mode stabilization. Got: ${sentRequests[0].mode}`);
-  assert(sentRequests[0].modelSelector === undefined, "Stabilized workflow test should keep the follow-up send prompt-only after model stabilization.");
-  assert(result.resolvedModeId === expectedAgentFileUri, `Stabilized workflow test did not resolve the workspace runtime-agent file URI. Got: ${result.resolvedModeId}`);
-  assert(result.patchedModeId === expectedAgentFileUri, "Stabilized workflow test did not report the applied mode patch.");
-  assert(result.patchedModelId === "copilot/gpt-5.4", "Stabilized workflow test did not report the applied model patch.");
-  assert(result.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after the seed settled.");
-  assert(targetSessionRaw.endsWith("\n"), "Stabilized workflow test did not preserve newline-terminated JSONL after patching.");
-  assert(parsedPatchedRows.length === 3, `Stabilized workflow test did not keep the session file parseable JSONL. Got ${parsedPatchedRows.length} rows.`);
-  assert(targetSessionRaw.includes(`"id":"${expectedAgentFileUri}"`), "Stabilized workflow test did not append the requested mode patch to the session file.");
-  assert(targetSessionRaw.includes('"identifier":"copilot/gpt-5.4"'), "Stabilized workflow test did not append the requested selectedModel patch to the session file.");
+    const targetSessionRaw = await fs.readFile(targetSessionFile, "utf8");
+    const parsedPatchedRows = targetSessionRaw
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+    assert(createRequests.length === 1, "Stabilized workflow test did not issue exactly one seed create request.");
+    assert(createRequests[0].blockOnResponse === false, "Stabilized workflow test did not keep the seed create path non-blocking.");
+    assert(seedListChatsCalls >= 2, `Stabilized workflow test did not wait for the seed session to settle. Got ${seedListChatsCalls} listChats call(s).`);
+    assert(sentRequests.length === 1, "Stabilized workflow test did not send the real prompt exactly once.");
+    assert(sentRequests[0].prompt === "real prompt", "Stabilized workflow test did not preserve the real prompt for the final send.");
+    assert(sentRequests[0].agentName === "support-doc.fresh-reader", "Stabilized workflow test did not preserve the requested agent name for the final send.");
+    assert(sentRequests[0].mode === undefined, `Stabilized workflow test should keep the follow-up send prompt-only after mode stabilization. Got: ${sentRequests[0].mode}`);
+    assert(sentRequests[0].modelSelector === undefined, "Stabilized workflow test should keep the follow-up send prompt-only after model stabilization.");
+    assert(result.resolvedModeId === expectedAgentFileUri, `Stabilized workflow test did not resolve the workspace runtime-agent file URI. Got: ${result.resolvedModeId}`);
+    assert(result.patchedModeId === expectedAgentFileUri, "Stabilized workflow test did not report the applied mode patch.");
+    assert(result.patchedModelId === "copilot/gpt-5.4", "Stabilized workflow test did not report the applied model patch.");
+    assert(result.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after the seed settled.");
+    assert(targetSessionRaw.endsWith("\n"), "Stabilized workflow test did not preserve newline-terminated JSONL after patching.");
+    assert(parsedPatchedRows.length === 3, `Stabilized workflow test did not keep the session file parseable JSONL. Got ${parsedPatchedRows.length} rows.`);
+    assert(targetSessionRaw.includes(`"id":"${expectedAgentFileUri}"`), "Stabilized workflow test did not append the requested mode patch to the session file.");
+    assert(targetSessionRaw.includes('"identifier":"copilot/gpt-5.4"'), "Stabilized workflow test did not append the requested selectedModel patch to the session file.");
 
-  const companionOnlyFile = path.join(companionDir, "companion-only.agent.test.md");
-  await fs.writeFile(companionOnlyFile, "# companion-only test\n", "utf8");
-  const companionOnlySessionFile = path.join(chatSessionsDir, "session-3.jsonl");
-  await fs.writeFile(companionOnlySessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-3", requests: [], inputState: {} } }), "utf8");
+    const companionOnlyFile = path.join(companionDir, "companion-only.agent.test.md");
+    await fs.writeFile(companionOnlyFile, "# companion-only test\n", "utf8");
+    const companionOnlySessionFile = path.join(chatSessionsDir, "session-3.jsonl");
+    await fs.writeFile(companionOnlySessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-3", requests: [], inputState: {} } }), "utf8");
 
   const companionOnlyRequests = [];
   const companionOnlyCreateRequests = [];
@@ -2566,59 +2815,98 @@ async function runStabilizedCreateWorkflowChecks() {
     }
   };
 
-  const originalMathRandom = Math.random;
-  const originalDateNow = Date.now;
-  Math.random = () => 123 / 1_000_000;
-  Date.now = () => 1_746_793_600_000;
-  try {
-    const lateTokenResult = await createStabilizedChatAndSend(lateTokenInterop, {
-      prompt: "real prompt",
-      agentName: "support-doc.fresh-reader",
-      blockOnResponse: true,
-      requireSelectionEvidence: false
-    });
+    const originalMathRandom = Math.random;
+    const originalDateNow = Date.now;
+    Math.random = () => 123 / 1_000_000;
+    Date.now = () => 1_746_793_600_000;
+    try {
+      const lateTokenResult = await createStabilizedChatAndSend(lateTokenInterop, {
+        prompt: "real prompt",
+        agentName: "support-doc.fresh-reader",
+        blockOnResponse: true,
+        requireSelectionEvidence: false
+      });
 
-    assert(lateTokenResult.workflow.result.ok === true, "Stabilized workflow test did not recover when the seed token persisted before summary settlement flags caught up.");
-    assert(lateTokenResult.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after late seed-token recovery.");
-    assert(lateTokenRequests.length === 1, "Stabilized workflow test did not send the real prompt after observing the persisted seed token.");
-    assert(lateTokenListChatsCalls >= 2, `Stabilized workflow test did not poll for the late seed token. Got ${lateTokenListChatsCalls} listChats call(s).`);
+      assert(lateTokenResult.workflow.result.ok === true, "Stabilized workflow test did not recover when the seed token persisted before summary settlement flags caught up.");
+      assert(lateTokenResult.realPromptDispatchAttempted === true, "Stabilized workflow test did not record that the real prompt send was attempted after late seed-token recovery.");
+      assert(lateTokenRequests.length === 1, "Stabilized workflow test did not send the real prompt after observing the persisted seed token.");
+      assert(lateTokenListChatsCalls >= 2, `Stabilized workflow test did not poll for the late seed token. Got ${lateTokenListChatsCalls} listChats call(s).`);
+    } finally {
+      Math.random = originalMathRandom;
+      Date.now = originalDateNow;
+    }
   } finally {
-    Math.random = originalMathRandom;
-    Date.now = originalDateNow;
+    await fs.rm(tempDir, { recursive: true, force: true });
   }
-
-  await fs.rm(tempDir, { recursive: true, force: true });
 }
 
 async function runOfflineLocalChatCleanupChecks() {
   const cleanupModule = await import(pathToFileURL(distOfflineLocalChatCleanup).href);
   const globalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-global");
-  const reportFilePath = cleanupModule.getOfflineLocalChatCleanupReportPath(globalStorageDir);
+  const directWorkspaceStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-workspace");
+  const queuedIntegrationGlobalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-queued-global");
+  const queuedIntegrationWorkspaceStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-queued-workspace");
+  const queuedPrefixSiblingWorkspaceStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-queued-workspace-sibling");
+  const requestsPath = cleanupModule.getOfflineLocalChatCleanupRequestsPath(globalStorageDir);
+  const reportsDir = cleanupModule.getOfflineLocalChatCleanupReportsDir(globalStorageDir);
   const spec = cleanupModule.buildOfflineLocalChatCleanupLaunchSpec({
     extensionRoot: packageRoot,
-    workspaceStorageDir: "C:/tmp/workspaceStorage/example",
-    keepSessionIds: ["session-keep-1", "session-keep-2"],
-    reportFilePath
+    globalStorageDir,
+    waitForPid: 4242
   });
 
-  assert(spec.executable === "powershell.exe", "Offline cleanup launch test did not target powershell.exe.");
-  assert(spec.args.includes("-File"), "Offline cleanup launch test did not include the script file switch.");
-  assert(spec.args.includes(path.join(packageRoot, "tools", "schedule-local-chat-state-cleanup.ps1")), "Offline cleanup launch test did not point at the scheduler script.");
-  assert(spec.args.includes("-WorkspaceStorageDir") && spec.args.includes("C:/tmp/workspaceStorage/example"), "Offline cleanup launch test did not preserve the workspace storage directory.");
-  assert(spec.args.filter((value) => value === "-KeepSessionId").length === 2, "Offline cleanup launch test did not emit one KeepSessionId argument per preserved session.");
+  assert(spec.executable === process.execPath, "Offline cleanup launch test did not target the current runtime executable.");
+  assert(spec.args.includes(distOfflineLocalChatCleanupCli), "Offline cleanup launch test did not point at the offline cleanup CLI.");
+  assert(spec.args.includes("schedule"), "Offline cleanup launch test did not invoke the schedule command.");
+  assert(spec.args.includes("--global-storage-dir") && spec.args.includes(globalStorageDir), "Offline cleanup launch test did not preserve the global storage directory.");
+  assert(spec.args.includes("--wait-for-pid") && spec.args.includes("4242"), "Offline cleanup launch test did not preserve the invoking process pid for exact post-exit scheduling.");
+  assert(spec.args.includes("--workspace-storage-dir") === false, "Offline cleanup launch test still exposed workspace-targeted keep semantics.");
   assert(spec.options.detached === true && spec.options.stdio === "ignore", "Offline cleanup launch test did not configure detached background execution.");
+  assert(spec.options.env?.ELECTRON_RUN_AS_NODE === "1", "Offline cleanup launch test did not force the scheduled runtime into Node mode.");
 
   await fs.mkdir(globalStorageDir, { recursive: true });
-  await fs.writeFile(reportFilePath, `${JSON.stringify([
+  const firstQueuedRequest = cleanupModule.buildWorkspaceStorageOfflineLocalChatCleanupRequest("C:/tmp/workspaceStorage/example", "session-drop-1");
+  firstQueuedRequest.targetSessionIds.push("session-drop-1", "session-drop-2");
+  await cleanupModule.queueOfflineLocalChatCleanupRequest(globalStorageDir, firstQueuedRequest);
+  await cleanupModule.queueOfflineLocalChatCleanupRequest(
+    globalStorageDir,
+    cleanupModule.buildWorkspaceStorageOfflineLocalChatCleanupRequest("C:/tmp/workspaceStorage/example", "session-drop-3")
+  );
+
+  const queuedLines = (await fs.readFile(requestsPath, "utf8"))
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  assert(queuedLines.length === 2, "Offline cleanup queue test did not append one JSONL request per scheduled cleanup.");
+  assert(queuedLines[0].targetSessionIds.length === 2, "Offline cleanup queue test did not de-duplicate target session ids within one request.");
+  assert(
+    Array.isArray(queuedLines[0].artifactPaths)
+      && queuedLines[0].artifactPaths.some((value) => value.replace(/\\/g, "/").endsWith("chatSessions/session-drop-1.jsonl")),
+    "Offline cleanup queue test did not persist exact artifact paths for the target session."
+  );
+
+  await fs.mkdir(reportsDir, { recursive: true });
+  const reportFilePathA = cleanupModule.createOfflineLocalChatCleanupReportPath(globalStorageDir);
+  const reportFilePathB = cleanupModule.createOfflineLocalChatCleanupReportPath(globalStorageDir);
+  await fs.writeFile(reportFilePathA, `${JSON.stringify([
     {
       dbPath: "state.vscdb",
+      removedTargetSessionIds: ["session-drop-1"],
+      deletedArtifactPaths: ["C:/tmp/workspaceStorage/example/chatSessions/session-drop-1.jsonl"],
+      missingArtifactPaths: ["C:/tmp/workspaceStorage/example/transcripts/session-drop-1.jsonl"],
       removedIndexEntries: 5,
       removedModelEntries: 5,
       removedStateEntries: 11,
       removedTodoEntries: 1
-    },
+    }
+  ])}\n`, "utf8");
+  await fs.writeFile(reportFilePathB, `${JSON.stringify([
     {
       dbPath: "state.vscdb.backup",
+      removedTargetSessionIds: ["session-drop-1"],
+      deletedArtifactPaths: ["C:/tmp/workspaceStorage/example/GitHub.copilot-chat/chat-session-resources/session-drop-1"],
+      missingArtifactPaths: [],
       removedIndexEntries: 5,
       removedModelEntries: 5,
       removedStateEntries: 11,
@@ -2626,15 +2914,182 @@ async function runOfflineLocalChatCleanupChecks() {
     }
   ])}\n`, "utf8");
 
-  const summary = await cleanupModule.readAndDeleteOfflineLocalChatCleanupReport(reportFilePath);
+  const summary = await cleanupModule.readAndDeleteOfflineLocalChatCleanupReports(globalStorageDir);
   assert(summary && summary.reports.length === 2, "Offline cleanup report test did not read the stored report payload.");
-  await assertMissing(reportFilePath, "Offline cleanup report test did not remove the consumed report file.");
+  assert(summary.reportFilePaths.length === 2, "Offline cleanup report test did not surface every consumed report path.");
+  await assertMissing(reportFilePathA, "Offline cleanup report test did not remove the first consumed report file.");
+  await assertMissing(reportFilePathB, "Offline cleanup report test did not remove the second consumed report file.");
+  assert(
+    cleanupModule.formatOfflineLocalChatCleanupSummary(summary).includes("Deleted queued artifacts: 2."),
+    "Offline cleanup summary test did not aggregate deleted artifact totals."
+  );
+  assert(
+    cleanupModule.formatOfflineLocalChatCleanupSummary(summary).includes("Missing queued artifacts: 1."),
+    "Offline cleanup summary test did not aggregate missing artifact totals."
+  );
   assert(
     cleanupModule.formatOfflineLocalChatCleanupSummary(summary).includes("Removed state cache entries: 22."),
     "Offline cleanup summary test did not aggregate report totals."
   );
 
+  const directSessionFile = path.join(directWorkspaceStorageDir, "chatSessions", "session-drop-1.jsonl");
+  const directTranscriptFile = path.join(directWorkspaceStorageDir, "transcripts", "session-drop-1.jsonl");
+  const directResourceDir = path.join(directWorkspaceStorageDir, "GitHub.copilot-chat", "chat-session-resources", "session-drop-1");
+  const directStateDbPath = path.join(directWorkspaceStorageDir, "state.vscdb");
+  await fs.mkdir(path.dirname(directSessionFile), { recursive: true });
+  await fs.mkdir(path.dirname(directTranscriptFile), { recursive: true });
+  await fs.mkdir(directResourceDir, { recursive: true });
+  await fs.writeFile(directSessionFile, '{"kind":0}\n', 'utf8');
+  await fs.writeFile(directTranscriptFile, '{}\n', 'utf8');
+  await fs.writeFile(path.join(directResourceDir, 'content.txt'), 'resource', 'utf8');
+  await writeWorkspaceStateValue(directStateDbPath, 'chat.ChatSessionStore.index', JSON.stringify({
+    version: 1,
+    entries: {
+      'session-drop-1': {
+        sessionId: 'session-drop-1',
+        title: 'Disposable Probe Session',
+        lastMessageDate: 1775930003000,
+        isEmpty: false,
+        isExternal: false
+      },
+      'session-keep': {
+        sessionId: 'session-keep',
+        title: 'Keep Session',
+        lastMessageDate: 1775930004000,
+        isEmpty: false,
+        isExternal: false
+      }
+    }
+  }));
+  await writeWorkspaceStateValue(directStateDbPath, 'agentSessions.model.cache', JSON.stringify([
+    {
+      providerType: 'local',
+      providerLabel: 'Local',
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1kcm9wLTE=',
+      label: 'Disposable Probe Session'
+    },
+    {
+      providerType: 'local',
+      providerLabel: 'Local',
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1rZWVw',
+      label: 'Keep Session'
+    }
+  ]));
+  await writeWorkspaceStateValue(directStateDbPath, 'agentSessions.state.cache', JSON.stringify([
+    {
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1kcm9wLTE=',
+      read: 1775930005000
+    },
+    {
+      resource: 'vscode-chat-session://local/c2Vzc2lvbi1rZWVw',
+      read: 1775930006000
+    }
+  ]));
+  await writeWorkspaceStateValue(directStateDbPath, 'memento/chat-todo-list', JSON.stringify({
+    'session-drop-1': [
+      {
+        id: 1,
+        title: 'Disposable todo',
+        status: 'completed'
+      }
+    ],
+    'session-keep': [
+      {
+        id: 1,
+        title: 'Keep todo',
+        status: 'not-started'
+      }
+    ]
+  }));
+
+  await runOfflineCleanupCli([
+    'prune',
+    '--allow-code-process',
+    '--workspace-storage-dir', directWorkspaceStorageDir,
+    '--target-session-id', 'session-drop-1',
+    '--artifact-path', directSessionFile,
+    '--artifact-path', directTranscriptFile,
+    '--artifact-path', directResourceDir
+  ]);
+
+  await assertMissing(directSessionFile, 'Offline cleanup script test did not delete the queued session JSONL file.');
+  await assertMissing(directTranscriptFile, 'Offline cleanup script test did not delete the queued transcript JSONL file.');
+  await assertMissing(directResourceDir, 'Offline cleanup script test did not delete the queued resource directory.');
+  const directPrunedIndexRaw = await readWorkspaceStateValue(directStateDbPath, 'chat.ChatSessionStore.index');
+  assert(directPrunedIndexRaw && !directPrunedIndexRaw.includes('session-drop-1'), 'Offline cleanup script test left the deleted session in chat.ChatSessionStore.index.');
+  assert(directPrunedIndexRaw && directPrunedIndexRaw.includes('session-keep'), 'Offline cleanup script test removed unrelated index entries.');
+
+  const queuedIntegrationRequestsPath = cleanupModule.getOfflineLocalChatCleanupRequestsPath(queuedIntegrationGlobalStorageDir);
+  const queuedIntegrationSessionFile = path.join(queuedIntegrationWorkspaceStorageDir, 'chatSessions', 'session-drop-queued.jsonl');
+  const queuedIntegrationTranscriptFile = path.join(queuedIntegrationWorkspaceStorageDir, 'transcripts', 'session-drop-queued.jsonl');
+  const queuedPrefixSiblingSessionFile = path.join(queuedPrefixSiblingWorkspaceStorageDir, 'chatSessions', 'session-drop-queued.jsonl');
+  await fs.mkdir(path.dirname(queuedIntegrationSessionFile), { recursive: true });
+  await fs.mkdir(path.dirname(queuedIntegrationTranscriptFile), { recursive: true });
+  await fs.mkdir(path.dirname(queuedPrefixSiblingSessionFile), { recursive: true });
+  await fs.writeFile(queuedIntegrationSessionFile, '{"kind":0}\n', 'utf8');
+  await fs.writeFile(queuedIntegrationTranscriptFile, '{}\n', 'utf8');
+  await fs.writeFile(queuedPrefixSiblingSessionFile, '{"kind":0}\n', 'utf8');
+  await cleanupModule.queueOfflineLocalChatCleanupRequest(queuedIntegrationGlobalStorageDir, {
+    workspaceStorageDir: queuedIntegrationWorkspaceStorageDir,
+    targetSessionIds: ['session-drop-queued'],
+    artifactPaths: [
+      queuedIntegrationSessionFile,
+      queuedIntegrationTranscriptFile,
+      queuedPrefixSiblingSessionFile
+    ]
+  });
+  await fs.appendFile(queuedIntegrationRequestsPath, '{not-valid-json\n', 'utf8');
+
+  await runOfflineCleanupCli([
+    'prune',
+    '--allow-code-process',
+    '--global-storage-dir', queuedIntegrationGlobalStorageDir
+  ]);
+
+  await assertMissing(queuedIntegrationSessionFile, 'Offline cleanup queue-hardening test did not delete the in-scope queued session artifact.');
+  await assertMissing(queuedIntegrationTranscriptFile, 'Offline cleanup queue-hardening test did not delete the in-scope queued transcript artifact.');
+  assert(await fs.stat(queuedPrefixSiblingSessionFile).then(() => true).catch(() => false), 'Offline cleanup queue-hardening test incorrectly deleted a sibling-path artifact that only shared the workspace prefix.');
+  await assertMissing(queuedIntegrationRequestsPath, 'Offline cleanup queue-hardening test did not remove the consumed queued-requests file after a successful run.');
+
   await fs.rm(globalStorageDir, { recursive: true, force: true });
+  await fs.rm(directWorkspaceStorageDir, { recursive: true, force: true });
+  await fs.rm(queuedIntegrationGlobalStorageDir, { recursive: true, force: true });
+  await fs.rm(queuedIntegrationWorkspaceStorageDir, { recursive: true, force: true });
+  await fs.rm(queuedPrefixSiblingWorkspaceStorageDir, { recursive: true, force: true });
+}
+
+async function runDisposableDeleteProbeChecks() {
+  const disposableDeleteProbeModule = await import(pathToFileURL(distDisposableDeleteProbe).href);
+  const fixedNow = new Date(2026, 4, 6, 7, 8, 9);
+
+  const generated = disposableDeleteProbeModule.buildDisposableDeleteProbeSpec(undefined, fixedNow);
+  assert(
+    generated.anchor === "AA_DELETE_PROBE_2026_05_06_07_08_09",
+    `Disposable delete probe helper did not generate the expected timestamp anchor. Got: ${generated.anchor}`
+  );
+  assert(
+    generated.prompt === "AA_DELETE_PROBE_2026_05_06_07_08_09 Please answer with the single word READY.",
+    `Disposable delete probe helper did not prefix the default prompt with the generated anchor. Got: ${generated.prompt}`
+  );
+
+  const explicit = disposableDeleteProbeModule.buildDisposableDeleteProbeSpec({
+    anchor: "  CUSTOM_ANCHOR  ",
+    prompt: "  Please say READY now.  "
+  }, fixedNow);
+  assert(explicit.anchor === "CUSTOM_ANCHOR", `Disposable delete probe helper did not trim the explicit anchor. Got: ${explicit.anchor}`);
+  assert(
+    explicit.prompt === "CUSTOM_ANCHOR Please say READY now.",
+    `Disposable delete probe helper did not prefix the trimmed explicit prompt with the explicit anchor. Got: ${explicit.prompt}`
+  );
+
+  const preAnchored = disposableDeleteProbeModule.buildDisposableDeleteProbeSpec({
+    anchor: "READY_PROBE",
+    prompt: "READY_PROBE Please answer with the single word READY."
+  }, fixedNow);
+  assert(
+    preAnchored.prompt === "READY_PROBE Please answer with the single word READY.",
+    `Disposable delete probe helper duplicated an anchor that was already present in the prompt. Got: ${preAnchored.prompt}`
+  );
 }
 
 async function runSessionSendWorkflowChecks() {
@@ -3588,6 +4043,26 @@ async function runEditorTabMatcherChecks() {
   );
 
   assert(
+    getLocalChatEditorTabMatchKind(
+      {
+        label: "Live chat anchor request",
+        input: {
+          constructor: { name: "Sm" },
+          resource: {
+            toString: () => "vscode-chat-session://local/N2FlMjA2YTEtMDg5Zi00MGQzLWIxNzMtOGFmYWEwMDIxNzdi"
+          }
+        }
+      },
+      {
+        sessionId: "7ae206a1-089f-40d3-b173-8afaa002177b",
+        sessionTitle: "Live chat anchor request",
+        matchMode: "resource-only"
+      }
+    ) === "resource",
+    "Editor tab matcher test did not recognize an exact Local session resource when the tab input exposed it only through a nested object toString()."
+  );
+
+  assert(
     isMatchingLocalChatEditorTab(
       {
         label: "Local follow-up attempt request",
@@ -3715,8 +4190,13 @@ async function runSelfTargetGuardChecks() {
   );
 
   assert(
-    getExactSelfTargetingReason(chats, "recent-session", "delete-artifacts", now) === undefined,
-    "Self-target guard test incorrectly blocked exact delete-artifacts cleanup for the likely invoking chat heuristic case."
+    getExactSelfTargetingReason(chats, "recent-session", "delete-artifacts", now)?.includes("currently invoking conversation") === true,
+    "Self-target guard test did not block exact delete-artifacts cleanup for the likely invoking chat heuristic case."
+  );
+
+  assert(
+    getExactSelfTargetingReason(chats, "older-session", "delete-artifacts", now) === undefined,
+    "Self-target guard test incorrectly blocked exact delete-artifacts cleanup for a different chat."
   );
 
   assert(
@@ -4845,11 +5325,12 @@ async function runManifestChecks() {
   assert(transcriptTool?.inputSchema?.properties?.maxBlocks, "package.json transcript tool schema must expose maxBlocks.");
   assert(transcriptTool?.inputSchema?.properties?.afterLatestCompact, "package.json transcript tool schema must expose afterLatestCompact.");
   assert(estimateTool?.inputSchema?.properties?.latestRequestFamilies, "package.json context estimate tool schema must expose latestRequestFamilies.");
-  assert(rawSessionCommand?.title === "AI Recovery Tooling: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
+  assert(rawSessionCommand?.title === "AI VS Code Tooling: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
   assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
 
   const viewTitleCommands = viewTitleMenu.map((item) => item.command);
   const viewItemCommands = viewItemContextMenu.map((item) => item.command);
+  assert(viewTitleCommands.includes("aiRecoveryTooling.createDisposableLocalDeleteProbe"), "package.json view/title menu must expose Create Disposable Local Delete Probe.");
   assert(viewTitleCommands.includes("aiRecoveryTooling.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
   assert(viewTitleCommands.includes("aiRecoveryTooling.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
   assert(viewItemCommands.includes("aiRecoveryTooling.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
@@ -4861,6 +5342,7 @@ async function runManifestChecks() {
 async function runRoutingGuardChecks() {
   const firstSliceModule = await import(pathToFileURL(distFirstSlice).href);
   const readme = await fs.readFile(readmePath, "utf-8");
+  const toolingInstructions = await fs.readFile(toolingInstructionPath, "utf-8");
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
   assert(
@@ -4891,6 +5373,31 @@ async function runRoutingGuardChecks() {
     languageModelToolsSource.includes("Prefer snapshot, index, window, profile, transcript, or export surfaces over opening raw session files"),
     "Language-model routing note must keep bounded inspection surfaces preferred over raw session files."
   );
+  await assertMissing(
+    disposableProbeFallbackScriptPath,
+    "Disposable local delete probe PowerShell fallback must stay removed once extension-hosted probe creation is available."
+  );
+  assert(
+    !toolingInstructions.includes("create-disposable-local-chat-probe.ps1"),
+    "Restart instructions must not point back to the removed disposable probe PowerShell fallback."
+  );
+
+  for (const toolName of [
+    "list_live_agent_chats",
+    "create_disposable_local_delete_probe",
+    "create_live_agent_chat",
+    "close_visible_live_chat_tabs",
+    "delete_live_agent_chat_artifacts",
+    "send_message_to_live_agent_chat",
+    "send_message_to_focused_live_chat",
+    "schedule_offline_live_agent_chat_cleanup",
+    "reveal_live_agent_chat"
+  ]) {
+    assert(
+      countRegisterToolOccurrences(languageModelToolsSource, toolName) === 1,
+      `Language-model tool source must register ${toolName} exactly once to avoid legacy/runtime duplication.`
+    );
+  }
 }
 
 async function assertMissing(targetPath, message) {
@@ -5155,29 +5662,69 @@ async function writeCopilotCliFixtureSession(sessionStateRoot, fixture) {
   await fs.utimes(path.join(sessionDir, "events.jsonl"), fixture.mtime, fixture.mtime);
 }
 
+async function cleanupWorkspaceTempArtifacts() {
+  const entries = await fs.readdir(workspaceRoot, { withFileTypes: true });
+  const tempDirs = entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(".tmp-"))
+    .map((entry) => path.join(workspaceRoot, entry.name));
+
+  await Promise.all(tempDirs.map((tempDir) => fs.rm(tempDir, { recursive: true, force: true })));
+}
+
+const namedChecks = [
+  ["cli", runCliChecks],
+  ["mcp", runMcpChecks],
+  ["disposable-delete-probe", runDisposableDeleteProbeChecks],
+  ["chat-interop-capabilities", runChatInteropCapabilityChecks],
+  ["chat-focus-targets", runChatFocusTargetChecks],
+  ["editor-focus-commands", runEditorFocusCommandChecks],
+  ["editor-tab-matcher", runEditorTabMatcherChecks],
+  ["self-target-guard", runSelfTargetGuardChecks],
+  ["chat-interop-selection", runChatInteropSelectionChecks],
+  ["focused-send", runFocusedSendBehaviorChecks],
+  ["create-chat-direct-agent-command", runCreateChatDirectAgentCommandChecks],
+  ["delete-chat-safety", runDeleteChatSafetyChecks],
+  ["chat-session-storage-delta", runChatSessionStorageDeltaChecks],
+  ["stabilized-create-workflow", runStabilizedCreateWorkflowChecks],
+  ["offline-local-chat-cleanup", runOfflineLocalChatCleanupChecks],
+  ["session-send-workflow", runSessionSendWorkflowChecks],
+  ["live-chat-support-matrix", runLiveChatSupportMatrixChecks],
+  ["local-to-copilot-cli-handoff", runLocalToCopilotCliHandoffChecks],
+  ["pending-request-heuristics", runPendingRequestHeuristicChecks],
+  ["copilot-cli-inspection", runCopilotCliInspectionChecks],
+  ["agent-architect-process-evidence", runAgentArchitectProcessEvidenceChecks],
+  ["manifest", runManifestChecks],
+  ["routing-guard", runRoutingGuardChecks]
+];
+
+const namedCheckMap = new Map(namedChecks);
+
+function resolveSelectedChecks(argv) {
+  if (argv.length === 0) {
+    return namedChecks;
+  }
+
+  return argv.map((checkName) => {
+    const runner = namedCheckMap.get(checkName);
+    if (!runner) {
+      throw new Error(`Unknown test check \"${checkName}\". Available checks: ${namedChecks.map(([name]) => name).join(", ")}`);
+    }
+    return [checkName, runner];
+  });
+}
+
 async function main() {
-  await runCliChecks();
-  await runMcpChecks();
-  await runChatInteropCapabilityChecks();
-  await runChatFocusTargetChecks();
-  await runEditorFocusCommandChecks();
-  await runEditorTabMatcherChecks();
-  await runSelfTargetGuardChecks();
-  await runChatInteropSelectionChecks();
-  await runFocusedSendBehaviorChecks();
-  await runCreateChatDirectAgentCommandChecks();
-  await runChatSessionStorageDeltaChecks();
-  await runStabilizedCreateWorkflowChecks();
-  await runOfflineLocalChatCleanupChecks();
-  await runSessionSendWorkflowChecks();
-  await runLiveChatSupportMatrixChecks();
-  await runLocalToCopilotCliHandoffChecks();
-  await runPendingRequestHeuristicChecks();
-  await runCopilotCliInspectionChecks();
-  await runAgentArchitectProcessEvidenceChecks();
-  await runManifestChecks();
-  await runRoutingGuardChecks();
-  process.stdout.write("Tests passed.\n");
+  await cleanupWorkspaceTempArtifacts();
+  const selectedChecks = resolveSelectedChecks(process.argv.slice(2));
+
+  try {
+    for (const [, runner] of selectedChecks) {
+      await runner();
+    }
+    process.stdout.write("Tests passed.\n");
+  } finally {
+    await cleanupWorkspaceTempArtifacts();
+  }
 }
 
 main().catch((error) => {

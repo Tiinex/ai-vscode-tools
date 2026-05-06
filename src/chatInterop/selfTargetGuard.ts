@@ -8,7 +8,7 @@ export function getExactSelfTargetingReason(
   operation: "reveal" | "send" | "close-visible-tabs" | "delete-artifacts",
   now = Date.now()
 ): string | undefined {
-  if (operation === "close-visible-tabs" || operation === "delete-artifacts") {
+  if (operation === "close-visible-tabs") {
     return undefined;
   }
 

@@ -1,6 +1,6 @@
 ﻿import * as vscode from "vscode";
 import { ChatInteropService } from "./service";
-import { sendMessageToSessionWithFallback } from "./sessionSendWorkflow";
+import { sendMessageToSession } from "./sessionSendWorkflow";
 import { ChatInteropApi, ChatInteropOptions } from "./types";
 
 const COMMAND_ALIASES = {
@@ -27,10 +27,10 @@ export function registerChatInterop(context: vscode.ExtensionContext, options: C
     context.subscriptions.push(vscode.commands.registerCommand(command, async (request) => service.sendMessage(request)));
   }
   for (const command of COMMAND_ALIASES.sendMessageWithFallback) {
-    context.subscriptions.push(vscode.commands.registerCommand(command, async (sessionId: string, prompt: string) => sendMessageToSessionWithFallback(service, {
+    context.subscriptions.push(vscode.commands.registerCommand(command, async (sessionId: string, prompt: string) => sendMessageToSession(service, {
       sessionId,
       prompt
-    }).then((workflow) => workflow.result)));
+    })));
   }
   for (const command of COMMAND_ALIASES.sendFocusedMessage) {
     context.subscriptions.push(vscode.commands.registerCommand(command, async (request) => service.sendFocusedMessage(request)));

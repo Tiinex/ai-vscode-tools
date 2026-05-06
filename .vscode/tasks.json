@@ -2,7 +2,7 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "ensure main-host extension link",
+			"label": "ensure windows main-host dev extension link",
 			"type": "shell",
 			"command": "powershell",
 			"args": [
@@ -10,7 +10,7 @@
 				"-ExecutionPolicy",
 				"Bypass",
 				"-File",
-				"tools/ensure-main-host-link.ps1"
+				"scripts/ensure-windows-main-host-dev-extension-link.ps1"
 			],
 			"presentation": {
 				"reveal": "always",
@@ -46,6 +46,124 @@
 				"reveal": "always",
 				"panel": "dedicated"
 			}
+		},
+		{
+			"label": "focused tooling checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"disposable-delete-probe",
+				"manifest",
+				"routing-guard"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "editor tab matcher checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"editor-tab-matcher"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "session send workflow checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "session send workflow checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"session-send-workflow",
+				"routing-guard"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "stabilized create checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"stabilized-create-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "strict live-send checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "strict send and create checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"session-send-workflow",
+				"stabilized-create-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "routing guard checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"routing-guard"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "delete chat safety checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"delete-chat-safety"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "delete matcher safety checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"delete-chat-safety",
+				"editor-tab-matcher"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "delete confidence checks",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"delete-chat-safety",
+				"offline-local-chat-cleanup",
+				"self-target-guard",
+				"routing-guard"
+			],
+			"isBackground": false
 		}
 	]
 }
