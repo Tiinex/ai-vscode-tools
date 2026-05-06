@@ -1,12 +1,15 @@
 # Tiinex AI VS Code Tooling
 
 Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
+Companion AI repo this tooling primarily supports: https://github.com/Tiinex/ai
 
 ![Tiinex AI VS Code Tooling logo](assets/logo.png)
 
 Tiinex AI VS Code Tooling is a VS Code extension for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging. It is built for people who need to understand what actually happened in Local chat state, recover from drift or compaction, and perform bounded operational actions without guessing.
 
 For everyday users, that means fast inspection and safer cleanup. For VS Code Copilot developers and developers targeting other IDEs, it also means there is a concrete, portable model here for how to separate persisted evidence, live-session operations, and offline cleanup.
+
+In practice, this tooling is primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use it independently for Local chat inspection and recovery work, but if you found it through the Marketplace and want the broader project context, start there as well.
 
 ## Why Install It
 
@@ -99,6 +102,79 @@ IDE-portable parts in this repo:
 - exact-target offline cleanup request modeling
 - offline cleanup queue consumption and state pruning
 - Local session artifact deletion rules
+
+Minimum porting contract:
+
+This repo does not yet publish a standalone SDK package for ports. The closest real contract today is the reference shape already present in code. If you want equivalent tooling in another IDE, implement an equivalent split even if the exact type names or host APIs differ.
+
+```ts
+type SessionDescriptor = {
+	sessionId: string;
+	title?: string;
+	jsonlPath: string;
+	workspaceStorageDir: string;
+	mtime: number;
+	size: number;
+};
+
+type SessionTarget = {
+	storageRoots?: string[];
+	latest?: boolean;
+	sessionId?: string;
+	sessionFile?: string;
+	includeNoise?: boolean;
+	detailLevel?: "summary" | "full";
+	anchorText?: string;
+	anchorOccurrence?: "first" | "last";
+	afterLatestCompact?: boolean;
+	maxBlocks?: number;
+	latestRequestFamilies?: number;
+	maxChars?: number;
+};
+
+interface PersistedEvidenceAdapter {
+	discoverSessions(storageRoots?: string[]): Promise<SessionDescriptor[]>;
+	renderSnapshot(target: SessionTarget): Promise<string>;
+	renderIndex(target: SessionTarget, tail?: number): Promise<string>;
+	renderTranscriptEvidence(target: SessionTarget): Promise<string>;
+	renderContextEstimate(target: SessionTarget): Promise<string>;
+	renderProfile(target: SessionTarget): Promise<string>;
+}
+
+interface ExactCleanupRequest {
+	workspaceStorageDir: string;
+	targetSessionIds: string[];
+	artifactPaths: string[];
+}
+
+interface LiveCommandResult {
+	ok: boolean;
+	reason?: string;
+}
+
+interface LiveChatAdapter {
+	listChats(): Promise<unknown[]>;
+	revealChat(sessionId: string): Promise<LiveCommandResult>;
+	closeVisibleTabs(sessionId: string): Promise<LiveCommandResult>;
+	deleteChat(sessionId: string): Promise<LiveCommandResult>;
+	createChat?(request: unknown): Promise<LiveCommandResult>;
+	sendMessage?(request: unknown): Promise<LiveCommandResult>;
+	sendFocusedMessage?(request: unknown): Promise<LiveCommandResult>;
+}
+```
+
+How to read that contract:
+
+- Required baseline: persisted evidence discovery plus bounded renderers for snapshot, index, transcript evidence, context estimate, and profile.
+- Required delete safety: destructive cleanup must carry both explicit `targetSessionIds` and explicit `artifactPaths`; titles, fuzzy matching, and broad keep-lists are not enough.
+- Host-sensitive layer: live create, send, reveal, and focus flows belong behind a separate adapter and may be weaker than the evidence layer without invalidating the port.
+- Required UX shape: raw session files may exist as a last resort, but bounded inspection views should remain the default recovery surface.
+
+Current code anchors for that split:
+
+- `src/coreAdapter.ts` carries the persisted evidence adapter shape.
+- `src/chatInterop/types.ts` carries the live-chat interop shape.
+- `src/offlineLocalChatCleanup.ts` carries the exact-target offline cleanup request shape.
 
 Practical porting guidance:
 
