@@ -185,38 +185,69 @@ Practical porting guidance:
 
 ## Tooling Status
 
+Each platform lane below is tracked as a checklist.
+
+- `Use Case` defines the behavior that must be trusted.
+- `Unit Test` records automated coverage that exercises or guards that behavior.
+- `Manual Test` records host-level validation where runtime behavior still matters.
+- `Skill` records whether a role-facing skill or usage file exists for that lane.
+- `Skill Test` records whether that skill guidance has been validated against current tooling behavior.
+
 - Persisted session inspection
 	- Windows
-		- [x] `manifest` passes.
-		- [x] `routing-guard` passes.
-		- [x] The bounded inspection lanes are the intended default, and raw session files remain last resort only.
+		- [x] Use Case: bounded inspection lanes are the intended default, and raw session files remain last resort only.
+		- [x] Unit Test: `manifest` passes.
+		- [x] Unit Test: `routing-guard` passes.
+		- [ ] Manual Test: host-level inspection flow is revalidated against the current Windows surface.
+		- [ ] Skill: role-facing guidance exists for persisted session inspection.
+		- [ ] Skill Test: persisted session inspection guidance has been validated against current tooling behavior.
 
 - Disposable local delete probes
 	- Windows
-		- [x] `disposable-delete-probe` passes.
-		- [x] Manual host validation confirmed disposable probe creation through the extension-hosted path instead of a shell fallback.
+		- [x] Use Case: disposable probe creation goes through the extension-hosted path instead of a shell fallback.
+		- [x] Unit Test: `disposable-delete-probe` passes.
+		- [x] Manual Test: host validation confirmed disposable probe creation through the extension-hosted path instead of a shell fallback.
+		- [ ] Skill: role-facing guidance exists for disposable local delete probes.
+		- [ ] Skill Test: disposable local delete probe guidance has been validated against current tooling behavior.
 
 - Exact local chat delete targeting
 	- Windows
-		- [x] `delete-chat-safety` passes.
-		- [x] `editor-tab-matcher` passes.
-		- [x] `self-target-guard` passes.
-		- [x] Manual host validation confirmed that disposable target chats could be removed without wiping the active working chat.
+		- [x] Use Case: disposable target chats can be removed without wiping the active working chat.
+		- [x] Unit Test: `delete-chat-safety` passes.
+		- [x] Unit Test: `editor-tab-matcher` passes.
+		- [x] Unit Test: `self-target-guard` passes.
+		- [x] Manual Test: host validation confirmed that disposable target chats could be removed without wiping the active working chat.
+		- [ ] Skill: role-facing guidance exists for exact local chat delete targeting.
+		- [ ] Skill Test: exact local chat delete targeting guidance has been validated against current tooling behavior.
 
 - Exact offline local chat cleanup
 	- Windows
-		- [x] `offline-local-chat-cleanup` passes.
-		- [x] Manual host validation confirmed queued exact-target cleanup across a real VS Code exit and restart on the primary Windows surface.
+		- [x] Use Case: queued exact-target cleanup survives a real VS Code exit and restart on the primary Windows surface.
+		- [x] Unit Test: `offline-local-chat-cleanup` passes.
+		- [x] Manual Test: host validation confirmed queued exact-target cleanup across a real VS Code exit and restart on the primary Windows surface.
+		- [ ] Skill: role-facing guidance exists for exact offline local chat cleanup.
+		- [ ] Skill Test: exact offline local chat cleanup guidance has been validated against current tooling behavior.
 
 - Exact live-chat create and send
 	- Windows
-		- [ ] `create-chat-direct-agent-command` exists and is exercised, but this lane is still treated as host-sensitive rather than fully hardened.
-		- [ ] `stabilized-create-workflow` exists and is exercised, but this lane is still treated as host-sensitive rather than fully hardened.
-		- [ ] `session-send-workflow` exists and is exercised, but this lane is still treated as host-sensitive rather than fully hardened.
+		- [ ] Use Case: create chat opens a new Local chat with the requested prompt on the current Windows host.
+		- [ ] Use Case: requested agent selection is preserved or explicitly reported as unverified on the current Windows host.
+		- [ ] Use Case: follow-up send reaches the intended Local chat session without retarget drift on the current Windows host.
+		- [ ] Unit Test: `create-chat-direct-agent-command` passes as an approved reliability gate rather than only existing and being exercised.
+		- [ ] Unit Test: `stabilized-create-workflow` passes as an approved reliability gate rather than only existing and being exercised.
+		- [ ] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
+		- [ ] Manual Test: create-and-send flow is revalidated end-to-end on the current Windows host.
+		- [ ] Skill: role-facing guidance exists for exact live-chat create and send.
+		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current tooling behavior.
 
 - Focused live-chat send
 	- Windows
-		- [ ] `focused-send` exists and is exercised, but this lane still depends too much on host behavior to present as an approved default workflow.
+		- [ ] Use Case: focused send reaches the intended visible Local chat without silently targeting the wrong thread.
+		- [ ] Use Case: focused send reports unverified or blocked selection state instead of implying stronger targeting than the host can prove.
+		- [ ] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
+		- [ ] Manual Test: focused-send behavior is revalidated on the current Windows host.
+		- [ ] Skill: role-facing guidance exists for focused live-chat send.
+		- [ ] Skill Test: focused live-chat send guidance has been validated against current tooling behavior.
 
 ## Known Limits
 
