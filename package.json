@@ -1,7 +1,7 @@
 {
   "name": "ai-vscode-tooling",
-  "displayName": "AI VS Code Tooling",
-  "description": "Optional VS Code recovery tooling for persisted session inspection, artifact-read verification, and Local recovery validation.",
+  "displayName": "Tiinex AI VS Code Tooling",
+  "description": "Tiinex tooling for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging in VS Code.",
   "version": "0.1.0",
   "private": true,
   "repository": {
@@ -47,122 +47,122 @@
   "contributes": {
     "commands": [
       {
-        "command": "aiRecoveryTooling.refreshSessions",
-        "title": "AI VS Code Tooling: Refresh Sessions"
+        "command": "tiinex.aiVscodeTooling.refreshSessions",
+        "title": "Tiinex: Refresh Sessions"
       },
       {
-        "command": "aiRecoveryTooling.openLatestSnapshot",
-        "title": "AI VS Code Tooling: Open Latest Snapshot"
+        "command": "tiinex.aiVscodeTooling.openLatestSnapshot",
+        "title": "Tiinex: Open Latest Snapshot"
       },
       {
-        "command": "aiRecoveryTooling.openLatestTranscriptEvidence",
-        "title": "AI VS Code Tooling: Open Latest Evidence Transcript"
+        "command": "tiinex.aiVscodeTooling.openLatestTranscriptEvidence",
+        "title": "Tiinex: Open Latest Evidence Transcript"
       },
       {
-        "command": "aiRecoveryTooling.openLatestContextEstimate",
-        "title": "AI VS Code Tooling: Open Latest Context Estimate"
+        "command": "tiinex.aiVscodeTooling.openLatestContextEstimate",
+        "title": "Tiinex: Open Latest Context Estimate"
       },
       {
-        "command": "aiRecoveryTooling.openLatestProfile",
-        "title": "AI VS Code Tooling: Open Latest Profile"
+        "command": "tiinex.aiVscodeTooling.openLatestProfile",
+        "title": "Tiinex: Open Latest Profile"
       },
       {
-        "command": "aiRecoveryTooling.surveyRecentSessions",
-        "title": "AI VS Code Tooling: Survey Recent Sessions"
+        "command": "tiinex.aiVscodeTooling.surveyRecentSessions",
+        "title": "Tiinex: Survey Recent Sessions"
       },
       {
-        "command": "aiRecoveryTooling.openTranscriptEvidence",
-        "title": "AI VS Code Tooling: Open Session Evidence Transcript"
+        "command": "tiinex.aiVscodeTooling.openTranscriptEvidence",
+        "title": "Tiinex: Open Session Evidence Transcript"
       },
       {
-        "command": "aiRecoveryTooling.openSnapshot",
-        "title": "AI VS Code Tooling: Open Session Snapshot"
+        "command": "tiinex.aiVscodeTooling.openSnapshot",
+        "title": "Tiinex: Open Session Snapshot"
       },
       {
-        "command": "aiRecoveryTooling.openContextEstimate",
-        "title": "AI VS Code Tooling: Open Session Context Estimate"
+        "command": "tiinex.aiVscodeTooling.openContextEstimate",
+        "title": "Tiinex: Open Session Context Estimate"
       },
       {
-        "command": "aiRecoveryTooling.openProfile",
-        "title": "AI VS Code Tooling: Open Session Profile"
+        "command": "tiinex.aiVscodeTooling.openProfile",
+        "title": "Tiinex: Open Session Profile"
       },
       {
-        "command": "aiRecoveryTooling.openIndex",
-        "title": "AI VS Code Tooling: Open Session Index"
+        "command": "tiinex.aiVscodeTooling.openIndex",
+        "title": "Tiinex: Open Session Index"
       },
       {
-        "command": "aiRecoveryTooling.openSessionFile",
-        "title": "AI VS Code Tooling: Open Raw Session File (Last Resort)"
+        "command": "tiinex.aiVscodeTooling.openSessionFile",
+        "title": "Tiinex: Open Raw Session File (Last Resort)"
       },
       {
-        "command": "aiRecoveryTooling.listLiveChats",
-        "title": "AI VS Code Tooling: List Local Chats"
+        "command": "tiinex.aiVscodeTooling.listLiveChats",
+        "title": "Tiinex: List Local Chats"
       },
       {
-        "command": "aiRecoveryTooling.revealLiveChat",
-        "title": "AI VS Code Tooling: Reveal Local Chat"
+        "command": "tiinex.aiVscodeTooling.revealLiveChat",
+        "title": "Tiinex: Reveal Local Chat"
       },
       {
-        "command": "aiRecoveryTooling.closeVisibleLiveChatTabs",
-        "title": "AI VS Code Tooling: Close Visible Local Chat Tabs"
+        "command": "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs",
+        "title": "Tiinex: Close Visible Local Chat Tabs"
       },
       {
-        "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
-        "title": "AI VS Code Tooling: Delete Local Chat Artifacts"
+        "command": "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
+        "title": "Tiinex: Delete Local Chat Artifacts"
       },
       {
-        "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
-        "title": "AI VS Code Tooling: Schedule Offline Local Chat Cleanup"
+        "command": "tiinex.aiVscodeTooling.scheduleOfflineLocalChatCleanup",
+        "title": "Tiinex: Schedule Offline Local Chat Cleanup"
       },
       {
-        "command": "aiRecoveryTooling.createDisposableLocalDeleteProbe",
-        "title": "AI VS Code Tooling: Create Disposable Local Delete Probe"
+        "command": "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
+        "title": "Tiinex: Create Disposable Local Delete Probe"
       },
       {
-        "command": "aiRecoveryTooling.createLiveChat",
-        "title": "AI VS Code Tooling: Create Local Chat"
+        "command": "tiinex.aiVscodeTooling.createLiveChat",
+        "title": "Tiinex: Create Local Chat"
       },
       {
-        "command": "aiRecoveryTooling.sendMessageToLiveChat",
-        "title": "AI VS Code Tooling: Send Message To Local Chat"
+        "command": "tiinex.aiVscodeTooling.sendMessageToLiveChat",
+        "title": "Tiinex: Send Message To Local Chat"
       },
       {
-        "command": "aiRecoveryTooling.sendMessageToFocusedLiveChat",
-        "title": "AI VS Code Tooling: Send Message To Focused Local Chat"
+        "command": "tiinex.aiVscodeTooling.sendMessageToFocusedLiveChat",
+        "title": "Tiinex: Send Message To Focused Local Chat"
       }
     ],
     "views": {
       "explorer": [
         {
-          "id": "aiRecoveryTooling.sessions",
-          "name": "Recovery Sessions",
-          "when": "config.aiRecoveryTooling.showSessionsView"
+          "id": "tiinex.aiVscodeTooling.sessions",
+          "name": "Tiinex Sessions",
+          "when": "config.tiinex.aiVscodeTooling.showSessionsView"
         }
       ]
     },
     "configuration": {
-      "title": "AI VS Code Tooling",
+      "title": "Tiinex AI VS Code Tooling",
       "properties": {
-        "aiRecoveryTooling.showSessionsView": {
+        "tiinex.aiVscodeTooling.showSessionsView": {
           "type": "boolean",
           "default": false,
-          "description": "Show the Recovery Sessions view in the Explorer."
+          "description": "Show the Tiinex Sessions view in the Explorer."
         },
-        "aiRecoveryTooling.sessionDiscoveryScope": {
+        "tiinex.aiVscodeTooling.sessionDiscoveryScope": {
           "type": "string",
           "enum": [
             "current-workspace",
             "all-local"
           ],
           "default": "current-workspace",
-          "description": "Choose whether the Explorer session view and workspace commands use only the current workspace's session storage or all local workspaceStorage roots."
+          "description": "Choose whether the Tiinex session view and Tiinex workspace commands use only the current workspace's session storage or all local workspaceStorage roots."
         },
-        "aiRecoveryTooling.postCreateTimeoutMs": {
+        "tiinex.aiVscodeTooling.postCreateTimeoutMs": {
           "type": "number",
           "default": 90000,
           "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows). Default: 90 seconds."
         },
-        "aiRecoveryTooling.waitForPersistedDefault": {
+        "tiinex.aiVscodeTooling.waitForPersistedDefault": {
           "type": "boolean",
           "default": true,
           "description": "When true, focused-send calls will wait for a persisted session mutation by default. Set to false to make focused-send non-blocking by default. Individual calls can override with the request flag `waitForPersisted`."
@@ -172,138 +172,138 @@
     "menus": {
       "view/title": [
         {
-          "command": "aiRecoveryTooling.refreshSessions",
-          "when": "view == aiRecoveryTooling.sessions",
+          "command": "tiinex.aiVscodeTooling.refreshSessions",
+          "when": "view == tiinex.aiVscodeTooling.sessions",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.createDisposableLocalDeleteProbe",
-          "when": "view == aiRecoveryTooling.sessions",
+          "command": "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
+          "when": "view == tiinex.aiVscodeTooling.sessions",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.createLiveChat",
-          "when": "view == aiRecoveryTooling.sessions",
+          "command": "tiinex.aiVscodeTooling.createLiveChat",
+          "when": "view == tiinex.aiVscodeTooling.sessions",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.listLiveChats",
-          "when": "view == aiRecoveryTooling.sessions",
+          "command": "tiinex.aiVscodeTooling.listLiveChats",
+          "when": "view == tiinex.aiVscodeTooling.sessions",
           "group": "navigation"
         }
       ],
       "view/item/context": [
         {
-          "command": "aiRecoveryTooling.openTranscriptEvidence",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.openTranscriptEvidence",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "inline"
         },
         {
-          "command": "aiRecoveryTooling.openSnapshot",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.openSnapshot",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.openContextEstimate",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.openContextEstimate",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.openProfile",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.openProfile",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.openIndex",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.openIndex",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.openSessionFile",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.openSessionFile",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "z_lastResort"
         },
         {
-          "command": "aiRecoveryTooling.revealLiveChat",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.revealLiveChat",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "inline"
         },
         {
-          "command": "aiRecoveryTooling.closeVisibleLiveChatTabs",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.scheduleOfflineLocalChatCleanup",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         },
         {
-          "command": "aiRecoveryTooling.sendMessageToLiveChat",
-          "when": "view == aiRecoveryTooling.sessions && viewItem == session",
+          "command": "tiinex.aiVscodeTooling.sendMessageToLiveChat",
+          "when": "view == tiinex.aiVscodeTooling.sessions && viewItem == session",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "aiRecoveryTooling.refreshSessions",
+          "command": "tiinex.aiVscodeTooling.refreshSessions",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.deleteLiveChatArtifacts",
+          "command": "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
+          "command": "tiinex.aiVscodeTooling.scheduleOfflineLocalChatCleanup",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openLatestSnapshot",
+          "command": "tiinex.aiVscodeTooling.openLatestSnapshot",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openLatestTranscriptEvidence",
+          "command": "tiinex.aiVscodeTooling.openLatestTranscriptEvidence",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openLatestContextEstimate",
+          "command": "tiinex.aiVscodeTooling.openLatestContextEstimate",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openLatestProfile",
+          "command": "tiinex.aiVscodeTooling.openLatestProfile",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.surveyRecentSessions",
+          "command": "tiinex.aiVscodeTooling.surveyRecentSessions",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openTranscriptEvidence",
+          "command": "tiinex.aiVscodeTooling.openTranscriptEvidence",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openSnapshot",
+          "command": "tiinex.aiVscodeTooling.openSnapshot",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openContextEstimate",
+          "command": "tiinex.aiVscodeTooling.openContextEstimate",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openProfile",
+          "command": "tiinex.aiVscodeTooling.openProfile",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openIndex",
+          "command": "tiinex.aiVscodeTooling.openIndex",
           "when": "false"
         },
         {
-          "command": "aiRecoveryTooling.openSessionFile",
+          "command": "tiinex.aiVscodeTooling.openSessionFile",
           "when": "false"
         }
       ]

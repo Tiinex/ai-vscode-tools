@@ -14,61 +14,61 @@ interface SessionActionDefinition {
 const SESSION_ACTIONS: SessionActionDefinition[] = [
   {
     label: "Open Evidence Transcript",
-    command: "aiRecoveryTooling.openTranscriptEvidence",
+    command: "tiinex.aiVscodeTooling.openTranscriptEvidence",
     tooltip: "Render the canonical transcript-based evidence markdown for this session.",
     icon: new vscode.ThemeIcon("book")
   },
   {
     label: "Open Snapshot",
-    command: "aiRecoveryTooling.openSnapshot",
+    command: "tiinex.aiVscodeTooling.openSnapshot",
     tooltip: "Render a bounded session snapshot markdown document.",
     icon: new vscode.ThemeIcon("preview")
   },
   {
     label: "Open Context Estimate",
-    command: "aiRecoveryTooling.openContextEstimate",
+    command: "tiinex.aiVscodeTooling.openContextEstimate",
     tooltip: "Render the current bounded context estimate markdown document.",
     icon: new vscode.ThemeIcon("graph")
   },
   {
     label: "Open Profile",
-    command: "aiRecoveryTooling.openProfile",
+    command: "tiinex.aiVscodeTooling.openProfile",
     tooltip: "Render findings-first session diagnostics.",
     icon: new vscode.ThemeIcon("pulse")
   },
   {
     label: "Open Tail Index",
-    command: "aiRecoveryTooling.openIndex",
+    command: "tiinex.aiVscodeTooling.openIndex",
     tooltip: "Render a bounded trailing index of recent persisted rows.",
     icon: new vscode.ThemeIcon("list-tree")
   },
   {
     label: "Open Raw Session File (Last Resort)",
-    command: "aiRecoveryTooling.openSessionFile",
+    command: "tiinex.aiVscodeTooling.openSessionFile",
     tooltip: "Open the underlying chat session JSONL file, or a bounded raw preview when the file is too large for direct extension-host opening. Prefer transcript, snapshot, index, profile, or context views first.",
     icon: new vscode.ThemeIcon("go-to-file")
   },
   {
     label: "Reveal Local Chat",
-    command: "aiRecoveryTooling.revealLiveChat",
+    command: "tiinex.aiVscodeTooling.revealLiveChat",
     tooltip: "Reveal the matching Local chat session when the host exposes an exact-session Local reveal command.",
     icon: new vscode.ThemeIcon("comment-discussion")
   },
   {
     label: "Close Visible Chat Tabs",
-    command: "aiRecoveryTooling.closeVisibleLiveChatTabs",
+    command: "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs",
     tooltip: "Close visible editor-hosted chat tabs that match this Local session.",
     icon: new vscode.ThemeIcon("close-all")
   },
   {
     label: "Delete Local Chat Artifacts",
-    command: "aiRecoveryTooling.deleteLiveChatArtifacts",
+    command: "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
     tooltip: "Close visible editor-hosted chat tabs for this Local session and delete its persisted session, transcript, and resource artifacts from disk.",
     icon: new vscode.ThemeIcon("trash")
   },
   {
     label: "Send Message To Local Chat",
-    command: "aiRecoveryTooling.sendMessageToLiveChat",
+    command: "tiinex.aiVscodeTooling.sendMessageToLiveChat",
     tooltip: "Send a follow-up message to this Local chat session, using exact send when available or reveal plus focused-send fallback when needed.",
     icon: new vscode.ThemeIcon("send")
   }

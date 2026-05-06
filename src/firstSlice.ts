@@ -1,9 +1,9 @@
 ﻿const FIRST_SLICE_SESSION_COMMANDS = new Set([
-  "aiRecoveryTooling.openTranscriptEvidence",
-  "aiRecoveryTooling.openSnapshot",
-  "aiRecoveryTooling.openContextEstimate",
-  "aiRecoveryTooling.openProfile",
-  "aiRecoveryTooling.openIndex"
+  "tiinex.aiVscodeTooling.openTranscriptEvidence",
+  "tiinex.aiVscodeTooling.openSnapshot",
+  "tiinex.aiVscodeTooling.openContextEstimate",
+  "tiinex.aiVscodeTooling.openProfile",
+  "tiinex.aiVscodeTooling.openIndex"
 ]);
 
 const FIRST_SLICE_SESSION_TOOL_NAMES = new Set([
@@ -19,21 +19,21 @@ const FIRST_SLICE_SESSION_TOOL_NAMES = new Set([
 ]);
 
 const LAST_RESORT_SESSION_COMMANDS = new Set([
-  "aiRecoveryTooling.openSessionFile"
+  "tiinex.aiVscodeTooling.openSessionFile"
 ]);
 
 const LOCAL_CHAT_CONTROL_COMMANDS = new Set([
-  "aiRecoveryTooling.listLiveChats",
-  "aiRecoveryTooling.revealLiveChat",
-  "aiRecoveryTooling.closeVisibleLiveChatTabs"
+  "tiinex.aiVscodeTooling.listLiveChats",
+  "tiinex.aiVscodeTooling.revealLiveChat",
+  "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs"
 ]);
 
 const LOCAL_CHAT_MUTATION_COMMANDS = new Set([
-  "aiRecoveryTooling.createDisposableLocalDeleteProbe",
-  "aiRecoveryTooling.createLiveChat",
-  "aiRecoveryTooling.deleteLiveChatArtifacts",
-  "aiRecoveryTooling.sendMessageToLiveChat",
-  "aiRecoveryTooling.sendMessageToFocusedLiveChat"
+  "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
+  "tiinex.aiVscodeTooling.createLiveChat",
+  "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
+  "tiinex.aiVscodeTooling.sendMessageToLiveChat",
+  "tiinex.aiVscodeTooling.sendMessageToFocusedLiveChat"
 ]);
 
 export const FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED = false;

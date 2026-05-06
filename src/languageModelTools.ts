@@ -1664,7 +1664,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             () => "Creating a disposable Local delete probe",
             async (input) => {
               const output = await vscode.commands.executeCommand(
-                "aiRecoveryTooling.createDisposableLocalDeleteProbe",
+                "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
                 toDisposableDeleteProbeCommandRequest(input)
               ) as DisposableDeleteProbeCommandResult | undefined;
               if (!output || !output.result.ok) {

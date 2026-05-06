@@ -30,7 +30,7 @@ import {
 const deliveryModeSchema = z.enum(["file-only", "file-and-inline-if-safe", "inline-if-safe"]);
 
 const server = new McpServer({
-  name: "aiRecoveryTooling",
+  name: "tiinexAiVscodeTooling",
   version: "0.1.0"
 });
 

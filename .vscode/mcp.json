@@ -1,6 +1,6 @@
-﻿{
+{
   "servers": {
-    "aiRecoveryTooling": {
+    "tiinexAiVscodeTooling": {
       "type": "stdio",
       "command": "node",
       "args": [

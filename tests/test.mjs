@@ -83,27 +83,27 @@ const expectedLanguageModelToolNames = [
 ];
 
 const expectedExtensionCommandNames = [
-  "aiRecoveryTooling.refreshSessions",
-  "aiRecoveryTooling.openLatestSnapshot",
-  "aiRecoveryTooling.openLatestTranscriptEvidence",
-  "aiRecoveryTooling.openLatestContextEstimate",
-  "aiRecoveryTooling.openLatestProfile",
-  "aiRecoveryTooling.surveyRecentSessions",
-  "aiRecoveryTooling.openTranscriptEvidence",
-  "aiRecoveryTooling.openSnapshot",
-  "aiRecoveryTooling.openContextEstimate",
-  "aiRecoveryTooling.openProfile",
-  "aiRecoveryTooling.openIndex",
-  "aiRecoveryTooling.openSessionFile",
-  "aiRecoveryTooling.listLiveChats",
-  "aiRecoveryTooling.revealLiveChat",
-  "aiRecoveryTooling.closeVisibleLiveChatTabs",
-  "aiRecoveryTooling.deleteLiveChatArtifacts",
-  "aiRecoveryTooling.scheduleOfflineLocalChatCleanup",
-  "aiRecoveryTooling.createDisposableLocalDeleteProbe",
-  "aiRecoveryTooling.createLiveChat",
-  "aiRecoveryTooling.sendMessageToLiveChat",
-  "aiRecoveryTooling.sendMessageToFocusedLiveChat"
+  "tiinex.aiVscodeTooling.refreshSessions",
+  "tiinex.aiVscodeTooling.openLatestSnapshot",
+  "tiinex.aiVscodeTooling.openLatestTranscriptEvidence",
+  "tiinex.aiVscodeTooling.openLatestContextEstimate",
+  "tiinex.aiVscodeTooling.openLatestProfile",
+  "tiinex.aiVscodeTooling.surveyRecentSessions",
+  "tiinex.aiVscodeTooling.openTranscriptEvidence",
+  "tiinex.aiVscodeTooling.openSnapshot",
+  "tiinex.aiVscodeTooling.openContextEstimate",
+  "tiinex.aiVscodeTooling.openProfile",
+  "tiinex.aiVscodeTooling.openIndex",
+  "tiinex.aiVscodeTooling.openSessionFile",
+  "tiinex.aiVscodeTooling.listLiveChats",
+  "tiinex.aiVscodeTooling.revealLiveChat",
+  "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs",
+  "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
+  "tiinex.aiVscodeTooling.scheduleOfflineLocalChatCleanup",
+  "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
+  "tiinex.aiVscodeTooling.createLiveChat",
+  "tiinex.aiVscodeTooling.sendMessageToLiveChat",
+  "tiinex.aiVscodeTooling.sendMessageToFocusedLiveChat"
 ];
 
 let sqlJsPromise;
@@ -5316,8 +5316,8 @@ async function runManifestChecks() {
   const windowTool = languageModelTools.find((tool) => tool.name === "get_agent_session_window");
   const transcriptTool = languageModelTools.find((tool) => tool.name === "export_agent_evidence_transcript");
   const estimateTool = languageModelTools.find((tool) => tool.name === "estimate_agent_context_breakdown");
-  const rawSessionCommand = extensionCommands.find((command) => command.command === "aiRecoveryTooling.openSessionFile");
-  const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "aiRecoveryTooling.openSessionFile");
+  const rawSessionCommand = extensionCommands.find((command) => command.command === "tiinex.aiVscodeTooling.openSessionFile");
+  const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "tiinex.aiVscodeTooling.openSessionFile");
 
   assert(windowTool?.inputSchema?.properties?.afterLatestCompact, "package.json window tool schema must expose afterLatestCompact.");
   assert(windowTool?.inputSchema?.properties?.anchorOccurrence, "package.json window tool schema must expose anchorOccurrence.");
@@ -5325,18 +5325,18 @@ async function runManifestChecks() {
   assert(transcriptTool?.inputSchema?.properties?.maxBlocks, "package.json transcript tool schema must expose maxBlocks.");
   assert(transcriptTool?.inputSchema?.properties?.afterLatestCompact, "package.json transcript tool schema must expose afterLatestCompact.");
   assert(estimateTool?.inputSchema?.properties?.latestRequestFamilies, "package.json context estimate tool schema must expose latestRequestFamilies.");
-  assert(rawSessionCommand?.title === "AI VS Code Tooling: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
+  assert(rawSessionCommand?.title === "Tiinex: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
   assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
 
   const viewTitleCommands = viewTitleMenu.map((item) => item.command);
   const viewItemCommands = viewItemContextMenu.map((item) => item.command);
-  assert(viewTitleCommands.includes("aiRecoveryTooling.createDisposableLocalDeleteProbe"), "package.json view/title menu must expose Create Disposable Local Delete Probe.");
-  assert(viewTitleCommands.includes("aiRecoveryTooling.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
-  assert(viewTitleCommands.includes("aiRecoveryTooling.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
-  assert(viewItemCommands.includes("aiRecoveryTooling.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
-  assert(viewItemCommands.includes("aiRecoveryTooling.closeVisibleLiveChatTabs"), "package.json session context menu must expose Close Visible Local Chat Tabs.");
-  assert(viewItemCommands.includes("aiRecoveryTooling.deleteLiveChatArtifacts"), "package.json session context menu must expose Delete Local Chat Artifacts.");
-  assert(viewItemCommands.includes("aiRecoveryTooling.sendMessageToLiveChat"), "package.json session context menu must expose Send Message To Local Chat.");
+  assert(viewTitleCommands.includes("tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe"), "package.json view/title menu must expose Create Disposable Local Delete Probe.");
+  assert(viewTitleCommands.includes("tiinex.aiVscodeTooling.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
+  assert(viewTitleCommands.includes("tiinex.aiVscodeTooling.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.closeVisibleLiveChatTabs"), "package.json session context menu must expose Close Visible Local Chat Tabs.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.deleteLiveChatArtifacts"), "package.json session context menu must expose Delete Local Chat Artifacts.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.sendMessageToLiveChat"), "package.json session context menu must expose Send Message To Local Chat.");
 }
 
 async function runRoutingGuardChecks() {
@@ -5346,15 +5346,15 @@ async function runRoutingGuardChecks() {
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
   assert(
-    firstSliceModule.isFirstSliceSessionCommand("aiRecoveryTooling.openSessionFile") === false,
+    firstSliceModule.isFirstSliceSessionCommand("tiinex.aiVscodeTooling.openSessionFile") === false,
     "Routing guard must keep raw session file access out of the default first-slice session commands."
   );
   assert(
-    firstSliceModule.isEnabledSessionCommand("aiRecoveryTooling.openSessionFile") === true,
+    firstSliceModule.isEnabledSessionCommand("tiinex.aiVscodeTooling.openSessionFile") === true,
     "Routing guard must keep raw session file access available as an explicit non-default escape hatch."
   );
   assert(
-    firstSliceModule.isFirstSliceSessionCommand("aiRecoveryTooling.openSnapshot") === true,
+    firstSliceModule.isFirstSliceSessionCommand("tiinex.aiVscodeTooling.openSnapshot") === true,
     "Routing guard must keep bounded snapshot inspection in the default first-slice session commands."
   );
   assert(

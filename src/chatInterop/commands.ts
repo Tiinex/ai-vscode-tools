@@ -4,14 +4,14 @@ import { sendMessageToSession } from "./sessionSendWorkflow";
 import { ChatInteropApi, ChatInteropOptions } from "./types";
 
 const COMMAND_ALIASES = {
-  listChats: ["aiRecoveryTooling.chatInterop.listChats"],
-  createChat: ["aiRecoveryTooling.chatInterop.createChat"],
-  sendMessage: ["aiRecoveryTooling.chatInterop.sendMessage"],
-  sendMessageWithFallback: ["aiRecoveryTooling.chatInterop.sendMessageWithFallback"],
-  sendFocusedMessage: ["aiRecoveryTooling.chatInterop.sendFocusedMessage"],
-  closeVisibleTabs: ["aiRecoveryTooling.chatInterop.closeVisibleTabs"],
-  deleteChat: ["aiRecoveryTooling.chatInterop.deleteChat"],
-  revealChat: ["aiRecoveryTooling.chatInterop.revealChat"]
+  listChats: ["tiinex.aiVscodeTooling.chatInterop.listChats"],
+  createChat: ["tiinex.aiVscodeTooling.chatInterop.createChat"],
+  sendMessage: ["tiinex.aiVscodeTooling.chatInterop.sendMessage"],
+  sendMessageWithFallback: ["tiinex.aiVscodeTooling.chatInterop.sendMessageWithFallback"],
+  sendFocusedMessage: ["tiinex.aiVscodeTooling.chatInterop.sendFocusedMessage"],
+  closeVisibleTabs: ["tiinex.aiVscodeTooling.chatInterop.closeVisibleTabs"],
+  deleteChat: ["tiinex.aiVscodeTooling.chatInterop.deleteChat"],
+  revealChat: ["tiinex.aiVscodeTooling.chatInterop.revealChat"]
 } as const;
 
 export function registerChatInterop(context: vscode.ExtensionContext, options: ChatInteropOptions = {}): ChatInteropApi {

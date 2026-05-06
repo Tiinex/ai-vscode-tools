@@ -153,14 +153,14 @@ export interface ChatInteropApi {
 }
 
 export type CommandMap = {
-  "aiRecoveryTooling.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
-  "aiRecoveryTooling.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "aiRecoveryTooling.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
-  "aiRecoveryTooling.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
-  "aiRecoveryTooling.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "aiRecoveryTooling.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
-  "aiRecoveryTooling.chatInterop.deleteChat": (sessionId: string) => Promise<ChatCommandResult>;
-  "aiRecoveryTooling.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
+  "tiinex.aiVscodeTooling.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.deleteChat": (sessionId: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTooling.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
 };
 
 export function toModelSelector(value: ChatModelSelector | undefined): InternalChatOpenOptions["modelSelector"] | undefined {
