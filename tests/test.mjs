@@ -1,4 +1,4 @@
-﻿import { execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
@@ -12,9 +12,9 @@ const execFileAsync = promisify(execFile);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(scriptDir, "..");
 const workspaceRoot = packageRoot;
-const distCli = path.join(packageRoot, "dist", "tooling", "cli.js");
-const distOfflineLocalChatCleanupCli = path.join(packageRoot, "dist", "tooling", "offlineLocalChatCleanupCli.js");
-const distServer = path.join(packageRoot, "dist", "tooling", "mcp-server.js");
+const distCli = path.join(packageRoot, "dist", "tools", "cli.js");
+const distOfflineLocalChatCleanupCli = path.join(packageRoot, "dist", "tools", "offlineLocalChatCleanupCli.js");
+const distServer = path.join(packageRoot, "dist", "tools", "mcp-server.js");
 const benchmarkSessionFile = path.join(
   workspaceRoot,
   "tests",
@@ -38,12 +38,12 @@ const distDisposableDeleteProbe = path.join(packageRoot, "dist", "disposableDele
 const distFirstSlice = path.join(packageRoot, "dist", "firstSlice.js");
 const distCopilotCliSummary = path.join(packageRoot, "dist", "chatInterop", "copilotCliSummary.js");
 const distLocalToCopilotCliHandoff = path.join(packageRoot, "dist", "chatInterop", "localToCopilotCliHandoff.js");
-const distCopilotCliTooling = path.join(packageRoot, "dist", "tooling", "copilot-cli.js");
-const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tooling", "agentArchitectProcessEvidence.js");
-const distToolingCore = path.join(packageRoot, "dist", "tooling", "core.js");
+const distCopilotCliTools = path.join(packageRoot, "dist", "tools", "copilot-cli.js");
+const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools", "agentArchitectProcessEvidence.js");
+const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
-const toolingInstructionPath = path.join(packageRoot, ".github", "instructions", "fix-and-improve-tooling.temporary.instructions.md");
+const toolsInstructionPath = path.join(packageRoot, ".github", "instructions", "fix-and-improve-tools.temporary.instructions.md");
 const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
 const disposableProbeFallbackScriptPath = path.join(packageRoot, "tools", "create-disposable-local-chat-probe.ps1");
 const sqlJsDistRoot = path.join(packageRoot, "node_modules", "sql.js", "dist");
@@ -83,27 +83,27 @@ const expectedLanguageModelToolNames = [
 ];
 
 const expectedExtensionCommandNames = [
-  "tiinex.aiVscodeTooling.refreshSessions",
-  "tiinex.aiVscodeTooling.openLatestSnapshot",
-  "tiinex.aiVscodeTooling.openLatestTranscriptEvidence",
-  "tiinex.aiVscodeTooling.openLatestContextEstimate",
-  "tiinex.aiVscodeTooling.openLatestProfile",
-  "tiinex.aiVscodeTooling.surveyRecentSessions",
-  "tiinex.aiVscodeTooling.openTranscriptEvidence",
-  "tiinex.aiVscodeTooling.openSnapshot",
-  "tiinex.aiVscodeTooling.openContextEstimate",
-  "tiinex.aiVscodeTooling.openProfile",
-  "tiinex.aiVscodeTooling.openIndex",
-  "tiinex.aiVscodeTooling.openSessionFile",
-  "tiinex.aiVscodeTooling.listLiveChats",
-  "tiinex.aiVscodeTooling.revealLiveChat",
-  "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs",
-  "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
-  "tiinex.aiVscodeTooling.scheduleOfflineLocalChatCleanup",
-  "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
-  "tiinex.aiVscodeTooling.createLiveChat",
-  "tiinex.aiVscodeTooling.sendMessageToLiveChat",
-  "tiinex.aiVscodeTooling.sendMessageToFocusedLiveChat"
+  "tiinex.aiVscodeTools.refreshSessions",
+  "tiinex.aiVscodeTools.openLatestSnapshot",
+  "tiinex.aiVscodeTools.openLatestTranscriptEvidence",
+  "tiinex.aiVscodeTools.openLatestContextEstimate",
+  "tiinex.aiVscodeTools.openLatestProfile",
+  "tiinex.aiVscodeTools.surveyRecentSessions",
+  "tiinex.aiVscodeTools.openTranscriptEvidence",
+  "tiinex.aiVscodeTools.openSnapshot",
+  "tiinex.aiVscodeTools.openContextEstimate",
+  "tiinex.aiVscodeTools.openProfile",
+  "tiinex.aiVscodeTools.openIndex",
+  "tiinex.aiVscodeTools.openSessionFile",
+  "tiinex.aiVscodeTools.listLiveChats",
+  "tiinex.aiVscodeTools.revealLiveChat",
+  "tiinex.aiVscodeTools.closeVisibleLiveChatTabs",
+  "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
+  "tiinex.aiVscodeTools.scheduleOfflineLocalChatCleanup",
+  "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
+  "tiinex.aiVscodeTools.createLiveChat",
+  "tiinex.aiVscodeTools.sendMessageToLiveChat",
+  "tiinex.aiVscodeTools.sendMessageToFocusedLiveChat"
 ];
 
 let sqlJsPromise;
@@ -1552,7 +1552,7 @@ async function runCreateChatDirectAgentCommandChecks() {
     const service = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
 
     const result = await service.createChat({
-      prompt: 'Create a local recovery tooling helper named artifact-list-item-checker using the provided build input.',
+      prompt: 'Create a local recovery tools helper named artifact-list-item-checker using the provided build input.',
       agentName: 'agent-architect',
       requireSelectionEvidence: false,
       blockOnResponse: true
@@ -1563,7 +1563,7 @@ async function runCreateChatDirectAgentCommandChecks() {
     assert(executedCommands[1]?.command === 'workbench.action.chat.openagent-architect', 'Direct agent-open createChat test did not prefer the runtime openagent-architect command.');
   assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Direct agent-open createChat test did not focus the newly opened chat before dispatch.');
   assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Direct agent-open createChat test did not prefill the focused chat input after opening the direct agent chat.');
-  assert(executedCommands[3]?.args?.query === 'Create a local recovery tooling helper named artifact-list-item-checker using the provided build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
+  assert(executedCommands[3]?.args?.query === 'Create a local recovery tools helper named artifact-list-item-checker using the provided build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
   assert(executedCommands[3]?.args?.isPartialQuery === true, 'Direct agent-open createChat test did not use partial-query prefill for the focused submit path.');
   assert(executedCommands[4]?.command === 'workbench.action.chat.submit', 'Direct agent-open createChat test did not submit the focused chat after prefilling it.');
 
@@ -4428,7 +4428,7 @@ async function runLocalToCopilotCliHandoffChecks() {
 }
 
 async function runPendingRequestHeuristicChecks() {
-  const toolingModule = await import(pathToFileURL(distToolingCore).href);
+  const toolsModule = await import(pathToFileURL(distToolsCore).href);
   const {
     buildWindow,
     buildContextEstimate,
@@ -4438,7 +4438,7 @@ async function runPendingRequestHeuristicChecks() {
     renderContextEstimateMarkdown,
     renderSnapshotMarkdown,
     renderTranscriptEvidenceMarkdown
-  } = toolingModule;
+  } = toolsModule;
   const tempDir = path.join(workspaceRoot, "tools", ".test-pending-request-heuristics");
   await fs.rm(tempDir, { recursive: true, force: true });
   await fs.mkdir(tempDir, { recursive: true });
@@ -4716,8 +4716,8 @@ async function runPendingRequestHeuristicChecks() {
 async function runCopilotCliInspectionChecks() {
   const copilotCliSummaryModule = await import(pathToFileURL(distCopilotCliSummary).href);
   const { renderCopilotCliLatestTurnLines, summarizeCopilotCliEventStream } = copilotCliSummaryModule;
-  const copilotCliToolingModule = await import(pathToFileURL(distCopilotCliTooling).href);
-  const { inspectCopilotCliSession, listCopilotCliSessions, renderCopilotCliSessionInspectionMarkdown } = copilotCliToolingModule;
+  const copilotCliToolsModule = await import(pathToFileURL(distCopilotCliTools).href);
+  const { inspectCopilotCliSession, listCopilotCliSessions, renderCopilotCliSessionInspectionMarkdown } = copilotCliToolsModule;
 
   const raw = [
     JSON.stringify({ type: "session.resume", data: { eventCount: 5 }, timestamp: "2026-04-09T16:00:00.000Z" }),
@@ -4742,12 +4742,12 @@ async function runCopilotCliInspectionChecks() {
   const fixture = await createCopilotCliSessionFixture();
   try {
     const sessions = await listCopilotCliSessions({ sessionStateRoot: fixture.sessionStateRoot });
-    assert(sessions.length === 2, "Copilot CLI tooling list test did not discover both fixture sessions.");
+    assert(sessions.length === 2, "Copilot CLI tools list test did not discover both fixture sessions.");
     const inspection = await inspectCopilotCliSession({ sessionStateRoot: fixture.sessionStateRoot, sessionId: "cli-session-aaa" });
-    assert(inspection?.latestTurn?.assistantMessage === "Investigated via worker lane.", "Copilot CLI tooling inspect test did not recover the latest assistant message from the fixture.");
+    assert(inspection?.latestTurn?.assistantMessage === "Investigated via worker lane.", "Copilot CLI tools inspect test did not recover the latest assistant message from the fixture.");
     const markdown = renderCopilotCliSessionInspectionMarkdown(inspection, { sessionStateRoot: fixture.sessionStateRoot });
-    assert(markdown.includes("Workspace YAML summary: fixture summary"), "Copilot CLI tooling inspection markdown did not render workspace metadata.");
-    assert(markdown.includes("Latest assistant message: Investigated via worker lane."), "Copilot CLI tooling inspection markdown did not render the latest assistant message.");
+    assert(markdown.includes("Workspace YAML summary: fixture summary"), "Copilot CLI tools inspection markdown did not render workspace metadata.");
+    assert(markdown.includes("Latest assistant message: Investigated via worker lane."), "Copilot CLI tools inspection markdown did not render the latest assistant message.");
   } finally {
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   }
@@ -5316,8 +5316,8 @@ async function runManifestChecks() {
   const windowTool = languageModelTools.find((tool) => tool.name === "get_agent_session_window");
   const transcriptTool = languageModelTools.find((tool) => tool.name === "export_agent_evidence_transcript");
   const estimateTool = languageModelTools.find((tool) => tool.name === "estimate_agent_context_breakdown");
-  const rawSessionCommand = extensionCommands.find((command) => command.command === "tiinex.aiVscodeTooling.openSessionFile");
-  const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "tiinex.aiVscodeTooling.openSessionFile");
+  const rawSessionCommand = extensionCommands.find((command) => command.command === "tiinex.aiVscodeTools.openSessionFile");
+  const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "tiinex.aiVscodeTools.openSessionFile");
 
   assert(windowTool?.inputSchema?.properties?.afterLatestCompact, "package.json window tool schema must expose afterLatestCompact.");
   assert(windowTool?.inputSchema?.properties?.anchorOccurrence, "package.json window tool schema must expose anchorOccurrence.");
@@ -5330,31 +5330,31 @@ async function runManifestChecks() {
 
   const viewTitleCommands = viewTitleMenu.map((item) => item.command);
   const viewItemCommands = viewItemContextMenu.map((item) => item.command);
-  assert(viewTitleCommands.includes("tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe"), "package.json view/title menu must expose Create Disposable Local Delete Probe.");
-  assert(viewTitleCommands.includes("tiinex.aiVscodeTooling.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
-  assert(viewTitleCommands.includes("tiinex.aiVscodeTooling.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
-  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
-  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.closeVisibleLiveChatTabs"), "package.json session context menu must expose Close Visible Local Chat Tabs.");
-  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.deleteLiveChatArtifacts"), "package.json session context menu must expose Delete Local Chat Artifacts.");
-  assert(viewItemCommands.includes("tiinex.aiVscodeTooling.sendMessageToLiveChat"), "package.json session context menu must expose Send Message To Local Chat.");
+  assert(viewTitleCommands.includes("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe"), "package.json view/title menu must expose Create Disposable Local Delete Probe.");
+  assert(viewTitleCommands.includes("tiinex.aiVscodeTools.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
+  assert(viewTitleCommands.includes("tiinex.aiVscodeTools.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTools.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTools.closeVisibleLiveChatTabs"), "package.json session context menu must expose Close Visible Local Chat Tabs.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTools.deleteLiveChatArtifacts"), "package.json session context menu must expose Delete Local Chat Artifacts.");
+  assert(viewItemCommands.includes("tiinex.aiVscodeTools.sendMessageToLiveChat"), "package.json session context menu must expose Send Message To Local Chat.");
 }
 
 async function runRoutingGuardChecks() {
   const firstSliceModule = await import(pathToFileURL(distFirstSlice).href);
   const readme = await fs.readFile(readmePath, "utf-8");
-  const toolingInstructions = await fs.readFile(toolingInstructionPath, "utf-8");
+  const toolsInstructions = await fs.readFile(toolsInstructionPath, "utf-8");
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
   assert(
-    firstSliceModule.isFirstSliceSessionCommand("tiinex.aiVscodeTooling.openSessionFile") === false,
+    firstSliceModule.isFirstSliceSessionCommand("tiinex.aiVscodeTools.openSessionFile") === false,
     "Routing guard must keep raw session file access out of the default first-slice session commands."
   );
   assert(
-    firstSliceModule.isEnabledSessionCommand("tiinex.aiVscodeTooling.openSessionFile") === true,
+    firstSliceModule.isEnabledSessionCommand("tiinex.aiVscodeTools.openSessionFile") === true,
     "Routing guard must keep raw session file access available as an explicit non-default escape hatch."
   );
   assert(
-    firstSliceModule.isFirstSliceSessionCommand("tiinex.aiVscodeTooling.openSnapshot") === true,
+    firstSliceModule.isFirstSliceSessionCommand("tiinex.aiVscodeTools.openSnapshot") === true,
     "Routing guard must keep bounded snapshot inspection in the default first-slice session commands."
   );
   assert(
@@ -5378,7 +5378,7 @@ async function runRoutingGuardChecks() {
     "Disposable local delete probe PowerShell fallback must stay removed once extension-hosted probe creation is available."
   );
   assert(
-    !toolingInstructions.includes("create-disposable-local-chat-probe.ps1"),
+    !toolsInstructions.includes("create-disposable-local-chat-probe.ps1"),
     "Restart instructions must not point back to the removed disposable probe PowerShell fallback."
   );
 

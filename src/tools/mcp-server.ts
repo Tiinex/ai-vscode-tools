@@ -1,4 +1,4 @@
-﻿import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
@@ -30,7 +30,7 @@ import {
 const deliveryModeSchema = z.enum(["file-only", "file-and-inline-if-safe", "inline-if-safe"]);
 
 const server = new McpServer({
-  name: "tiinexAiVscodeTooling",
+  name: "tiinexAiVscodeTools",
   version: "0.1.0"
 });
 

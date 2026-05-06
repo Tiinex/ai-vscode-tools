@@ -135,7 +135,7 @@ export function buildOfflineLocalChatCleanupLaunchSpec(
     throw new Error("Offline Local chat cleanup scheduling is currently implemented only for Windows hosts.");
   }
 
-  const cleanupCliPath = path.join(request.extensionRoot, "dist", "tooling", "offlineLocalChatCleanupCli.js");
+  const cleanupCliPath = path.join(request.extensionRoot, "dist", "tools", "offlineLocalChatCleanupCli.js");
 
   return {
     executable: process.execPath,

@@ -1,4 +1,4 @@
-﻿import path from "node:path";
+import path from "node:path";
 import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import readline from "node:readline";
@@ -7,7 +7,7 @@ import { registerChatInterop } from "./chatInterop";
 import type { ChatCommandResult, ChatInteropApi, ChatSessionSummary, CreateChatRequest } from "./chatInterop";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
 import { getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
-import { SessionToolingAdapter, type SessionDescriptor } from "./coreAdapter";
+import { SessionToolsAdapter, type SessionDescriptor } from "./coreAdapter";
 import {
   FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED,
   LOCAL_CHAT_CONTROL_SURFACES_ENABLED,
@@ -180,7 +180,7 @@ function shiftMarkdownHeadings(markdown: string, levels: number): string {
 async function buildTranscriptUnavailableMarkdown(
   session: SessionDescriptor | undefined,
   error: ExtensionError,
-  adapter?: SessionToolingAdapter
+  adapter?: SessionToolsAdapter
 ): Promise<string> {
   const attemptedPaths = error.attemptedPaths ?? [];
   const indexEntry = session
@@ -246,7 +246,7 @@ async function runCommand(task: () => Promise<void>, session?: SessionDescriptor
 }
 
 async function renderTranscriptEvidenceWithFallback(
-  adapter: SessionToolingAdapter,
+  adapter: SessionToolsAdapter,
   target: { latest?: true; storageRoots?: string[] } | { sessionFile: string },
   session?: SessionDescriptor
 ): Promise<string> {
@@ -294,14 +294,14 @@ function currentWorkspaceStorageRoots(context: vscode.ExtensionContext): string[
 }
 
 function configuredDiscoveryScope(): DiscoveryScope {
-  return vscode.workspace.getConfiguration("tiinex.aiVscodeTooling").get<DiscoveryScope>("sessionDiscoveryScope", "current-workspace");
+  return vscode.workspace.getConfiguration("tiinex.aiVscodeTools").get<DiscoveryScope>("sessionDiscoveryScope", "current-workspace");
 }
 
 function scopedSessionStorageRoots(context: vscode.ExtensionContext): string[] | undefined {
   return configuredDiscoveryScope() === "current-workspace" ? (currentWorkspaceStorageRoots(context) ?? []) : undefined;
 }
 
-async function pickSession(adapter: SessionToolingAdapter, storageRoots?: string[]): Promise<SessionDescriptor | undefined> {
+async function pickSession(adapter: SessionToolsAdapter, storageRoots?: string[]): Promise<SessionDescriptor | undefined> {
   const sessions = await adapter.discoverSessions(storageRoots ?? []);
   if (sessions.length === 0) {
     void vscode.window.showWarningMessage("No stored chat sessions were found under the selected storage roots.");
@@ -325,7 +325,7 @@ function withSessionTarget(session: SessionDescriptor | undefined, storageRoots?
   return session ? { sessionFile: session.jsonlPath } : { latest: true, storageRoots };
 }
 
-async function resolveSession(adapter: SessionToolingAdapter, storageRoots: string[] | undefined, sessionLike?: unknown): Promise<SessionDescriptor | undefined> {
+async function resolveSession(adapter: SessionToolsAdapter, storageRoots: string[] | undefined, sessionLike?: unknown): Promise<SessionDescriptor | undefined> {
   return extractSessionDescriptor(sessionLike) ?? pickSession(adapter, storageRoots);
 }
 
@@ -406,22 +406,22 @@ async function runWithProgress<T>(title: string, task: () => Promise<T>): Promis
 
 function registerCommands(
   context: vscode.ExtensionContext,
-  adapter: SessionToolingAdapter,
+  adapter: SessionToolsAdapter,
   tree: SessionInspectorTreeDataProvider,
   chatInterop?: ChatInteropApi
 ): void {
   const getSessionStorageRoots = () => scopedSessionStorageRoots(context);
   context.subscriptions.push(
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.refreshSessions", () => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.refreshSessions", () => {
       tree.refresh();
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.surveyRecentSessions", async () => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.surveyRecentSessions", async () => {
       await runCommand(async () => {
         const markdown = await runWithProgress("Surveying recent agent sessions", () => adapter.renderSurvey(8, getSessionStorageRoots()));
         await openMarkdownDocument(markdown);
       });
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openLatestTranscriptEvidence", async () => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openLatestTranscriptEvidence", async () => {
       const latestSession = (await adapter.discoverSessions(getSessionStorageRoots())).at(0);
       if (!latestSession) {
         void vscode.window.showWarningMessage("No stored chat sessions were found under the selected storage roots.");
@@ -435,25 +435,25 @@ function registerCommands(
         await openMarkdownDocument(markdown);
       }, latestSession);
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openLatestSnapshot", async () => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openLatestSnapshot", async () => {
       await runCommand(async () => {
         const markdown = await runWithProgress("Rendering latest session snapshot", () => adapter.renderSnapshot({ latest: true, storageRoots: getSessionStorageRoots() }));
         await openMarkdownDocument(markdown);
       });
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openLatestContextEstimate", async () => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openLatestContextEstimate", async () => {
       await runCommand(async () => {
         const markdown = await runWithProgress("Rendering latest context estimate", () => adapter.renderContextEstimate({ latest: true, storageRoots: getSessionStorageRoots() }));
         await openMarkdownDocument(markdown);
       });
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openLatestProfile", async () => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openLatestProfile", async () => {
       await runCommand(async () => {
         const markdown = await runWithProgress("Rendering latest session profile", () => adapter.renderProfile({ latest: true, storageRoots: getSessionStorageRoots() }));
         await openMarkdownDocument(markdown);
       });
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openTranscriptEvidence", async (session?: SessionDescriptor) => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openTranscriptEvidence", async (session?: SessionDescriptor) => {
       const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
       if (!resolved) {
         return;
@@ -466,7 +466,7 @@ function registerCommands(
         await openMarkdownDocument(markdown);
       }, resolved);
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openSnapshot", async (session?: SessionDescriptor) => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openSnapshot", async (session?: SessionDescriptor) => {
       const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
       if (!resolved) {
         return;
@@ -476,7 +476,7 @@ function registerCommands(
         await openMarkdownDocument(markdown);
       }, resolved);
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openContextEstimate", async (session?: SessionDescriptor) => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openContextEstimate", async (session?: SessionDescriptor) => {
       const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
       if (!resolved) {
         return;
@@ -486,7 +486,7 @@ function registerCommands(
         await openMarkdownDocument(markdown);
       }, resolved);
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openProfile", async (session?: SessionDescriptor) => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openProfile", async (session?: SessionDescriptor) => {
       const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
       if (!resolved) {
         return;
@@ -496,7 +496,7 @@ function registerCommands(
         await openMarkdownDocument(markdown);
       }, resolved);
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openIndex", async (session?: SessionDescriptor) => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openIndex", async (session?: SessionDescriptor) => {
       const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
       if (!resolved) {
         return;
@@ -506,7 +506,7 @@ function registerCommands(
         await openMarkdownDocument(markdown);
       }, resolved);
     }),
-    vscode.commands.registerCommand("tiinex.aiVscodeTooling.openSessionFile", async (session?: SessionDescriptor) => {
+    vscode.commands.registerCommand("tiinex.aiVscodeTools.openSessionFile", async (session?: SessionDescriptor) => {
       const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
       if (!resolved) {
         return;
@@ -523,13 +523,13 @@ function registerCommands(
 
   if (LOCAL_CHAT_CONTROL_SURFACES_ENABLED) {
     context.subscriptions.push(
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.listLiveChats", async () => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.listLiveChats", async () => {
         await runCommand(async () => {
           const chats = await runWithProgress("Listing live chats", () => chatInterop.listChats());
           await openMarkdownDocument(renderChatListMarkdown(chats));
         });
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.revealLiveChat", async (session?: SessionDescriptor) => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.revealLiveChat", async (session?: SessionDescriptor) => {
         const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
         if (!resolved) {
           return;
@@ -546,7 +546,7 @@ function registerCommands(
           void vscode.window.showInformationMessage(commandResultMessage(result, "Revealed Local chat"));
         }, resolved);
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.closeVisibleLiveChatTabs", async (session?: SessionDescriptor) => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.closeVisibleLiveChatTabs", async (session?: SessionDescriptor) => {
         const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
         if (!resolved) {
           return;
@@ -563,7 +563,7 @@ function registerCommands(
           void vscode.window.showInformationMessage(commandResultMessage(result, "Closed visible Local chat tabs"));
         }, resolved);
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.deleteLiveChatArtifacts", async (session?: SessionDescriptor) => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.deleteLiveChatArtifacts", async (session?: SessionDescriptor) => {
         const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
         if (!resolved) {
           return;
@@ -596,7 +596,7 @@ function registerCommands(
           }
         }, resolved);
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.scheduleOfflineLocalChatCleanup", async (session?: SessionDescriptor) => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.scheduleOfflineLocalChatCleanup", async (session?: SessionDescriptor) => {
         const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
         if (!resolved) {
           return;
@@ -619,7 +619,7 @@ function registerCommands(
 
   if (LOCAL_CHAT_MUTATION_SURFACES_ENABLED) {
     context.subscriptions.push(
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe", async (request?: DisposableDeleteProbeCommandRequest) => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe", async (request?: DisposableDeleteProbeCommandRequest) => {
         const showNotification = request?.showNotification ?? true;
         const agentName = request?.agentName?.trim() || (showNotification ? await promptForAgentName("Create Disposable Local Delete Probe") : undefined);
         if (!agentName) {
@@ -662,7 +662,7 @@ function registerCommands(
           } satisfies DisposableDeleteProbeCommandResult;
         }
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.createLiveChat", async () => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.createLiveChat", async () => {
         const prompt = await promptForChatPrompt("Create Local Chat");
         if (!prompt) {
           return;
@@ -683,7 +683,7 @@ function registerCommands(
           void vscode.window.showInformationMessage(commandResultMessage(result, "Created Local chat"));
         });
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.sendMessageToLiveChat", async (session?: SessionDescriptor) => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.sendMessageToLiveChat", async (session?: SessionDescriptor) => {
         const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
         if (!resolved) {
           return;
@@ -713,7 +713,7 @@ function registerCommands(
           );
         }, resolved);
       }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTooling.sendMessageToFocusedLiveChat", async () => {
+      vscode.commands.registerCommand("tiinex.aiVscodeTools.sendMessageToFocusedLiveChat", async () => {
         const prompt = await promptForChatPrompt("Send Message To Focused Local Chat");
         if (!prompt) {
           return;
@@ -743,15 +743,15 @@ async function syncLiveChatInteropContext(chatInterop: ChatInteropApi): Promise<
     chatInterop.getFocusedChatInteropSupport()
   ]);
   await Promise.all([
-    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTooling.exactLiveChatRevealSupported", support.canRevealExactSession),
-    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTooling.exactLiveChatSendSupported", support.canSendExactSessionMessage),
-    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTooling.focusedLiveChatSendSupported", focusedSupport.canSubmitFocusedChatMessage)
+    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTools.exactLiveChatRevealSupported", support.canRevealExactSession),
+    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTools.exactLiveChatSendSupported", support.canSendExactSessionMessage),
+    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTools.focusedLiveChatSendSupported", focusedSupport.canSubmitFocusedChatMessage)
   ]);
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await maybeReportOfflineLocalChatCleanup(context);
-  const adapter = new SessionToolingAdapter();
+  const adapter = new SessionToolsAdapter();
   const tree = new SessionInspectorTreeDataProvider(
     adapter,
     () => scopedSessionStorageRoots(context)
@@ -759,11 +759,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     tree,
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("tiinex.aiVscodeTooling.sessionDiscoveryScope")) {
+      if (event.affectsConfiguration("tiinex.aiVscodeTools.sessionDiscoveryScope")) {
         tree.refresh();
       }
     }),
-    vscode.window.createTreeView("tiinex.aiVscodeTooling.sessions", {
+    vscode.window.createTreeView("tiinex.aiVscodeTools.sessions", {
       treeDataProvider: tree,
       showCollapseAll: true
     })
@@ -771,7 +771,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   let chatInterop: ChatInteropApi | undefined;
   if (FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED || LOCAL_CHAT_RUNTIME_SURFACES_ENABLED) {
-    const config = vscode.workspace.getConfiguration("tiinex.aiVscodeTooling");
+    const config = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
     const chatInteropOptions = {
       workspaceStorageRoots: currentWorkspaceStorageRoots(context),
       postCreateTimeoutMs: config.get<number>("postCreateTimeoutMs", 90000),

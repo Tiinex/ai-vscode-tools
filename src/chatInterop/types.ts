@@ -1,4 +1,4 @@
-﻿import * as vscode from "vscode";
+import * as vscode from "vscode";
 import type { ExactSessionInteropSupport, FocusedChatInteropSupport } from "./capabilities";
 
 export type ChatModelSelector = {
@@ -153,14 +153,14 @@ export interface ChatInteropApi {
 }
 
 export type CommandMap = {
-  "tiinex.aiVscodeTooling.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
-  "tiinex.aiVscodeTooling.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTooling.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTooling.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTooling.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTooling.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTooling.chatInterop.deleteChat": (sessionId: string) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTooling.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
+  "tiinex.aiVscodeTools.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.sendMessage": (request: SendChatMessageRequest) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.sendMessageWithFallback": (sessionId: string, prompt: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.deleteChat": (sessionId: string) => Promise<ChatCommandResult>;
+  "tiinex.aiVscodeTools.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
 };
 
 export function toModelSelector(value: ChatModelSelector | undefined): InternalChatOpenOptions["modelSelector"] | undefined {

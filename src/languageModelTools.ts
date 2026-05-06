@@ -13,14 +13,14 @@ import {
   renderLiveChatSupportMatrixMarkdown,
   renderRuntimeChatCommandInventoryMarkdown
 } from "./chatInterop/supportMatrix";
-import type { SessionTarget, SessionToolingAdapter } from "./coreAdapter";
+import type { SessionTarget, SessionToolsAdapter } from "./coreAdapter";
 import {
   describeCopilotCliSessionStateRoot,
   inspectCopilotCliSession,
   listCopilotCliSessions,
   renderCopilotCliSessionInspectionMarkdown,
   renderCopilotCliSessionListText
-} from "./tooling/copilot-cli";
+} from "./tools/copilot-cli";
 import {
   FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED,
   LOCAL_CHAT_CONTROL_SURFACES_ENABLED,
@@ -1516,7 +1516,7 @@ class LiveChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 }
 
-export function registerLanguageModelTools(context: vscode.ExtensionContext, adapter: SessionToolingAdapter, chatInterop?: ChatInteropApi): void {
+export function registerLanguageModelTools(context: vscode.ExtensionContext, adapter: SessionToolsAdapter, chatInterop?: ChatInteropApi): void {
   const currentWorkspaceStorageRoots = (() => {
     if (!context.storageUri) {
       return undefined;
@@ -1664,7 +1664,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             () => "Creating a disposable Local delete probe",
             async (input) => {
               const output = await vscode.commands.executeCommand(
-                "tiinex.aiVscodeTooling.createDisposableLocalDeleteProbe",
+                "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
                 toDisposableDeleteProbeCommandRequest(input)
               ) as DisposableDeleteProbeCommandResult | undefined;
               if (!output || !output.result.ok) {

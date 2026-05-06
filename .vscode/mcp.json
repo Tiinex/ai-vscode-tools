@@ -1,10 +1,10 @@
 {
   "servers": {
-    "tiinexAiVscodeTooling": {
+    "tiinexAiVscodeTools": {
       "type": "stdio",
       "command": "node",
       "args": [
-        "${workspaceFolder}/dist/tooling/mcp-server.js"
+        "${workspaceFolder}/dist/tools/mcp-server.js"
       ],
       "cwd": "${workspaceFolder}"
     }

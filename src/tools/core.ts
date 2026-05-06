@@ -3523,7 +3523,7 @@ export function renderTranscriptEvidenceMarkdown(result: TranscriptEvidenceResul
       "",
       "## Provenance Summary",
       "- This evidence view is derived from the persisted session JSONL rather than a usable canonical transcript artifact.",
-      "- Session Snapshot and Session Index sections are rendered from the same stored session file used elsewhere in the tooling.",
+      "- Session Snapshot and Session Index sections are rendered from the same stored session file used elsewhere in these tools.",
       "- If VS Code later persists a transcript artifact for this session, the canonical transcript view will replace this session-derived view automatically."
     );
 

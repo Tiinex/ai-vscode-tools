@@ -1,17 +1,17 @@
-﻿import * as vscode from "vscode";
+import * as vscode from "vscode";
 import { ChatInteropService } from "./service";
 import { sendMessageToSession } from "./sessionSendWorkflow";
 import { ChatInteropApi, ChatInteropOptions } from "./types";
 
 const COMMAND_ALIASES = {
-  listChats: ["tiinex.aiVscodeTooling.chatInterop.listChats"],
-  createChat: ["tiinex.aiVscodeTooling.chatInterop.createChat"],
-  sendMessage: ["tiinex.aiVscodeTooling.chatInterop.sendMessage"],
-  sendMessageWithFallback: ["tiinex.aiVscodeTooling.chatInterop.sendMessageWithFallback"],
-  sendFocusedMessage: ["tiinex.aiVscodeTooling.chatInterop.sendFocusedMessage"],
-  closeVisibleTabs: ["tiinex.aiVscodeTooling.chatInterop.closeVisibleTabs"],
-  deleteChat: ["tiinex.aiVscodeTooling.chatInterop.deleteChat"],
-  revealChat: ["tiinex.aiVscodeTooling.chatInterop.revealChat"]
+  listChats: ["tiinex.aiVscodeTools.chatInterop.listChats"],
+  createChat: ["tiinex.aiVscodeTools.chatInterop.createChat"],
+  sendMessage: ["tiinex.aiVscodeTools.chatInterop.sendMessage"],
+  sendMessageWithFallback: ["tiinex.aiVscodeTools.chatInterop.sendMessageWithFallback"],
+  sendFocusedMessage: ["tiinex.aiVscodeTools.chatInterop.sendFocusedMessage"],
+  closeVisibleTabs: ["tiinex.aiVscodeTools.chatInterop.closeVisibleTabs"],
+  deleteChat: ["tiinex.aiVscodeTools.chatInterop.deleteChat"],
+  revealChat: ["tiinex.aiVscodeTools.chatInterop.revealChat"]
 } as const;
 
 export function registerChatInterop(context: vscode.ExtensionContext, options: ChatInteropOptions = {}): ChatInteropApi {

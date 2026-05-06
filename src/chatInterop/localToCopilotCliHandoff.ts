@@ -1,4 +1,4 @@
-import { describeCopilotCliSessionStateRoot } from "../tooling/copilot-cli";
+import { describeCopilotCliSessionStateRoot } from "../tools/copilot-cli";
 import type { ExactSessionInteropSupport } from "./capabilities";
 import type { SessionDescriptor } from "../coreAdapter";
 
@@ -58,7 +58,7 @@ export function renderLocalToCopilotCliHandoffMarkdown(options: LocalToCopilotCl
     "- VS Code command: workbench.action.chat.openSessionWithPrompt.copilotcli",
     `- Suggested resource: ${latestCli?.canonicalResource ?? "resolve latest Copilot CLI session before send"}`,
     "- Required arguments: resource, prompt, attachedContext=[]",
-    "- Environment assumptions: the worker runs in a Copilot CLI chat with workspace tooling available if the host permits it.",
+    "- Environment assumptions: the worker runs in a Copilot CLI chat with workspace tools available if the host permits it.",
     "",
     "## Required Validation After Mutation",
     "- Re-check the implicated workspace files directly after any write.",
@@ -80,7 +80,7 @@ export function buildLocalToCopilotCliWorkerPrompt(
     "You are working in a Copilot CLI session as a separate worker lane for a VS Code Local chat incident.",
     "Treat the incident package below as evidence from another surface, not as proof that you are continuing the same session.",
     "Do not claim Local-to-CLI session continuity.",
-    "Use workspace tooling if it is available in this Copilot CLI chat mode.",
+    "Use workspace tools if it is available in this Copilot CLI chat mode.",
     "First restate what evidence you are relying on.",
     "Then identify the most likely root-cause hypothesis.",
     "Then name the smallest file, tool, or runtime checks that would confirm or falsify that hypothesis.",

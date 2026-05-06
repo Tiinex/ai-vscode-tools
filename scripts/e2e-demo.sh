@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CLI="$ROOT_DIR/dist/tooling/cli.js"
+CLI="$ROOT_DIR/dist/tools/cli.js"
 
 if [ ! -f "$CLI" ]; then
   echo "dist CLI not found. Build first: npm run build"

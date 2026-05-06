@@ -1,7 +1,7 @@
 # Tiinex — AI — VS Code — Tools
 
 - Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
-- Companion AI repo this tooling primarily supports: https://github.com/Tiinex/ai
+- Companion AI repo these tools primarily support: https://github.com/Tiinex/ai
 
 ![Tiinex — AI — VS Code — Tools — logo](assets/logo.png)
 
@@ -9,7 +9,7 @@ Tiinex — AI — VS Code — Tools is a VS Code extension for persisted Local c
 
 For everyday users, that means fast inspection and safer cleanup. For VS Code Copilot developers and developers targeting other IDEs, it also means there is a concrete, portable model here for how to separate persisted evidence, live-session operations, and offline cleanup.
 
-In practice, this tooling is primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use it independently for Local chat inspection and recovery work, but if you found it through the Marketplace and want the broader project context, start there as well.
+In practice, these tools are primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use them independently for Local chat inspection and recovery work, but if you found them through the Marketplace and want the broader project context, start there as well.
 
 ## Why Install It
 
@@ -22,19 +22,19 @@ In practice, this tooling is primarily used to support the companion `ai` repo a
 
 Public VS Code surface:
 
-- Display name: `Tiinex AI VS Code Tooling`
+- Display name: `Tiinex — AI — VS Code — Tools`
 - Command Palette prefix: `Tiinex:`
-- Command ID namespace: `tiinex.aiVscodeTooling.*`
-- Settings namespace: `tiinex.aiVscodeTooling.*`
-- Explorer view ID: `tiinex.aiVscodeTooling.sessions`
+- Command ID namespace: `tiinex.aiVscodeTools.*`
+- Settings namespace: `tiinex.aiVscodeTools.*`
+- Explorer view ID: `tiinex.aiVscodeTools.sessions`
 - Explorer view name: `Tiinex Sessions`
-- Dev MCP alias in this repo: `tiinexAiVscodeTooling`
+- Dev MCP alias in this repo: `tiinexAiVscodeTools`
 
 Naming policy:
 
 - Human-facing VS Code surfaces use the Tiinex brand explicitly.
 - Machine-facing LM tool identifiers remain stable descriptive snake_case names such as `list_live_agent_chats` and `export_agent_session_markdown` so automation and cross-IDE ports do not have to chase cosmetic renames.
-- If you port this tooling to another IDE, keep the user-facing shell branded and the machine-facing tool identifiers predictable.
+- If you port these tools to another IDE, keep the user-facing shell branded and the machine-facing tool identifiers predictable.
 
 Core commands:
 
@@ -61,10 +61,10 @@ Core commands:
 
 Core settings:
 
-- `tiinex.aiVscodeTooling.showSessionsView`
-- `tiinex.aiVscodeTooling.sessionDiscoveryScope`
-- `tiinex.aiVscodeTooling.postCreateTimeoutMs`
-- `tiinex.aiVscodeTooling.waitForPersistedDefault`
+- `tiinex.aiVscodeTools.showSessionsView`
+- `tiinex.aiVscodeTools.sessionDiscoveryScope`
+- `tiinex.aiVscodeTools.postCreateTimeoutMs`
+- `tiinex.aiVscodeTools.waitForPersistedDefault`
 
 ## Product Shape
 
@@ -79,7 +79,7 @@ The shipped surface is intentionally Local-first. Persisted-session inspection i
 
 ## Portability For VS Code Copilot Developers And Other IDE Teams
 
-If you want to support similar tooling in another IDE, the important thing is not the VS Code shell integration by itself. The important thing is the split of responsibilities.
+If you want to support similar tools in another IDE, the important thing is not the VS Code shell integration by itself. The important thing is the split of responsibilities.
 
 Portable architecture:
 
@@ -105,7 +105,7 @@ IDE-portable parts in this repo:
 
 Minimum porting contract:
 
-This repo does not yet publish a standalone SDK package for ports. The closest real contract today is the reference shape already present in code. If you want equivalent tooling in another IDE, implement an equivalent split even if the exact type names or host APIs differ.
+This repo does not yet publish a standalone SDK package for ports. The closest real contract today is the reference shape already present in code. If you want equivalent tools in another IDE, implement an equivalent split even if the exact type names or host APIs differ.
 
 ```ts
 type SessionDescriptor = {
@@ -180,10 +180,10 @@ Practical porting guidance:
 
 - Start from the persisted evidence surfaces, not from live send/reveal automation.
 - Preserve explicit target IDs and explicit artifact paths in destructive flows.
-- Keep command and settings namespaces product-branded so the host surface cannot be mistaken for generic tooling.
+- Keep command and settings namespaces product-branded so the host surface cannot be mistaken for generic tools.
 - Treat host-specific UI automation as an adapter, not as the core product.
 
-## Tooling Status
+## Tools Checklist
 
 Each platform lane below is tracked as a checklist.
 
@@ -191,7 +191,7 @@ Each platform lane below is tracked as a checklist.
 - `Unit Test` records automated coverage that exercises or guards that behavior.
 - `Manual Test` records host-level validation where runtime behavior still matters.
 - `Skill` records whether a role-facing skill or usage file exists for that lane.
-- `Skill Test` records whether that skill guidance has been validated against current tooling behavior.
+- `Skill Test` records whether that skill guidance has been validated against current behavior.
 
 - Persisted session inspection
 	- Windows
@@ -200,7 +200,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `routing-guard` passes.
 		- [ ] Manual Test: host-level inspection flow is revalidated against the current Windows surface.
 		- [ ] Skill: role-facing guidance exists for persisted session inspection.
-		- [ ] Skill Test: persisted session inspection guidance has been validated against current tooling behavior.
+		- [ ] Skill Test: persisted session inspection guidance has been validated against current behavior.
 
 - Disposable local delete probes
 	- Windows
@@ -208,7 +208,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `disposable-delete-probe` passes.
 		- [x] Manual Test: host validation confirmed disposable probe creation through the extension-hosted path instead of a shell fallback.
 		- [ ] Skill: role-facing guidance exists for disposable local delete probes.
-		- [ ] Skill Test: disposable local delete probe guidance has been validated against current tooling behavior.
+		- [ ] Skill Test: disposable local delete probe guidance has been validated against current behavior.
 
 - Exact local chat delete targeting
 	- Windows
@@ -218,7 +218,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `self-target-guard` passes.
 		- [x] Manual Test: host validation confirmed that disposable target chats could be removed without wiping the active working chat.
 		- [ ] Skill: role-facing guidance exists for exact local chat delete targeting.
-		- [ ] Skill Test: exact local chat delete targeting guidance has been validated against current tooling behavior.
+		- [ ] Skill Test: exact local chat delete targeting guidance has been validated against current behavior.
 
 - Exact offline local chat cleanup
 	- Windows
@@ -226,7 +226,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `offline-local-chat-cleanup` passes.
 		- [x] Manual Test: host validation confirmed queued exact-target cleanup across a real VS Code exit and restart on the primary Windows surface.
 		- [ ] Skill: role-facing guidance exists for exact offline local chat cleanup.
-		- [ ] Skill Test: exact offline local chat cleanup guidance has been validated against current tooling behavior.
+		- [ ] Skill Test: exact offline local chat cleanup guidance has been validated against current behavior.
 
 - Exact live-chat create and send
 	- Windows
@@ -238,7 +238,7 @@ Each platform lane below is tracked as a checklist.
 		- [ ] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
 		- [ ] Manual Test: create-and-send flow is revalidated end-to-end on the current Windows host.
 		- [ ] Skill: role-facing guidance exists for exact live-chat create and send.
-		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current tooling behavior.
+		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current behavior.
 
 - Focused live-chat send
 	- Windows
@@ -247,7 +247,7 @@ Each platform lane below is tracked as a checklist.
 		- [ ] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
 		- [ ] Manual Test: focused-send behavior is revalidated on the current Windows host.
 		- [ ] Skill: role-facing guidance exists for focused live-chat send.
-		- [ ] Skill Test: focused live-chat send guidance has been validated against current tooling behavior.
+		- [ ] Skill Test: focused live-chat send guidance has been validated against current behavior.
 
 ## Known Limits
 
@@ -276,7 +276,7 @@ On Windows, link the local checkout into the main VS Code host for development w
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/ensure-windows-main-host-dev-extension-link.ps1
 ```
 
-That Windows-only dev bootstrap script also repairs leftover `local.ai-vscode-recovery-tooling` and `local.agent-architect-tools` registry metadata in `.vscode\extensions\extensions.json` from older extension identities.
+That Windows-only dev bootstrap script also repairs the current local extension registry metadata in `.vscode\extensions\extensions.json`.
 
 Then reload VS Code and search for `Tiinex:` in the Command Palette.
 

@@ -6,11 +6,8 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $extensionsRoot = Join-Path $env:USERPROFILE '.vscode\extensions'
-$linkPath = Join-Path $extensionsRoot 'local.ai-vscode-tooling'
-$legacyLinkPaths = @(
-    (Join-Path $extensionsRoot 'local.ai-vscode-recovery-tooling'),
-    (Join-Path $extensionsRoot 'local.agent-architect-tools')
-)
+$targetId = 'local.ai-vscode-tools'
+$linkPath = Join-Path $extensionsRoot $targetId
 $extensionsJsonPath = Join-Path $extensionsRoot 'extensions.json'
 $distEntry = Join-Path $repoRoot 'dist\extension.js'
 
@@ -34,24 +31,37 @@ function Get-VsCodeExtensionLocation {
     }
 }
 
-function Remove-LegacyExtensionLinkIfSafe {
+function Remove-StaleExtensionLinksForRepo {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$Path
+        [string]$ExtensionsRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$KeepPath
     )
 
-    if (-not (Test-Path $Path)) {
+    if (-not (Test-Path $ExtensionsRoot)) {
         return $false
     }
 
-    $existing = Get-Item $Path -Force
-    if (-not ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-        Write-Warning "Legacy extension path '$Path' still exists but is not a reparse point. Leaving it in place."
-        return $false
+    $removed = $false
+    $candidates = Get-ChildItem -LiteralPath $ExtensionsRoot -Force -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FullName -ne $KeepPath -and
+            ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+            ($_.Name -like 'local.ai-vscode-*' -or $_.Name -like 'local.agent-architect-*')
+        }
+
+    foreach ($candidate in $candidates) {
+        $targets = @($candidate.Target | ForEach-Object { $_.ToString() })
+        if ($candidate.LinkType -eq 'Junction' -and $targets -contains $RepoRoot) {
+            Remove-Item $candidate.FullName -Force -Recurse
+            $removed = $true
+        }
     }
 
-    Remove-Item $Path -Force -Recurse
-    return $true
+    return $removed
 }
 
 function Get-ExtensionRegistryIdentifierId {
@@ -145,7 +155,9 @@ function Repair-ExtensionRegistryMetadata {
         [Parameter(Mandatory = $true)]
         [string]$RegistryPath,
         [Parameter(Mandatory = $true)]
-        [string]$TargetPath
+        [string]$TargetPath,
+        [Parameter(Mandatory = $true)]
+        [string]$TargetId
     )
 
     if (-not (Test-Path $RegistryPath)) {
@@ -157,32 +169,87 @@ function Repair-ExtensionRegistryMetadata {
         return $false
     }
 
-    $targetId = 'local.ai-vscode-tooling'
-    $legacyIds = @(
-        'local.ai-vscode-recovery-tooling',
-        'local.agent-architect-tools'
-    )
-    $updatedRaw = $raw
-    foreach ($legacyId in $legacyIds) {
-        $updatedRaw = $updatedRaw.Replace($legacyId, $targetId)
+    $registry = $raw | ConvertFrom-Json -Depth 100
+    $entries = if ($registry -is [System.Collections.IEnumerable] -and -not ($registry -is [string])) {
+        @($registry)
     }
-    if ($updatedRaw -eq $raw) {
+    elseif ($registry.PSObject.Properties.Match('extensions').Count -gt 0) {
+        @($registry.extensions)
+    }
+    else {
+        @()
+    }
+
+    if ($entries.Count -eq 0) {
         return $false
     }
 
-    $null = $updatedRaw | ConvertFrom-Json
-    Set-Content -LiteralPath $RegistryPath -Value $updatedRaw -Encoding UTF8
+    $normalizedTargetPath = $TargetPath.Replace('\', '/').ToLowerInvariant()
+    $updated = $false
+    foreach ($entry in $entries) {
+        $location = if ($entry -is [System.Collections.IDictionary]) {
+            $entry['location']
+        }
+        elseif ($entry.PSObject.Properties.Match('location').Count -gt 0) {
+            $entry.location
+        }
+        else {
+            $null
+        }
+
+        $locationCandidates = @()
+        if ($null -ne $location) {
+            if ($location -is [System.Collections.IDictionary]) {
+                $locationCandidates += @($location['fsPath'], $location['path'], $location['external'])
+            }
+            else {
+                if ($location.PSObject.Properties.Match('fsPath').Count -gt 0) {
+                    $locationCandidates += $location.fsPath
+                }
+                if ($location.PSObject.Properties.Match('path').Count -gt 0) {
+                    $locationCandidates += $location.path
+                }
+                if ($location.PSObject.Properties.Match('external').Count -gt 0) {
+                    $locationCandidates += $location.external
+                }
+            }
+        }
+
+        $matchesTargetPath = $false
+        foreach ($candidate in $locationCandidates) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) {
+                continue
+            }
+
+            $normalizedCandidate = $candidate.ToString().Replace('\', '/').ToLowerInvariant()
+            if ($normalizedCandidate -eq $normalizedTargetPath -or $normalizedCandidate.Contains($normalizedTargetPath)) {
+                $matchesTargetPath = $true
+                break
+            }
+        }
+
+        if (-not $matchesTargetPath) {
+            continue
+        }
+
+        if ((Get-ExtensionRegistryIdentifierId -Entry $entry) -ne $TargetId) {
+            Set-ExtensionRegistryIdentifierId -Entry $entry -Id $TargetId
+            $updated = $true
+        }
+    }
+
+    if (-not $updated) {
+        return $false
+    }
+
+    $json = $registry | ConvertTo-Json -Depth 100
+    Set-Content -LiteralPath $RegistryPath -Value $json -Encoding UTF8
     return $true
 }
 
 New-Item -ItemType Directory -Force -Path $extensionsRoot | Out-Null
 
-$legacyLinkRemoved = $false
-foreach ($legacyLinkPath in $legacyLinkPaths) {
-    if (Remove-LegacyExtensionLinkIfSafe -Path $legacyLinkPath) {
-        $legacyLinkRemoved = $true
-    }
-}
+$staleLinkRemoved = Remove-StaleExtensionLinksForRepo -ExtensionsRoot $extensionsRoot -RepoRoot $repoRoot -KeepPath $linkPath
 
 if (Test-Path $linkPath) {
     $existing = Get-Item $linkPath -Force
@@ -210,7 +277,7 @@ else {
     $currentTargets = @($existing.Target | ForEach-Object { $_.ToString() })
 }
 
-$registryUpdated = Repair-ExtensionRegistryMetadata -RegistryPath $extensionsJsonPath -TargetPath $linkPath
+$registryUpdated = Repair-ExtensionRegistryMetadata -RegistryPath $extensionsJsonPath -TargetPath $linkPath -TargetId $targetId
 
 $distPresent = Test-Path $distEntry
 
@@ -219,7 +286,7 @@ $distPresent = Test-Path $distEntry
     LinkPath = $existing.FullName
     LinkType = $existing.LinkType
     Targets = ($currentTargets -join '; ')
-    LegacyLinkRemoved = $legacyLinkRemoved
+    StaleLinkRemoved = $staleLinkRemoved
     RegistryUpdated = $registryUpdated
     RegistryPath = $extensionsJsonPath
     DistEntryPresent = $distPresent

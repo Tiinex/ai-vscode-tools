@@ -18,7 +18,7 @@
 			}
 		},
 		{
-			"label": "build recovery tooling extension",
+			"label": "build recovery tools extension",
 			"type": "shell",
 			"command": "npm",
 			"args": [
@@ -31,7 +31,7 @@
 			]
 		},
 		{
-			"label": "watch recovery tooling extension",
+			"label": "watch recovery tools extension",
 			"type": "shell",
 			"command": "npm",
 			"args": [
@@ -48,7 +48,7 @@
 			}
 		},
 		{
-			"label": "focused tooling checks",
+			"label": "focused tools checks",
 			"type": "shell",
 			"command": "node",
 			"args": [

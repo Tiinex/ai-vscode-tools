@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import {
   describeCopilotCliSessionStateRoot,
   renderMissingCopilotCliSessionStateMessage
-} from "../tooling/copilot-cli";
+} from "../tools/copilot-cli";
 import {
   renderCopilotCliLatestTurnLines,
   summarizeCopilotCliEventStream,
@@ -294,7 +294,7 @@ export async function ensureCopilotCliCapabilityProbePack(workspaceRoot: string)
 
 export function buildCopilotCliReadAccessProbePrompt(probePack: CopilotCliCapabilityProbePack): string {
   return [
-    "Use workspace tooling if it is available in this chat mode.",
+    "Use workspace tools if it is available in this chat mode.",
     `Read the file at: ${probePack.readCanaryPath}`,
     "Find the line that starts with read_token: and return the token value exactly.",
     "Do not guess from memory, filenames, or prior chat context.",
@@ -309,7 +309,7 @@ export function buildCopilotCliReadAccessProbePrompt(probePack: CopilotCliCapabi
 
 export function buildCopilotCliMutationProbePrompt(probePack: CopilotCliCapabilityProbePack): string {
   return [
-    "Use workspace tooling if it is available in this chat mode.",
+    "Use workspace tools if it is available in this chat mode.",
     `Create or overwrite the file at: ${probePack.mutationTargetPath}`,
     "Write exactly this single line into the file:",
     `mutation_token: ${probePack.mutationTargetToken}`,
@@ -331,7 +331,7 @@ export function buildCopilotCliToolApprovalProbePrompt(probePack: CopilotCliCapa
     "After the attempt, respond with exactly one line and choose the most accurate status:",
     "APPROVAL: WROTE",
     "APPROVAL: NEEDS_TOOL_APPROVAL",
-    "APPROVAL: NO_TOOLING"
+    "APPROVAL: NO_TOOLS"
   ].join("\n");
 }
 

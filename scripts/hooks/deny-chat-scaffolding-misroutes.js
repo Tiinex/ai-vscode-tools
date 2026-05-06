@@ -39,7 +39,7 @@ process.stdin.on("end", () => {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: "Blocked by workspace policy: Local chat work in this repo must not route through workspace, project, or notebook scaffolding tools. Use the extension-host live-chat tooling instead.",
+      permissionDecisionReason: "Blocked by workspace policy: Local chat work in this repo must not route through workspace, project, or notebook scaffolding tools. Use the extension-host live-chat tools instead.",
       additionalContext: "This repo has repeated evidence of Local-chat misroutes into create_new_workspace and related setup tools, which can open blocking folder dialogs and contaminate regression runs."
     },
     systemMessage: "Workspace policy blocked a scaffolding tool that is forbidden for Local chat work in this repo."

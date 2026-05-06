@@ -1,5 +1,5 @@
-﻿import * as vscode from "vscode";
-import type { SessionDescriptor, SessionToolingAdapter } from "./coreAdapter";
+import * as vscode from "vscode";
+import type { SessionDescriptor, SessionToolsAdapter } from "./coreAdapter";
 import { isEnabledSessionCommand } from "./firstSlice";
 
 type InspectorNode = SessionGroupNode | SessionNode | ActionNode | EmptyInfoNode;
@@ -14,61 +14,61 @@ interface SessionActionDefinition {
 const SESSION_ACTIONS: SessionActionDefinition[] = [
   {
     label: "Open Evidence Transcript",
-    command: "tiinex.aiVscodeTooling.openTranscriptEvidence",
+    command: "tiinex.aiVscodeTools.openTranscriptEvidence",
     tooltip: "Render the canonical transcript-based evidence markdown for this session.",
     icon: new vscode.ThemeIcon("book")
   },
   {
     label: "Open Snapshot",
-    command: "tiinex.aiVscodeTooling.openSnapshot",
+    command: "tiinex.aiVscodeTools.openSnapshot",
     tooltip: "Render a bounded session snapshot markdown document.",
     icon: new vscode.ThemeIcon("preview")
   },
   {
     label: "Open Context Estimate",
-    command: "tiinex.aiVscodeTooling.openContextEstimate",
+    command: "tiinex.aiVscodeTools.openContextEstimate",
     tooltip: "Render the current bounded context estimate markdown document.",
     icon: new vscode.ThemeIcon("graph")
   },
   {
     label: "Open Profile",
-    command: "tiinex.aiVscodeTooling.openProfile",
+    command: "tiinex.aiVscodeTools.openProfile",
     tooltip: "Render findings-first session diagnostics.",
     icon: new vscode.ThemeIcon("pulse")
   },
   {
     label: "Open Tail Index",
-    command: "tiinex.aiVscodeTooling.openIndex",
+    command: "tiinex.aiVscodeTools.openIndex",
     tooltip: "Render a bounded trailing index of recent persisted rows.",
     icon: new vscode.ThemeIcon("list-tree")
   },
   {
     label: "Open Raw Session File (Last Resort)",
-    command: "tiinex.aiVscodeTooling.openSessionFile",
+    command: "tiinex.aiVscodeTools.openSessionFile",
     tooltip: "Open the underlying chat session JSONL file, or a bounded raw preview when the file is too large for direct extension-host opening. Prefer transcript, snapshot, index, profile, or context views first.",
     icon: new vscode.ThemeIcon("go-to-file")
   },
   {
     label: "Reveal Local Chat",
-    command: "tiinex.aiVscodeTooling.revealLiveChat",
+    command: "tiinex.aiVscodeTools.revealLiveChat",
     tooltip: "Reveal the matching Local chat session when the host exposes an exact-session Local reveal command.",
     icon: new vscode.ThemeIcon("comment-discussion")
   },
   {
     label: "Close Visible Chat Tabs",
-    command: "tiinex.aiVscodeTooling.closeVisibleLiveChatTabs",
+    command: "tiinex.aiVscodeTools.closeVisibleLiveChatTabs",
     tooltip: "Close visible editor-hosted chat tabs that match this Local session.",
     icon: new vscode.ThemeIcon("close-all")
   },
   {
     label: "Delete Local Chat Artifacts",
-    command: "tiinex.aiVscodeTooling.deleteLiveChatArtifacts",
+    command: "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
     tooltip: "Close visible editor-hosted chat tabs for this Local session and delete its persisted session, transcript, and resource artifacts from disk.",
     icon: new vscode.ThemeIcon("trash")
   },
   {
     label: "Send Message To Local Chat",
-    command: "tiinex.aiVscodeTooling.sendMessageToLiveChat",
+    command: "tiinex.aiVscodeTools.sendMessageToLiveChat",
     tooltip: "Send a follow-up message to this Local chat session, using exact send when available or reveal plus focused-send fallback when needed.",
     icon: new vscode.ThemeIcon("send")
   }
@@ -79,7 +79,7 @@ export class SessionInspectorTreeDataProvider implements vscode.TreeDataProvider
   readonly onDidChangeTreeData = this.changeEmitter.event;
 
   constructor(
-    private readonly adapter: SessionToolingAdapter,
+    private readonly adapter: SessionToolsAdapter,
     private readonly getStorageRoots: () => string[] | undefined
   ) {}
 

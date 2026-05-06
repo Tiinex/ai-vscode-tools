@@ -5,5 +5,5 @@
     "telemetry.feedback.enabled": false,
     "telemetry.editStats.showStatusBar": false,
     "telemetry.editStats.showDecorations": false,
-    "tiinex.aiVscodeTooling.showSessionsView": true
+    "tiinex.aiVscodeTools.showSessionsView": true
 }

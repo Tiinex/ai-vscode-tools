@@ -70,13 +70,13 @@ let corePromise: Promise<CoreModule> | undefined;
 
 async function loadCore(): Promise<CoreModule> {
   if (!corePromise) {
-    const modulePath = path.resolve(__dirname, "./tooling/core.js");
+    const modulePath = path.resolve(__dirname, "./tools/core.js");
     corePromise = Promise.resolve(require(modulePath) as CoreModule);
   }
   return corePromise;
 }
 
-export class SessionToolingAdapter {
+export class SessionToolsAdapter {
   async discoverSessions(storageRoots?: string[]): Promise<SessionDescriptor[]> {
     const core = await loadCore();
     return core.discoverSessions(storageRoots ?? []);
