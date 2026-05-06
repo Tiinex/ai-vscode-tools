@@ -1,4 +1,4 @@
-# Tiinex AI VS Code Tooling
+# Tiinex — AI — VS Code — Tooling
 
 - Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 - Companion AI repo this tooling primarily supports: https://github.com/Tiinex/ai
