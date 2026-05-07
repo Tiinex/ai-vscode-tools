@@ -1076,6 +1076,9 @@ async function runChatInteropSelectionChecks() {
   assert(promptFileContent.includes('agent: "agent-architect"'), "Prompt-file dispatch test did not encode agent frontmatter.");
   assert(promptFileContent.endsWith("Inspect the target artifact.\n"), "Prompt-file dispatch test did not preserve the original prompt body.");
 
+  const promptFileContentWithAgentName = buildPromptFileContent("Inspect the target artifact.", "Agent Architect");
+  assert(promptFileContentWithAgentName.includes('agent: "Agent Architect"'), "Prompt-file dispatch test did not preserve a resolved custom-agent display name in the prompt frontmatter.");
+
   const promptArtifact = buildPromptFileDispatchArtifact(
     {
       prompt: "Inspect the target artifact.",
@@ -1089,6 +1092,17 @@ async function runChatInteropSelectionChecks() {
     "Prompt-file dispatch test did not derive the expected prompt file path."
   );
   assert(promptArtifact.slashCommand === "aa-live-chat-agent-architect-20260409190000-abcdef", "Prompt-file dispatch test did not derive the expected slash command name.");
+  const promptArtifactWithResolvedAgent = buildPromptFileDispatchArtifact(
+    {
+      prompt: "Inspect the target artifact.",
+      agentName: "agent-architect"
+    },
+    "/tmp/prompts",
+    "20260409190000-abcdef",
+    "Agent Architect"
+  );
+  assert(promptArtifactWithResolvedAgent.slashCommand === promptArtifact.slashCommand, "Prompt-file dispatch test should not change slash-command naming when using a resolved custom-agent display name.");
+  assert(promptArtifactWithResolvedAgent.content.includes('agent: "Agent Architect"'), "Prompt-file dispatch test did not encode the resolved custom-agent display name in the prompt artifact content.");
   assert(parsePromptDispatchAgent(promptArtifact.filePath) === "agent-architect", "Prompt-file dispatch test did not recover the agent slug from the persisted prompt file path.");
   assert(parsePromptDispatchAgent(promptArtifact.slashCommand) === "agent-architect", "Prompt-file dispatch test did not recover the agent slug from the persisted slash command name.");
   assert(shouldUsePromptFileDispatch({ prompt: "Inspect the target artifact.", agentName: "agent-architect" }) === true, "Prompt-file dispatch test did not enable artifact dispatch for custom agent requests.");
@@ -1227,6 +1241,7 @@ async function runFocusedSendBehaviorChecks() {
     } catch (e) {
       vscodeModule = { commands: { getCommands: async () => [], executeCommand: async () => undefined }, window: { tabGroups: { all: [] } } };
     }
+    vscodeModule.workspace = vscodeModule.workspace || {};
     const originalGetCommands = vscodeModule.commands.getCommands;
     const originalExecuteCommand = vscodeModule.commands.executeCommand;
     const executedCommands = [];
@@ -1313,16 +1328,37 @@ async function runFocusedSendBehaviorChecks() {
     });
 
     const nbResult = await service.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, waitForPersisted: false });
-    assert(nbResult.ok === true, 'Non-blocking focused-send did not succeed when persisted touch occurred');
+    assert(nbResult.ok === true, `Non-blocking focused-send did not succeed when persisted touch occurred. Got: ${nbResult.reason}`);
     assert(nbResult.session && nbResult.session.id === 's1', 'Non-blocking focused-send returned wrong session id');
     assert(executedCommands[0]?.command === 'workbench.action.chat.focusInput', 'Non-blocking focused-send did not focus the chat input before dispatch.');
     assert(executedCommands[1]?.command === 'workbench.action.chat.open', 'Non-blocking focused-send did not prefill the focused chat input through chat-open.');
-    assert(executedCommands[1]?.args?.query === '#agent-architect\nhello', `Non-blocking focused-send did not use the expected agent-prefixed prompt. Got: ${executedCommands[1]?.args?.query}`);
-    assert(executedCommands[1]?.args?.isPartialQuery === true, 'Non-blocking focused-send did not prefill the focused chat input as a partial query.');
-    assert(executedCommands[2]?.command === 'workbench.action.chat.submit', 'Non-blocking focused-send did not submit the focused chat prompt.');
-    assert(fsOps.some((entry) => entry.op === 'writeFile') === false, 'Non-blocking focused-send should not write a temporary prompt artifact after the focused-send rollback.');
-    assert(fsOps.some((entry) => entry.op === 'rm') === false, 'Non-blocking focused-send should not need temporary prompt-file cleanup after the focused-send rollback.');
+    assert(String(executedCommands[1]?.args?.query).startsWith('/aa-live-chat-agent-architect-') === true, `Non-blocking focused-send did not use the expected prompt-file slash command. Got: ${executedCommands[1]?.args?.query}`);
+    assert(executedCommands[1]?.args?.isPartialQuery === false, 'Non-blocking focused-send did not dispatch the prompt-file slash command as a real query.');
+    assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Non-blocking focused-send did not refocus the chat input after slash-command prefill.');
+    assert(executedCommands[3]?.command === 'workbench.action.chat.submit', 'Non-blocking focused-send did not submit the prompt-file slash command.');
+    assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Non-blocking focused-send did not write a temporary prompt artifact for agent-bound dispatch.');
+    assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Non-blocking focused-send did not clean up the temporary prompt artifact for agent-bound dispatch.');
     executedCommands.length = 0;
+    fsOps.length = 0;
+
+    const modelPrefillResult = await service.sendFocusedMessage({
+      prompt: 'hello with model',
+      agentName: 'agent-architect',
+      modelSelector: { id: 'gpt-5-mini', vendor: 'copilot' },
+      requireSelectionEvidence: false,
+      waitForPersisted: false
+    });
+    assert(modelPrefillResult.ok === true, 'Focused-send with model prefill did not succeed when persisted touch occurred');
+    assert(executedCommands[0]?.command === 'workbench.action.chat.focusInput', 'Focused-send with model prefill did not focus the chat input before dispatch.');
+    assert(executedCommands[1]?.command === 'workbench.action.chat.open', 'Focused-send with model prefill did not prefill the focused chat input through chat-open.');
+    assert(String(executedCommands[1]?.args?.query).startsWith('/aa-live-chat-agent-architect-') === true, `Focused-send with model prefill did not use the expected prompt-file slash command. Got: ${executedCommands[1]?.args?.query}`);
+    assert(executedCommands[1]?.args?.isPartialQuery === false, 'Focused-send with model prefill did not dispatch the prompt-file slash command as a real query.');
+    assert(executedCommands[1]?.args?.modelSelector?.id === 'gpt-5-mini', `Focused-send with model prefill did not pass the requested model id. Got: ${executedCommands[1]?.args?.modelSelector?.id}`);
+    assert(executedCommands[1]?.args?.modelSelector?.vendor === 'copilot', `Focused-send with model prefill did not pass the requested model vendor. Got: ${executedCommands[1]?.args?.modelSelector?.vendor}`);
+    assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Focused-send with model prefill did not refocus the chat input after slash-command prefill.');
+    assert(executedCommands[3]?.command === 'workbench.action.chat.submit', 'Focused-send with model prefill did not submit the prompt-file slash command.');
+    executedCommands.length = 0;
+    fsOps.length = 0;
 
     // Blocking scenario: no persisted mutation appears within the timeout
     MockChatSessionStorage.setBehaviors([
@@ -1539,6 +1575,7 @@ async function runCreateChatDirectAgentCommandChecks() {
   const { createRequire } = await import('module');
   const require = createRequire(import.meta.url);
   const vscodeModule = require('vscode');
+  vscodeModule.workspace = vscodeModule.workspace || {};
   const storageModule = require(distChatInteropStorage);
   const originalChatSessionStorage = storageModule.ChatSessionStorage;
 
@@ -1565,6 +1602,10 @@ async function runCreateChatDirectAgentCommandChecks() {
   const executedCommands = [];
   const originalExecuteCommand = vscodeModule.commands.executeCommand;
   const originalGetCommands = vscodeModule.commands.getCommands;
+  const originalMkdir = fs.mkdir;
+  const originalWriteFile = fs.writeFile;
+  const originalRm = fs.rm;
+  const fsOps = [];
 
   try {
     vscodeModule.commands.getCommands = async () => [
@@ -1577,6 +1618,33 @@ async function runCreateChatDirectAgentCommandChecks() {
     vscodeModule.commands.executeCommand = async (command, args) => {
       executedCommands.push({ command, args });
       return undefined;
+    };
+    fs.mkdir = async (...args) => {
+      const targetPath = typeof args[0] === 'string' ? args[0] : String(args[0]);
+      if (targetPath.includes(`${path.sep}User${path.sep}prompts`)) {
+        fsOps.push({ op: 'mkdir', args });
+        return undefined;
+      }
+
+      return originalMkdir(...args);
+    };
+    fs.writeFile = async (...args) => {
+      const targetPath = typeof args[0] === 'string' ? args[0] : String(args[0]);
+      if (targetPath.endsWith('.prompt.md')) {
+        fsOps.push({ op: 'writeFile', args });
+        return undefined;
+      }
+
+      return originalWriteFile(...args);
+    };
+    fs.rm = async (...args) => {
+      const targetPath = typeof args[0] === 'string' ? args[0] : String(args[0]);
+      if (targetPath.endsWith('.prompt.md')) {
+        fsOps.push({ op: 'rm', args });
+        return undefined;
+      }
+
+      return originalRm(...args);
     };
 
     MockChatSessionStorage.setBehaviors([
@@ -1610,17 +1678,21 @@ async function runCreateChatDirectAgentCommandChecks() {
       blockOnResponse: true
     });
 
-    assert(result.ok === true, 'Direct agent-open createChat test did not succeed when a session was created and settled.');
-    assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Direct agent-open createChat test did not open a new chat editor first.');
-    assert(executedCommands[1]?.command === 'workbench.action.focusActiveEditorGroup', 'Direct agent-open createChat test did not refocus the new editor chat group after opening it.');
-    assert(executedCommands[2]?.command === 'workbench.action.chat.openagent-architect', 'Direct agent-open createChat test did not prefer the runtime openagent-architect command.');
-    assert(executedCommands[3]?.command === 'workbench.action.chat.focusInput', 'Direct agent-open createChat test did not focus the newly opened chat before dispatch.');
-    assert(executedCommands[4]?.command === 'workbench.action.chat.open', 'Direct agent-open createChat test did not prefill the focused chat input after opening the direct agent chat.');
-    assert(executedCommands[4]?.args?.query === 'Create a local recovery tools helper named artifact-list-item-checker using the provided build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
-    assert(executedCommands[4]?.args?.isPartialQuery === true, 'Direct agent-open createChat test did not use partial-query prefill for the focused submit path.');
-    assert(executedCommands[5]?.command === 'workbench.action.chat.submit', 'Direct agent-open createChat test did not submit the focused chat after prefilling it.');
+    assert(result.ok === true, 'Agent-bound createChat test did not succeed when a session was created and settled.');
+    assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Agent-bound createChat test did not open a new chat editor first.');
+    assert(executedCommands[1]?.command === 'workbench.action.focusActiveEditorGroup', 'Agent-bound createChat test did not refocus the new editor chat group after opening it.');
+    assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Agent-bound createChat test did not focus the chat input before slash-command prefill.');
+    assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Agent-bound createChat test did not dispatch the generated slash command through chat-open.');
+    assert(String(executedCommands[3]?.args?.query).startsWith('/aa-live-chat-agent-architect-') === true, `Agent-bound createChat test did not dispatch the generated slash command. Got: ${executedCommands[3]?.args?.query}`);
+    assert(executedCommands[3]?.args?.isPartialQuery === false, 'Agent-bound createChat test did not dispatch the generated slash command as a real query.');
+    assert(executedCommands[4]?.command === 'workbench.action.chat.focusInput', 'Agent-bound createChat test did not refocus the chat input after slash-command prefill.');
+    assert(executedCommands[5]?.command === 'workbench.action.chat.submit', 'Agent-bound createChat test did not explicitly submit the slash-command dispatch.');
+    assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Agent-bound createChat test did not write the temporary prompt artifact.');
+    assert(fsOps.some((entry) => entry.op === 'writeFile' && String(entry.args?.[1]).includes('agent: "agent-architect"')) === true, 'Agent-bound createChat test did not encode the requested agent in the temporary prompt artifact.');
+    assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Agent-bound createChat test did not clean up the temporary prompt artifact.');
 
     executedCommands.length = 0;
+    fsOps.length = 0;
     MockChatSessionStorage.setBehaviors([
       [],
       [
@@ -1769,24 +1841,19 @@ async function runCreateChatDirectAgentCommandChecks() {
     );
 
     executedCommands.length = 0;
-    const originalMkdir = fs.mkdir;
-    const originalWriteFile = fs.writeFile;
-    const originalRm = fs.rm;
-    const fsOps = [];
-    fs.mkdir = async (...args) => {
-      fsOps.push({ op: 'mkdir', args });
-      return undefined;
-    };
-    fs.writeFile = async (...args) => {
-      fsOps.push({ op: 'writeFile', args });
-      return undefined;
-    };
-    fs.rm = async (...args) => {
-      fsOps.push({ op: 'rm', args });
-      return undefined;
-    };
+    fsOps.length = 0;
 
+    let promptAgentRoot;
+    const originalWorkspace = vscodeModule.workspace;
+    const originalWorkspaceFolders = originalWorkspace?.workspaceFolders;
     try {
+      promptAgentRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-prompt-agent-'));
+      const promptAgentDir = path.join(promptAgentRoot, '.github', 'agents');
+      await originalMkdir(promptAgentDir, { recursive: true });
+      await originalWriteFile(path.join(promptAgentDir, 'anchor-senior.agent.md'), '---\nname: Anchor Senior\n---\n\n# test\n', 'utf8');
+      vscodeModule.workspace = vscodeModule.workspace || {};
+      vscodeModule.workspace.workspaceFolders = [{ uri: { fsPath: promptAgentRoot } }];
+
       vscodeModule.commands.getCommands = async () => [
         'workbench.action.openChat',
         'workbench.action.chat.open',
@@ -1822,7 +1889,7 @@ async function runCreateChatDirectAgentCommandChecks() {
         blockOnResponse: true
       });
 
-      assert(promptFileResult.ok === true, 'Prompt-file createChat test did not succeed when a session was created and settled.');
+      assert(promptFileResult.ok === true, `Prompt-file createChat test did not succeed when a session was created and settled. Got: ${promptFileResult.reason}`);
       assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Prompt-file createChat test did not open a new chat editor first.');
       assert(executedCommands[1]?.command === 'workbench.action.focusActiveEditorGroup', 'Prompt-file createChat test did not refocus the new editor chat group after opening it.');
       assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Prompt-file createChat test did not focus the chat input before slash-command prefill.');
@@ -1832,8 +1899,17 @@ async function runCreateChatDirectAgentCommandChecks() {
       assert(executedCommands[4]?.command === 'workbench.action.chat.focusInput', 'Prompt-file createChat test did not refocus the chat input after slash-command prefill.');
       assert(executedCommands[5]?.command === 'workbench.action.chat.submit', 'Prompt-file createChat test did not explicitly submit the slash-command dispatch.');
       assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Prompt-file createChat test did not write the temporary prompt artifact.');
+      assert(fsOps.some((entry) => entry.op === 'writeFile' && String(entry.args?.[1]).includes('agent: "Anchor Senior"')) === true, 'Prompt-file createChat test did not encode the resolved workspace custom-agent name in the temporary prompt artifact.');
       assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Prompt-file createChat test did not clean up the temporary prompt artifact.');
     } finally {
+      if (originalWorkspace) {
+        originalWorkspace.workspaceFolders = originalWorkspaceFolders;
+      } else {
+        delete vscodeModule.workspace;
+      }
+      if (promptAgentRoot) {
+        await originalRm(promptAgentRoot, { recursive: true, force: true });
+      }
       fs.mkdir = originalMkdir;
       fs.writeFile = originalWriteFile;
       fs.rm = originalRm;
@@ -1842,6 +1918,9 @@ async function runCreateChatDirectAgentCommandChecks() {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
     vscodeModule.commands.executeCommand = originalExecuteCommand;
     vscodeModule.commands.getCommands = originalGetCommands;
+    fs.mkdir = originalMkdir;
+    fs.writeFile = originalWriteFile;
+    fs.rm = originalRm;
   }
 }
 
@@ -2508,7 +2587,7 @@ async function runStabilizedCreateWorkflowChecks() {
     await fs.mkdir(chatSessionsDir, { recursive: true });
 
     const agentFile = path.join(workspaceRuntimeAgentDir, "support-doc.fresh-reader.agent.md");
-    await fs.writeFile(agentFile, "# test\n", "utf8");
+    await fs.writeFile(agentFile, `---\nmodel: GPT-5 mini (copilot)\n---\n\n# test\n`, "utf8");
     const targetSessionFile = path.join(chatSessionsDir, "session-1.jsonl");
     await fs.writeFile(targetSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-1", requests: [], inputState: {} } }), "utf8");
     const siblingModelFile = path.join(chatSessionsDir, "session-2.jsonl");
@@ -2647,7 +2726,7 @@ async function runStabilizedCreateWorkflowChecks() {
     assert(sentRequests[0].prompt === "real prompt", "Stabilized workflow test did not preserve the real prompt for the final send.");
     assert(sentRequests[0].agentName === "support-doc.fresh-reader", `Stabilized workflow test did not preserve the requested agent on the follow-up send. Got agentName=${sentRequests[0].agentName}`);
     assert(sentRequests[0].mode === undefined, `Stabilized workflow test should keep the follow-up send prompt-only after mode stabilization. Got: ${sentRequests[0].mode}`);
-    assert(sentRequests[0].modelSelector === undefined, "Stabilized workflow test should keep the follow-up send prompt-only after model stabilization.");
+    assert(sentRequests[0].modelSelector === undefined, "Stabilized workflow test should keep the follow-up send model unset when exact send is available.");
     assert(result.resolvedModeId === expectedAgentFileUri, `Stabilized workflow test did not resolve the workspace runtime-agent file URI. Got: ${result.resolvedModeId}`);
     assert(result.patchedModeId === expectedAgentFileUri, "Stabilized workflow test did not report the applied mode patch.");
     assert(result.patchedModelId === "copilot/gpt-5.4", "Stabilized workflow test did not report the applied model patch.");
@@ -2656,6 +2735,125 @@ async function runStabilizedCreateWorkflowChecks() {
     assert(parsedPatchedRows.length === 3, `Stabilized workflow test did not keep the session file parseable JSONL. Got ${parsedPatchedRows.length} rows.`);
     assert(targetSessionRaw.includes(`"id":"${expectedAgentFileUri}"`), "Stabilized workflow test did not append the requested mode patch to the session file.");
     assert(targetSessionRaw.includes('"identifier":"copilot/gpt-5.4"'), "Stabilized workflow test did not append the requested selectedModel patch to the session file.");
+
+    const agentDefaultModelSessionFile = path.join(chatSessionsDir, "session-agent-default-model.jsonl");
+    await fs.writeFile(agentDefaultModelSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-agent-default-model", requests: [], inputState: {} } }), "utf8");
+    const agentDefaultModelCreateRequests = [];
+    const agentDefaultModelSentRequests = [];
+    let agentDefaultModelReady = false;
+    let agentDefaultModelListChatsCalls = 0;
+    const agentDefaultModelInterop = {
+      async listChats() {
+        agentDefaultModelListChatsCalls += 1;
+        agentDefaultModelReady = agentDefaultModelListChatsCalls >= 2;
+        return [{
+          id: "session-agent-default-model",
+          title: "Agent Default Model Session",
+          lastUpdated: "2026-04-12T08:30:00.000Z",
+          mode: "agent",
+          agent: "github.copilot.editsAgent",
+          model: "copilot/gpt-5.4",
+          hasPendingEdits: !agentDefaultModelReady,
+          pendingRequestCount: agentDefaultModelReady ? 0 : 1,
+          lastRequestCompleted: agentDefaultModelReady,
+          archived: false,
+          provider: "workspaceStorage",
+          sessionFile: agentDefaultModelSessionFile
+        }];
+      },
+      async getExactSessionInteropSupport() {
+        return {
+          canRevealExactSession: true,
+          canSendExactSessionMessage: true,
+          revealUnsupportedReason: undefined,
+          sendUnsupportedReason: undefined
+        };
+      },
+      async getFocusedChatInteropSupport() {
+        return {
+          canSubmitFocusedChatMessage: true,
+          focusInputCommand: "workbench.action.chat.focusInput",
+          submitCommand: "workbench.action.chat.submit",
+          unsupportedReason: undefined
+        };
+      },
+      async createChat(request) {
+        agentDefaultModelCreateRequests.push(request);
+        return {
+          ok: true,
+          session: {
+            id: "session-agent-default-model",
+            title: "Agent Default Model Session",
+            lastUpdated: "2026-04-12T08:30:00.000Z",
+            mode: "agent",
+            agent: "github.copilot.editsAgent",
+            model: "copilot/gpt-5.4",
+            archived: false,
+            provider: "workspaceStorage",
+            sessionFile: agentDefaultModelSessionFile
+          },
+          selection: {
+            mode: { status: "mismatch", requested: expectedAgentFileUri, observed: "agent" },
+            model: { status: "mismatch", requested: "copilot/gpt-5-mini", observed: "copilot/gpt-5.4" },
+            agent: { status: "mismatch", requested: "#support-doc.fresh-reader", observed: "github.copilot.editsAgent" },
+            dispatchedPrompt: "seed",
+            dispatchSurface: "prompt-file-slash-command",
+            dispatchedSlashCommand: "/tmp",
+            allRequestedVerified: false
+          }
+        };
+      },
+      async sendMessage(request) {
+        assert(agentDefaultModelReady === true, "Agent-default-model stabilized workflow test sent the real prompt before the seed session had settled.");
+        agentDefaultModelSentRequests.push(request);
+        return {
+          ok: true,
+          session: {
+            id: "session-agent-default-model",
+            title: "Agent Default Model Session",
+            lastUpdated: "2026-04-12T08:31:00.000Z",
+            mode: expectedAgentFileUri,
+            agent: "support-doc.fresh-reader",
+            model: "copilot/gpt-5-mini",
+            archived: false,
+            provider: "workspaceStorage",
+            sessionFile: agentDefaultModelSessionFile
+          },
+          selection: {
+            mode: { status: "verified", requested: expectedAgentFileUri, observed: expectedAgentFileUri },
+            model: { status: "verified", requested: "copilot/gpt-5-mini", observed: "copilot/gpt-5-mini" },
+            agent: { status: "verified", requested: "#support-doc.fresh-reader", observed: "support-doc.fresh-reader" },
+            dispatchedPrompt: request.prompt,
+            dispatchSurface: "chat-open",
+            allRequestedVerified: true
+          }
+        };
+      },
+      async sendFocusedMessage() {
+        throw new Error("sendFocusedMessage should not be used when exact send is available in the agent-default-model stabilized workflow test.");
+      },
+      async closeVisibleTabs() {
+        return { ok: true };
+      },
+      async revealChat() {
+        return { ok: true };
+      }
+    };
+
+    const agentDefaultModelResult = await createStabilizedChatAndSend(agentDefaultModelInterop, {
+      prompt: "agent default model prompt",
+      agentName: "support-doc.fresh-reader",
+      blockOnResponse: true,
+      requireSelectionEvidence: false
+    });
+
+    const agentDefaultModelSessionRaw = await fs.readFile(agentDefaultModelSessionFile, "utf8");
+    assert(agentDefaultModelCreateRequests.length === 1, "Agent-default-model stabilized workflow test did not issue exactly one seed create request.");
+    assert(agentDefaultModelCreateRequests[0].modelSelector === undefined, "Agent-default-model stabilized workflow test should keep the seed create neutral.");
+    assert(agentDefaultModelSentRequests.length === 1, "Agent-default-model stabilized workflow test did not send the real prompt exactly once.");
+    assert(agentDefaultModelSentRequests[0].modelSelector === undefined, "Agent-default-model stabilized workflow test should keep the follow-up send model unset when exact send is available.");
+    assert(agentDefaultModelResult.patchedModelId === "copilot/gpt-5-mini", "Agent-default-model stabilized workflow test did not use the workspace agent file model as fallback.");
+    assert(agentDefaultModelSessionRaw.includes('"identifier":"copilot/gpt-5-mini"'), "Agent-default-model stabilized workflow test did not append the agent-file selectedModel patch to the session file.");
 
     const companionOnlyFile = path.join(companionDir, "companion-only.agent.test.md");
     await fs.writeFile(companionOnlyFile, "# companion-only test\n", "utf8");
@@ -3451,6 +3649,7 @@ async function runSessionSendWorkflowChecks() {
   try {
     let focusedSendCalls = 0;
     let revealCalls = 0;
+    let focusedFallbackModelSelector;
     const fallbackResult = await sendMessageToSession({
       async getExactSessionInteropSupport() {
         return {
@@ -3499,6 +3698,7 @@ async function runSessionSendWorkflowChecks() {
       },
       async sendFocusedMessage(request) {
         focusedSendCalls += 1;
+        focusedFallbackModelSelector = request.modelSelector;
         return {
           ok: true,
           session: {
@@ -3546,6 +3746,106 @@ async function runSessionSendWorkflowChecks() {
     assert(revealCalls === 1, `Session send workflow test did not reveal the target session exactly once before focused fallback send. Got: ${revealCalls}`);
     assert(focusedSendCalls === 1, `Session send workflow test did not call focused send exactly once in fallback mode. Got: ${focusedSendCalls}`);
     assert(fallbackResult.session?.id === 'session-fallback', 'Session send workflow fallback test did not preserve the exact target session id.');
+    assert(focusedFallbackModelSelector === undefined, 'Session send workflow fallback test should keep model unset when no model was requested.');
+
+    let focusedFallbackModelAwareCalls = 0;
+    let focusedFallbackModelAwareSelector;
+    const fallbackModelAwareResult = await sendMessageToSession({
+      async getExactSessionInteropSupport() {
+        return {
+          canRevealExactSession: true,
+          canSendExactSessionMessage: false,
+          revealUnsupportedReason: undefined,
+          sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+        };
+      },
+      async listChats() {
+        return [{
+          id: 'session-fallback-model',
+          title: 'Fallback Target',
+          lastUpdated: focusedFallbackModelAwareCalls > 0 ? '2026-05-07T10:05:11.000Z' : '2026-05-07T10:05:10.000Z',
+          mode: 'agent',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-fallback-model.jsonl'
+        }];
+      },
+      async revealChat(sessionId) {
+        return {
+          ok: true,
+          session: {
+            id: sessionId,
+            title: 'Fallback Target',
+            lastUpdated: '2026-05-07T10:05:10.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-fallback-model.jsonl'
+          },
+          revealLifecycle: {
+            closedMatchingVisibleTabs: 0,
+            closedTabLabels: []
+          }
+        };
+      },
+      async sendFocusedMessage(request) {
+        focusedFallbackModelAwareCalls += 1;
+        focusedFallbackModelAwareSelector = request.modelSelector;
+        return {
+          ok: true,
+          session: {
+            id: 'session-fallback-model',
+            title: 'Fallback Target',
+            lastUpdated: '2026-05-07T10:05:11.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-fallback-model.jsonl'
+          },
+          selection: {
+            mode: { status: 'verified', requested: undefined, observed: 'agent' },
+            model: { status: 'verified', requested: 'copilot/gpt-5-mini', observed: 'copilot/gpt-5-mini' },
+            agent: { status: 'verified', requested: '#agent-architect', observed: 'agent-architect' },
+            dispatchedPrompt: request.prompt,
+            dispatchSurface: 'focused-chat-submit',
+            allRequestedVerified: true
+          },
+          revealLifecycle: {
+            closedMatchingVisibleTabs: 0,
+            closedTabLabels: [],
+            timingMs: {
+              focusedInputMs: 1,
+              prefillMs: 1,
+              submitMs: 1
+            }
+          }
+        };
+      },
+      async sendMessage() {
+        throw new Error('Session send workflow model-aware fallback test should not call sendMessage when exact session send is unsupported but fallback reveal is available.');
+      }
+    }, {
+      sessionId: 'session-fallback-model',
+      prompt: 'fallback prompt with model',
+      agentName: 'agent-architect',
+      modelSelector: { id: 'gpt-5-mini', vendor: 'copilot' },
+      blockOnResponse: true,
+      requireSelectionEvidence: false
+    });
+
+    assert(fallbackModelAwareResult.ok === true, 'Session send workflow model-aware fallback test did not succeed through explicit reveal-plus-focus fallback when exact send was unsupported.');
+    assert(focusedFallbackModelAwareCalls === 1, `Session send workflow model-aware fallback test did not call focused send exactly once. Got: ${focusedFallbackModelAwareCalls}`);
+    assert(focusedFallbackModelAwareSelector?.id === 'gpt-5-mini', `Session send workflow model-aware fallback test did not preserve the requested model id. Got: ${focusedFallbackModelAwareSelector?.id}`);
+    assert(focusedFallbackModelAwareSelector?.vendor === 'copilot', `Session send workflow model-aware fallback test did not preserve the requested model vendor. Got: ${focusedFallbackModelAwareSelector?.vendor}`);
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'session-send-workflow-'));
     try {

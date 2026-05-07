@@ -1,10 +1,10 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   buildUnsupportedFocusedSendReason,
   buildUnsupportedRevealReason,
   buildUnsupportedSendReason,
-  findDirectAgentOpenCommand,
   findFocusedChatInputCommand,
   findFocusedChatSubmitCommand,
   findExactSessionOpenCommand,
@@ -49,9 +49,10 @@ const FOCUS_ACTIVE_EDITOR_GROUP_COMMAND = "workbench.action.focusActiveEditorGro
 const DEFAULT_OPEN_DELAY_MS = 200;
 const DEFAULT_SLASH_COMMAND_SETTLE_DELAY_MS = 900;
 const DEFAULT_POST_CREATE_DELAY_MS = 350;
-// Treat persistence waits as diagnostic gates, not soft fallbacks. Ninety seconds is
-// long enough for slower hosts while surfacing hangs sooner as actionable failures.
-const DEFAULT_POST_CREATE_TIMEOUT_MS = 90_000;
+// Treat persistence waits as diagnostic gates, not soft fallbacks. Use a long wall-clock
+// budget so agent-led development slices can survive slower model turns without the Local
+// tooling bailing out early on otherwise healthy sessions.
+const DEFAULT_POST_CREATE_TIMEOUT_MS = 900_000;
 const DEFAULT_PROMPT_REGISTRATION_DELAY_MS = 350;
 
 export class ChatInteropService implements ChatInteropApi {
@@ -98,12 +99,7 @@ export class ChatInteropService implements ChatInteropApi {
       return { ok: false, reason: "prompt is required" };
     }
 
-    const directAgentOpenAvailable = request.agentName?.trim()
-      ? Boolean(await this.findDirectAgentOpenCommand(request.agentName))
-      : false;
-    const selectionBlocker = buildCreateChatSelectionBlocker(request, {
-      directAgentOpenAvailable
-    });
+    const selectionBlocker = buildCreateChatSelectionBlocker(request);
     if (selectionBlocker) {
       return { ok: false, reason: selectionBlocker };
     }
@@ -299,6 +295,7 @@ export class ChatInteropService implements ChatInteropApi {
       }
 
       const before = await this.storage.listSessions();
+      let cleanup: (() => Promise<void>) | undefined;
       let focusedInputMs = 0;
       let prefillMs = 0;
       let submitMs = 0;
@@ -319,41 +316,106 @@ export class ChatInteropService implements ChatInteropApi {
         }
       });
 
-      const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
-      const dispatch: ChatDispatchInfo = {
-        surface: "focused-chat-submit",
-        dispatchedPrompt
-      };
+      try {
+        let dispatch: ChatDispatchInfo;
 
-      const focusedInputStartedAt = Date.now();
-      await vscode.commands.executeCommand(commandSupport.focusInputCommand);
-      focusedInputMs = Date.now() - focusedInputStartedAt;
-      await delay(this.openDelayMs);
+        if (shouldUsePromptFileDispatch(request)) {
+          const promptFileDispatch = await this.dispatchViaPromptFile(request);
+          cleanup = promptFileDispatch.cleanup;
+          dispatch = promptFileDispatch.dispatch;
+        } else {
+          const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
+          dispatch = {
+            surface: "focused-chat-submit",
+            dispatchedPrompt
+          };
 
-      const prefillStartedAt = Date.now();
-      await this.prefillFocusedChat(request, dispatchedPrompt);
-      prefillMs = Date.now() - prefillStartedAt;
-      await delay(this.openDelayMs);
+          const focusedInputStartedAt = Date.now();
+          await vscode.commands.executeCommand(commandSupport.focusInputCommand);
+          focusedInputMs = Date.now() - focusedInputStartedAt;
+          await delay(this.openDelayMs);
 
-      const submitStartedAt = Date.now();
-      await vscode.commands.executeCommand(commandSupport.submitCommand);
-      submitMs = Date.now() - submitStartedAt;
+          const prefillStartedAt = Date.now();
+          await this.prefillFocusedChat(request, dispatchedPrompt);
+          prefillMs = Date.now() - prefillStartedAt;
+          await delay(this.openDelayMs);
 
-      const beforeById = new Map(before.map((item) => [item.id, item.lastUpdated]));
+          const submitStartedAt = Date.now();
+          await vscode.commands.executeCommand(commandSupport.submitCommand);
+          submitMs = Date.now() - submitStartedAt;
+        }
 
-      const waitForPersisted = request.waitForPersisted !== undefined ? request.waitForPersisted : this.defaultWaitForPersisted;
+        const beforeById = new Map(before.map((item) => [item.id, item.lastUpdated]));
 
-      if (!waitForPersisted) {
-        // Non-blocking/one-shot path: check once for an immediate persisted touch and return.
-        const after = await this.storage.listSessions();
-        const candidate = pickTouchedSession(beforeById, after);
-        const selection = buildSelectionVerification(request, candidate, dispatch);
+        const waitForPersisted = request.waitForPersisted !== undefined ? request.waitForPersisted : this.defaultWaitForPersisted;
+
+        if (!waitForPersisted) {
+          // Non-blocking/one-shot path: check once for an immediate persisted touch and return.
+          const after = await this.storage.listSessions();
+          const candidate = pickTouchedSession(beforeById, after);
+          const selection = buildSelectionVerification(request, candidate, dispatch);
+
+          if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
+            return {
+              ok: false,
+              reason: buildSelectionEvidenceFailure(selection, false),
+              session: candidate,
+              selection,
+              dispatch,
+              revealLifecycle: buildFocusedSendTimingLifecycle()
+            };
+          }
+
+          return {
+            ok: true,
+            session: candidate,
+            selection,
+            dispatch,
+            revealLifecycle: buildFocusedSendTimingLifecycle()
+          };
+        }
+
+        const focusedMutationWaitStartedAt = Date.now();
+        const {
+          session,
+          selection,
+          observedMutation,
+          settled,
+          pollCount,
+          scanMs
+        } = await this.waitForFocusedSessionMutation(before, request, dispatch);
+        focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
+        focusedMutationPollCount = pollCount;
+        focusedMutationScanMs = scanMs;
+        if (!session || !observedMutation) {
+          return {
+            ok: false,
+            reason: "Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.",
+            selection,
+            dispatch,
+            revealLifecycle: buildFocusedSendTimingLifecycle()
+          };
+        }
+
+        if (request.blockOnResponse && !settled) {
+          return {
+            ok: false,
+            reason: await appendUnsettledSessionDiagnostic(
+              "Focused chat submit dispatched and a persisted mutation was observed, but the session did not reach a settled state within the expected timeout.",
+              session
+            ),
+            session,
+            selection,
+            dispatch,
+            revealLifecycle: buildFocusedSendTimingLifecycle()
+          };
+        }
 
         if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
           return {
             ok: false,
             reason: buildSelectionEvidenceFailure(selection, false),
-            session: candidate,
+            session,
             selection,
             dispatch,
             revealLifecycle: buildFocusedSendTimingLifecycle()
@@ -362,67 +424,20 @@ export class ChatInteropService implements ChatInteropApi {
 
         return {
           ok: true,
-          session: candidate,
-          selection,
-          dispatch,
-          revealLifecycle: buildFocusedSendTimingLifecycle()
-        };
-      }
-
-      const focusedMutationWaitStartedAt = Date.now();
-      const {
-        session,
-        selection,
-        observedMutation,
-        settled,
-        pollCount,
-        scanMs
-      } = await this.waitForFocusedSessionMutation(before, request, dispatch);
-      focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
-      focusedMutationPollCount = pollCount;
-      focusedMutationScanMs = scanMs;
-      if (!session || !observedMutation) {
-        return {
-          ok: false,
-          reason: "Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.",
-          selection,
-          dispatch,
-          revealLifecycle: buildFocusedSendTimingLifecycle()
-        };
-      }
-
-      if (request.blockOnResponse && !settled) {
-        return {
-          ok: false,
-          reason: await appendUnsettledSessionDiagnostic(
-            "Focused chat submit dispatched and a persisted mutation was observed, but the session did not reach a settled state within the expected timeout.",
-            session
-          ),
           session,
           selection,
           dispatch,
           revealLifecycle: buildFocusedSendTimingLifecycle()
         };
+      } finally {
+        if (cleanup) {
+          try {
+            await cleanup();
+          } catch {
+            // Prompt-file cleanup must not change send behavior.
+          }
+        }
       }
-
-      if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
-        return {
-          ok: false,
-          reason: buildSelectionEvidenceFailure(selection, false),
-          session,
-          selection,
-          dispatch,
-          revealLifecycle: buildFocusedSendTimingLifecycle()
-        };
-      }
-
-      return {
-        ok: true,
-        session,
-        selection,
-        dispatch,
-        revealLifecycle: buildFocusedSendTimingLifecycle()
-      };
     } catch (error) {
       return toErrorResult(error);
     } finally {
@@ -661,10 +676,6 @@ export class ChatInteropService implements ChatInteropApi {
     return findExactSessionSendCommand(await vscode.commands.getCommands(true));
   }
 
-  private async findDirectAgentOpenCommand(agentName: string | undefined): Promise<string | undefined> {
-    return findDirectAgentOpenCommand(await vscode.commands.getCommands(true), agentName);
-  }
-
   private async buildUnsupportedRevealReason(): Promise<string> {
     return buildUnsupportedRevealReason(await vscode.commands.getCommands(true));
   }
@@ -704,6 +715,7 @@ export class ChatInteropService implements ChatInteropApi {
     const options: InternalChatOpenOptions = {
       query,
       isPartialQuery,
+      modelSelector: toModelSelector(request.modelSelector),
       blockOnResponse: false
     };
 
@@ -743,21 +755,6 @@ export class ChatInteropService implements ChatInteropApi {
   private async dispatchCreateRequest(
     request: CreateChatRequest
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup?: () => Promise<void> }> {
-    const directAgentCommand = shouldUsePromptFileDispatch(request)
-      ? await this.findDirectAgentOpenCommand(request.agentName)
-      : undefined;
-
-    if (directAgentCommand) {
-      const dispatchedPrompt = request.prompt.trim();
-      await this.dispatchViaDirectAgentCommand(request, directAgentCommand, dispatchedPrompt);
-      return {
-        dispatch: {
-          surface: "chat-open",
-          dispatchedPrompt
-        }
-      };
-    }
-
     if (!shouldUsePromptFileDispatch(request)) {
       const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
       await this.dispatchToActiveChat(request, dispatchedPrompt);
@@ -772,40 +769,16 @@ export class ChatInteropService implements ChatInteropApi {
     return this.dispatchViaPromptFile(request);
   }
 
-  private async dispatchViaDirectAgentCommand(
-    request: CreateChatRequest,
-    command: string,
-    prompt: string
-  ): Promise<void> {
-    await vscode.commands.executeCommand(command);
-    await delay(this.openDelayMs);
-    const dispatched = await this.dispatchViaFocusedChatSubmit(
-      {
-        ...request,
-        agentName: undefined
-      },
-      prompt
-    );
-
-    if (!dispatched) {
-      await this.dispatchToActiveChat(
-        {
-          ...request,
-          agentName: undefined
-        },
-        prompt
-      );
-    }
-  }
-
   private async dispatchViaPromptFile(
     request: CreateChatRequest
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup: () => Promise<void> }> {
     const promptsDirectory = getDefaultUserPromptsDirectory();
+    const promptAgentName = await this.resolvePromptFileAgentName(request.agentName);
     const artifact = buildPromptFileDispatchArtifact(
       request,
       promptsDirectory,
-      createPromptDispatchUniqueSuffix()
+      createPromptDispatchUniqueSuffix(),
+      promptAgentName
     );
 
     const cleanup = async (): Promise<void> => {
@@ -817,7 +790,8 @@ export class ChatInteropService implements ChatInteropApi {
       await fs.writeFile(artifact.filePath, artifact.content, "utf8");
       await this.traceCreateDebug("prompt-file.after-write", {
         filePath: artifact.filePath,
-        slashCommand: artifact.slashCommand
+        slashCommand: artifact.slashCommand,
+        promptAgentName
       });
       await delay(this.promptRegistrationDelayMs);
       const dispatched = await this.dispatchViaFocusedChatSubmit(
@@ -853,6 +827,47 @@ export class ChatInteropService implements ChatInteropApi {
       },
       cleanup
     };
+  }
+
+  private async resolvePromptFileAgentName(agentName: string | undefined): Promise<string | undefined> {
+    const normalized = agentName?.trim().replace(/^#+/, "");
+    if (!normalized) {
+      return undefined;
+    }
+
+    const workspaceAgentFile = await this.findWorkspaceAgentFile(normalized);
+    if (!workspaceAgentFile) {
+      return normalized;
+    }
+
+    let raw: string;
+    try {
+      raw = await fs.readFile(workspaceAgentFile, "utf8");
+    } catch {
+      return normalized;
+    }
+
+    const frontmatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u);
+    const nameLine = frontmatterMatch?.[1]
+      .split(/\r?\n/u)
+      .map((line) => line.match(/^name\s*:\s*(.+)\s*$/u))
+      .find((match): match is RegExpMatchArray => Boolean(match?.[1]));
+    const resolvedName = nameLine?.[1]?.trim().replace(/^['"]|['"]$/g, "");
+    return resolvedName || normalized;
+  }
+
+  private async findWorkspaceAgentFile(agentName: string): Promise<string | undefined> {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const candidate = path.join(folder.uri.fsPath, ".github", "agents", `${agentName}.agent.md`);
+      try {
+        await fs.access(candidate);
+        return candidate;
+      } catch {
+        // Continue searching remaining workspace folders.
+      }
+    }
+
+    return undefined;
   }
 
   private async dispatchToActiveChat(request: CreateChatRequest | SendChatMessageRequest, query: string): Promise<void> {

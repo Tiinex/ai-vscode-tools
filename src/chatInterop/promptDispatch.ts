@@ -17,7 +17,8 @@ export function shouldUsePromptFileDispatch(request: CreateChatRequest): boolean
 export function buildPromptFileDispatchArtifact(
   request: CreateChatRequest,
   promptsDirectory: string,
-  uniqueSuffix: string
+  uniqueSuffix: string,
+  promptAgentName?: string
 ): PromptFileDispatchArtifact {
   const agentName = normalizeAgentName(request.agentName);
   if (!agentName) {
@@ -33,7 +34,7 @@ export function buildPromptFileDispatchArtifact(
   return {
     filePath: path.join(promptsDirectory, `${slashCommand}.prompt.md`),
     slashCommand,
-    content: buildPromptFileContent(request.prompt, agentName)
+    content: buildPromptFileContent(request.prompt, promptAgentName ?? agentName)
   };
 }
 

@@ -15,7 +15,7 @@ export interface StabilizedCreateAndSendResult {
 }
 
 const SEED_SETTLEMENT_POLL_DELAY_MS = 1000;
-const DEFAULT_SEED_SETTLEMENT_TIMEOUT_MS = 90_000;
+const DEFAULT_SEED_SETTLEMENT_TIMEOUT_MS = 900_000;
 
 interface SeedSessionReadiness {
   session?: ChatSessionSummary;
@@ -83,14 +83,18 @@ export async function createStabilizedChatAndSend(
     };
   }
 
-  const resolvedModeId = request.mode?.trim() || await resolveWorkspaceAgentModeUri(request.agentName);
+  const resolvedWorkspaceAgent = await resolveWorkspaceAgentArtifact(request.agentName);
+  const resolvedModeId = request.mode?.trim() || resolvedWorkspaceAgent?.modeId;
   const patchedModeId = shouldPatchCustomMode(resolvedModeId)
     ? await appendModePatch(createResult.session, resolvedModeId)
     : undefined;
 
-  const patchedModelId = shouldPatchModel(createResult, request.modelSelector)
-    ? await appendModelPatch(createResult.session, request.modelSelector)
+  const effectiveModelSelector = request.modelSelector
+    ?? await resolveWorkspaceAgentModelSelector(resolvedWorkspaceAgent?.filePath);
+  const patchedModelId = shouldPatchModel(createResult, effectiveModelSelector)
+    ? await appendModelPatch(createResult.session, effectiveModelSelector)
     : undefined;
+  const exactSupport = await chatInterop.getExactSessionInteropSupport();
 
   const workflow = await sendMessageToSession(chatInterop, {
     sessionId: createResult.session.id,
@@ -100,7 +104,7 @@ export async function createStabilizedChatAndSend(
     // The follow-up send keeps mode/model unset and lets the established
     // agent-aware create/send path carry participant selection.
     mode: undefined,
-    modelSelector: undefined,
+    modelSelector: exactSupport.canSendExactSessionMessage ? undefined : effectiveModelSelector,
     partialQuery: false,
     blockOnResponse: request.blockOnResponse,
     requireSelectionEvidence: request.requireSelectionEvidence
@@ -240,7 +244,9 @@ function shouldPatchModel(
   return Boolean(modelSelector?.id) && createResult.selection?.model.status !== "verified";
 }
 
-async function resolveWorkspaceAgentModeUri(agentName: string | undefined): Promise<string | undefined> {
+async function resolveWorkspaceAgentArtifact(
+  agentName: string | undefined
+): Promise<{ filePath: string; modeId: string } | undefined> {
   const normalized = agentName?.trim().replace(/^#+/, "");
   if (!normalized) {
     return undefined;
@@ -251,11 +257,93 @@ async function resolveWorkspaceAgentModeUri(agentName: string | undefined): Prom
     // This is separate from the parked historical repo-owned agent pack in this checkout.
     const candidate = path.join(folder.uri.fsPath, ".github", "agents", `${normalized}.agent.md`);
     if (await fileExists(candidate)) {
-      return vscode.Uri.file(candidate).toString();
+      return {
+        filePath: candidate,
+        modeId: vscode.Uri.file(candidate).toString()
+      };
     }
   }
 
   return undefined;
+}
+
+async function resolveWorkspaceAgentModelSelector(agentFilePath: string | undefined): Promise<ChatModelSelector | undefined> {
+  if (!agentFilePath) {
+    return undefined;
+  }
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(agentFilePath, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  const frontmatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u);
+  if (!frontmatterMatch) {
+    return undefined;
+  }
+
+  const modelLine = frontmatterMatch[1]
+    .split(/\r?\n/u)
+    .map((line) => line.match(/^model\s*:\s*(.+)\s*$/u))
+    .find((match): match is RegExpMatchArray => Boolean(match?.[1]));
+  if (!modelLine) {
+    return undefined;
+  }
+
+  const parsed = parseAgentFrontmatterModelValue(modelLine[1]);
+  if (!parsed?.id) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+function parseAgentFrontmatterModelValue(rawValue: string): ChatModelSelector | undefined {
+  const cleanedValue = rawValue.trim().replace(/^['"]|['"]$/g, "");
+  if (!cleanedValue) {
+    return undefined;
+  }
+
+  const vendorMatch = cleanedValue.match(/^(.*?)\s*\(([^()]+)\)\s*$/u);
+  const rawId = vendorMatch ? vendorMatch[1].trim() : cleanedValue;
+  const normalizedId = normalizeAgentFrontmatterModelId(rawId);
+  if (!normalizedId) {
+    return undefined;
+  }
+
+  const vendor = vendorMatch
+    ? normalizeAgentFrontmatterModelToken(vendorMatch[2])
+    : undefined;
+  return {
+    id: normalizedId,
+    vendor
+  };
+}
+
+function normalizeAgentFrontmatterModelId(rawId: string): string | undefined {
+  const trimmed = rawId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.includes("/")) {
+    return trimmed.toLowerCase();
+  }
+
+  return normalizeAgentFrontmatterModelToken(trimmed);
+}
+
+function normalizeAgentFrontmatterModelToken(value: string): string | undefined {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/gu, "-")
+    .replace(/[^a-z0-9./-]+/gu, "")
+    .replace(/-+/gu, "-")
+    .replace(/^-|-$/gu, "");
+  return normalized || undefined;
 }
 
 async function appendModePatch(session: ChatSessionSummary, modeId: string): Promise<string | undefined> {

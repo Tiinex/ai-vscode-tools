@@ -5,7 +5,7 @@ import type { ChatFocusReport } from "./focusTargets";
 import type { ChatCommandResult, ChatInteropApi, SendChatMessageRequest } from "./types";
 import { appendUnsettledSessionDiagnostic } from "./unsettledDiagnostics";
 
-const TARGET_MUTATION_TIMEOUT_MS = 90_000;
+const TARGET_MUTATION_TIMEOUT_MS = 900_000;
 const TARGET_MUTATION_POLL_DELAY_MS = 250;
 const TARGET_MUTATION_POLL_ATTEMPTS = Math.ceil(TARGET_MUTATION_TIMEOUT_MS / TARGET_MUTATION_POLL_DELAY_MS);
 

@@ -343,8 +343,12 @@ export function buildSendChatSelectionBlocker(request: SendChatMessageRequest): 
 }
 
 export function buildFocusedChatSelectionBlocker(request: CreateChatRequest): string | undefined {
-  if (request.mode || request.modelSelector) {
-    return "Focused live chat send cannot currently prove or enforce mode/model selection on this surface; pre-select them in the UI first, or use createChat with explicit verification.";
+  if (request.mode) {
+    return "Focused live chat send cannot currently prove or enforce mode selection on this surface; pre-select it in the UI first, or use createChat with explicit verification.";
+  }
+
+  if (request.modelSelector && request.requireSelectionEvidence) {
+    return "Focused live chat send can preselect a model on this surface, but it cannot independently verify that the host kept that model through the final request. Remove requireSelectionEvidence or use another explicitly verifiable surface.";
   }
 
   if (request.requireSelectionEvidence && request.agentName?.trim()) {

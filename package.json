@@ -800,8 +800,8 @@
       {
         "name": "create_live_agent_chat",
         "displayName": "Create Live Agent Chat",
-        "userDescription": "Low-level new-chat create route. Prefer Send Message With Lifecycle when agent or model stability matters.",
-        "modelDescription": "Low-level Local create route. Opens a new chat and sends the first prompt. Use this when you specifically want raw create behavior. Prefer send_message_with_lifecycle when requested agent or model must survive host inheritance or when persisted follow-up evidence matters. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+        "userDescription": "Preferred clean new-chat route when the first visible message should carry the requested agent.",
+        "modelDescription": "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the first visible user request is dispatched through a temporary prompt-file slash command so the chat starts cleanly with the requested role. Prefer this for normal agent-chat creation. Use send_message_with_lifecycle only when startup state must first be stabilized or patched before the real prompt. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "create-live-agent-chat",
         "inputSchema": {
@@ -813,7 +813,7 @@
             },
             "agentName": {
               "type": "string",
-              "description": "Optional custom agent selector to prefix as #agentName in the dispatched prompt."
+              "description": "Optional custom agent name for the first message in a new chat. When supplied, the first visible request is currently dispatched through a temporary prompt-file slash command. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
             },
             "mode": {
               "type": "string",
@@ -838,6 +838,50 @@
             "requireSelectionEvidence": {
               "type": "boolean",
               "description": "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
+            }
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      {
+        "name": "send_message_with_lifecycle",
+        "displayName": "Send Message With Lifecycle",
+        "userDescription": "Escalation create route when startup state must be stabilized before the real prompt.",
+        "modelDescription": "Stabilized Local create route. Seeds a new chat, patches persisted mode or model when needed, and then continues through the normal Local follow-up path. Use this only when startup state must be stabilized before the real prompt; it is not the normal clean observer-facing create path. For ordinary new agent chats, prefer create_live_agent_chat so the first visible message can start directly with the requested role. This tool still depends on the same Local follow-up surface and cannot bypass host limits such as missing ordinary Local exact-session send.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "send-message-with-lifecycle",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prompt": {
+              "type": "string",
+              "description": "The real prompt to send after the lifecycle has stabilized the target chat."
+            },
+            "agentName": {
+              "type": "string",
+              "description": "Optional requested custom agent name. The lifecycle will resolve a workspace agent file when possible and patch persisted mode before the real prompt is sent."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Optional explicit mode id to patch into persisted session state before the real prompt is sent."
+            },
+            "modelId": {
+              "type": "string",
+              "description": "Optional model identifier to request during create and patch from persisted metadata if the create path falls back."
+            },
+            "modelVendor": {
+              "type": "string",
+              "description": "Optional model vendor for the requested model selector."
+            },
+            "blockOnResponse": {
+              "type": "boolean",
+              "description": "Block until the real follow-up response is produced when supported by the underlying lifecycle path."
+            },
+            "requireSelectionEvidence": {
+              "type": "boolean",
+              "description": "Fail if the final lifecycle result cannot explicitly evidence the requested selection."
             }
           },
           "required": [
@@ -889,7 +933,7 @@
         "name": "send_message_to_live_agent_chat",
         "displayName": "Send Message To Live Agent Chat",
         "userDescription": "Advanced exact-session continuation for an existing live chat.",
-        "modelDescription": "Advanced exact-session continuation by session id. Use this only when you already have the target session and need to probe exact-session behavior. On builds where ordinary Local exact send is unsupported, this tool may still fall back to reveal plus focused submit and therefore remains subject to host limits.",
+        "modelDescription": "Advanced exact-session continuation by session id. Use this when you already have the target session and want to continue the same chat. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused fallback surfaces may then use temporary prompt-file slash dispatch. On builds where ordinary Local exact send is unsupported, this tool may still fall back to reveal plus focused submit and therefore remains subject to host limits.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "send-message-live-agent-chat",
         "inputSchema": {
@@ -905,7 +949,7 @@
             },
             "agentName": {
               "type": "string",
-              "description": "Optional custom agent selector to prefix as #agentName in the dispatched prompt."
+              "description": "Optional custom agent name for an intentional role rebind on the continued request. Omit this for ordinary follow-ups in an already-correct chat. On focused fallback surfaces a supplied agentName may route through temporary prompt-file slash dispatch rather than a literal #agentName prefix."
             },
             "mode": {
               "type": "string",
@@ -946,7 +990,7 @@
         "name": "send_message_to_focused_live_chat",
         "displayName": "Send Message To Focused Live Chat",
         "userDescription": "Send a prompt through the currently focused live chat input.",
-        "modelDescription": "Send a prompt through the currently focused live chat input using focusInput plus chat.submit when this build exposes those commands. Use this only when the intended Local chat is already visible and focused, because it is a best-effort focused-thread transport rather than an exact session-targeted API. This tool affects the VS Code UI and rejects concurrent live-chat operations. A heuristic self-targeting guard blocks use when the current invoking conversation appears to be the focused thread.",
+        "modelDescription": "Send a prompt through the currently focused live chat input using focusInput plus chat.submit when this build exposes those commands. Use this only when the intended Local chat is already visible and focused, because it is a best-effort focused-thread transport rather than an exact session-targeted API. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays visually clean. Supply agentName only for deliberate role rebinding, which may use temporary prompt-file slash dispatch on this surface. This tool affects the VS Code UI and rejects concurrent live-chat operations. A heuristic self-targeting guard blocks use when the current invoking conversation appears to be the focused thread.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "send-message-focused-live-chat",
         "inputSchema": {
@@ -958,7 +1002,7 @@
             },
             "agentName": {
               "type": "string",
-              "description": "Optional custom agent selector to prefix as #agentName in the dispatched prompt."
+              "description": "Optional custom agent name for a deliberate role rebind on this focused-send surface. Omit it for ordinary follow-ups in an already-correct chat. When supplied, custom-agent dispatch currently uses a temporary prompt-file slash command rather than a literal #agentName prefix."
             },
             "mode": {
               "type": "string",
@@ -975,6 +1019,58 @@
             "partialQuery": {
               "type": "boolean",
               "description": "Reserved for compatibility; focused live send uses a partial prefill before submit on this build."
+            },
+            "blockOnResponse": {
+              "type": "boolean",
+              "description": "Reserved for compatibility with other live chat mutation tools."
+            },
+            "requireSelectionEvidence": {
+              "type": "boolean",
+              "description": "Fail if the requested agent selection cannot be explicitly evidenced after dispatch."
+            }
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      {
+        "name": "send_message_to_focused_editor_chat",
+        "displayName": "Send Message To Focused Editor Chat",
+        "userDescription": "Steer focus to the active editor chat and send a prompt there.",
+        "modelDescription": "Steer focus to the active editor group, or to a visible editor-hosted chat tab matching an optional live session id, verify that the resulting active tab still looks like an editor-hosted Local chat, and then dispatch a prompt through the focused chat input. Use this when a side-panel chat currently has focus but the intended Local target is already open in an editor tab. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays visually clean. Supply agentName only for deliberate role rebinding, which may use temporary prompt-file slash dispatch on this surface. This tool affects the VS Code UI and remains best-effort until the touched session is verified from persisted artifacts. A heuristic self-targeting guard blocks ambiguous sends and prefers an explicit sessionId.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "send-message-focused-editor-chat",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Optional exact or prefix session identifier for the visible editor-hosted live chat to focus before submit. When omitted, the active editor-group candidate is used."
+            },
+            "prompt": {
+              "type": "string",
+              "description": "The prompt to send through the focused editor-hosted live chat."
+            },
+            "agentName": {
+              "type": "string",
+              "description": "Optional custom agent name for a deliberate role rebind on this focused editor-send surface. Omit it for ordinary follow-ups in an already-correct chat. When supplied, custom-agent dispatch currently uses a temporary prompt-file slash command rather than a literal #agentName prefix."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Optional chat mode override. Focused editor send cannot reliably apply or prove this on the current build."
+            },
+            "modelId": {
+              "type": "string",
+              "description": "Optional model identifier. Focused editor send cannot reliably apply or prove this on the current build."
+            },
+            "modelVendor": {
+              "type": "string",
+              "description": "Optional model vendor for the requested model selector."
+            },
+            "partialQuery": {
+              "type": "boolean",
+              "description": "Reserved for compatibility; focused editor send uses a partial prefill before submit on this build."
             },
             "blockOnResponse": {
               "type": "boolean",
