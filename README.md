@@ -56,7 +56,6 @@ Core commands:
 - `Tiinex: Close Visible Local Chat Tabs`
 - `Tiinex: Delete Local Chat Artifacts`
 - `Tiinex: Schedule Offline Local Chat Cleanup`
-- `Tiinex: Create Disposable Local Delete Probe`
 - `Tiinex: Create Local Chat`
 - `Tiinex: Send Message To Local Chat`
 - `Tiinex: Send Message To Focused Local Chat`
@@ -203,14 +202,6 @@ Each platform lane below is tracked as a checklist.
 		- [x] Manual Test: host-level inspection flow is revalidated against the current Windows surface.
 		- [x] Skill: role-facing guidance exists for persisted session inspection.
 		- [x] Skill Test: persisted session inspection guidance has been validated against current behavior.
-
-- Disposable local delete probes
-	- Windows
-		- [x] Use Case: disposable probe creation goes through the extension-hosted path instead of a shell fallback.
-		- [x] Unit Test: `disposable-delete-probe` passes.
-		- [x] Manual Test: host validation confirmed disposable probe creation through the extension-hosted path instead of a shell fallback.
-		- [x] Skill: role-facing guidance exists for disposable local delete probes.
-		- [ ] Skill Test: disposable local delete probe guidance has been validated against current behavior.
 
 - Exact local chat delete targeting
 	- Windows

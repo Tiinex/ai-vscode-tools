@@ -176,22 +176,6 @@ interface LiveChatMutationInput {
   requireSelectionEvidence?: boolean;
 }
 
-interface CreateDisposableLocalDeleteProbeInput {
-  prompt?: string;
-  anchor?: string;
-  partialQuery?: boolean;
-  blockOnResponse?: boolean;
-  requireSelectionEvidence?: boolean;
-}
-
-interface DisposableDeleteProbeCommandResult {
-  anchor: string;
-  prompt: string;
-  result: ChatCommandResult;
-}
-
-interface StabilizedLiveChatMutationInput extends LiveChatMutationInput {}
-
 interface FocusedLiveChatMutationInput extends LiveChatMutationInput {}
 
 interface FocusedEditorChatMutationInput extends LiveChatMutationInput {
@@ -235,7 +219,7 @@ const sessionSelectionProperties = {
   },
   sessionId: {
     type: "string",
-    description: "Exact or prefix session identifier. If omitted, the latest session is used unless sessionFile is provided."
+    description: "Exact or prefix session identifier."
   },
   sessionFile: {
     type: "string",
@@ -628,38 +612,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
-    name: "create_disposable_local_delete_probe",
-    displayName: "Create Disposable Local Delete Probe",
-    userDescription: "Create a disposable Local probe chat for destructive delete verification.",
-    modelDescription: "Create a disposable Local probe chat specifically for destructive delete verification. This is a thin convenience wrapper around neutral Local chat creation: it generates or carries a unique anchor, uses the extension-hosted create path, and returns structured probe details so the target can be verified in persisted state before any destructive cleanup step. Prefer this over shell-side bootstrap helpers when you need a disposable test chat rather than a general new Local chat. Do not treat it as a custom-agent or custom-mode create surface.",
-    toolReferenceName: "create-disposable-local-delete-probe",
-    inputSchema: {
-      type: "object",
-      properties: {
-        anchor: {
-          type: "string",
-          description: "Optional explicit anchor to embed in the disposable probe prompt. If omitted, a unique delete-probe anchor is generated."
-        },
-        prompt: {
-          type: "string",
-          description: "Optional probe prompt body. If omitted, the default READY probe prompt is used and prefixed with the anchor."
-        },
-        partialQuery: {
-          type: "boolean",
-          description: "Open the probe with a partial query instead of dispatching a full request when supported."
-        },
-        blockOnResponse: {
-          type: "boolean",
-          description: "Block until the probe response is produced when supported by the underlying chat command."
-        },
-        requireSelectionEvidence: {
-          type: "boolean",
-          description: "Fail if the final probe creation result cannot be explicitly evidenced after dispatch."
-        }
-      }
-    }
-  },
-  {
     name: "close_visible_live_chat_tabs",
     displayName: "Close Visible Live Chat Tabs",
     userDescription: "Close visible editor-hosted live chat tabs for one exact session.",
@@ -1002,17 +954,6 @@ function toCreateChatRequest(input: LiveChatMutationInput): CreateChatRequest {
   };
 }
 
-function toDisposableDeleteProbeCommandRequest(input: CreateDisposableLocalDeleteProbeInput): Record<string, unknown> {
-  return {
-    anchor: input.anchor,
-    prompt: input.prompt,
-    partialQuery: input.partialQuery,
-    blockOnResponse: input.blockOnResponse,
-    requireSelectionEvidence: input.requireSelectionEvidence,
-    showNotification: false
-  };
-}
-
 function toSendChatMessageRequest(input: SendLiveChatMessageInput): SendChatMessageRequest {
   return {
     sessionId: input.sessionId,
@@ -1080,19 +1021,6 @@ function formatChatMutationResult(
   }
 
   return lines.join("\n");
-}
-
-function formatDisposableDeleteProbeResult(output: DisposableDeleteProbeCommandResult): string {
-  return formatChatMutationResult(
-    "Disposable Local Delete Probe Created",
-    output.result.session,
-    output.result.selection,
-    output.result.revealLifecycle,
-    [
-      `Probe Anchor: ${output.anchor}`,
-      `Probe Prompt: ${JSON.stringify(output.prompt)}`
-    ]
-  );
 }
 
 function formatArtifactDeletionNotes(report: ChatCommandResult["artifactDeletion"]): string[] {
@@ -1392,22 +1320,6 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           new LiveChatTool<ListLiveChatsInput>(
             () => "Listing live agent chat sessions",
             async (input) => renderLiveChatList(await chatInterop.listChats(), input.limit ?? 20)
-          )
-        ),
-        vscode.lm.registerTool(
-          "create_disposable_local_delete_probe",
-          new LiveChatTool<CreateDisposableLocalDeleteProbeInput>(
-            () => "Creating a disposable Local delete probe",
-            async (input) => {
-              const output = await vscode.commands.executeCommand(
-                "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
-                toDisposableDeleteProbeCommandRequest(input)
-              ) as DisposableDeleteProbeCommandResult | undefined;
-              if (!output || !output.result.ok) {
-                throw new Error(output?.result.reason ?? output?.result.error ?? "Failed to create disposable Local delete probe.");
-              }
-              return formatDisposableDeleteProbeResult(output);
-            }
           )
         ),
         vscode.lm.registerTool(

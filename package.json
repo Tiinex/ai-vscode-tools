@@ -30,7 +30,6 @@
     "onLanguageModelTool:get_agent_session_profile",
     "onLanguageModelTool:survey_agent_sessions",
     "onLanguageModelTool:list_live_agent_chats",
-    "onLanguageModelTool:create_disposable_local_delete_probe",
     "onLanguageModelTool:create_live_agent_chat",
     "onLanguageModelTool:close_visible_live_chat_tabs",
     "onLanguageModelTool:delete_live_agent_chat_artifacts",
@@ -110,10 +109,6 @@
         "title": "Tiinex: Delete Local Chat Artifacts"
       },
       {
-        "command": "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
-        "title": "Tiinex: Create Disposable Local Delete Probe"
-      },
-      {
         "command": "tiinex.aiVscodeTools.createLiveChat",
         "title": "Tiinex: Create Local Chat"
       },
@@ -168,11 +163,6 @@
       "view/title": [
         {
           "command": "tiinex.aiVscodeTools.refreshSessions",
-          "when": "view == tiinex.aiVscodeTools.sessions",
-          "group": "navigation"
-        },
-        {
-          "command": "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
           "when": "view == tiinex.aiVscodeTools.sessions",
           "group": "navigation"
         },
@@ -744,55 +734,6 @@
             "limit": {
               "type": "number",
               "description": "Maximum number of live chats to include."
-            }
-          }
-        }
-      },
-      {
-        "name": "create_disposable_local_delete_probe",
-        "displayName": "Create Disposable Local Delete Probe",
-        "userDescription": "Create a disposable Local probe chat for destructive delete verification.",
-        "modelDescription": "Create a disposable Local probe chat specifically for destructive delete verification. This route generates or carries a unique anchor, uses the extension-hosted create path, and returns structured probe details so the target can be verified in persisted state before any destructive cleanup step. Prefer this over shell-side bootstrap helpers when you need a disposable test chat rather than a general new Local chat.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "create-disposable-local-delete-probe",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "anchor": {
-              "type": "string",
-              "description": "Optional explicit anchor to embed in the disposable probe prompt. If omitted, a unique delete-probe anchor is generated."
-            },
-            "prompt": {
-              "type": "string",
-              "description": "Optional probe prompt body. If omitted, the default READY probe prompt is used and prefixed with the anchor."
-            },
-            "agentName": {
-              "type": "string",
-              "description": "Optional custom agent selector to prefix as #agentName in the dispatched probe prompt."
-            },
-            "mode": {
-              "type": "string",
-              "description": "Optional chat mode, for example Agent."
-            },
-            "modelId": {
-              "type": "string",
-              "description": "Optional model identifier to select for the disposable probe chat."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Optional model vendor for the probe model selector."
-            },
-            "partialQuery": {
-              "type": "boolean",
-              "description": "Open the probe with a partial query instead of dispatching a full request when supported."
-            },
-            "blockOnResponse": {
-              "type": "boolean",
-              "description": "Block until the probe response is produced when supported by the underlying chat command."
-            },
-            "requireSelectionEvidence": {
-              "type": "boolean",
-              "description": "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
             }
           }
         }

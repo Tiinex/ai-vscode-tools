@@ -1,34 +1,27 @@
 ---
 name: local-chat-delete-workflows
-description: 'Guidance for disposable local delete probes and exact local chat delete targeting in VS Code Local chat workflows. Exact delete now includes queuing exact offline cleanup for the same target.'
+description: 'Guidance for exact local chat delete targeting in VS Code Local chat workflows. Exact delete now includes queuing exact offline cleanup for the same target.'
 user-invocable: false
 ---
 
 # Local Chat Delete Workflows
 
 ## When to Use
-- Use this skill when a Local chat cleanup task involves a disposable probe chat or exact local chat deletion.
+- Use this skill when a Local chat cleanup task involves exact local chat deletion.
 - Use it when a chat should be deleted safely without touching the current working chat or any long-lived development thread.
 - Use it when a ghost chat or stale UI row needs to be traced back to exact persisted artifacts instead of handled with broad guesses.
 
 ## Safety Rules
 - Treat the current working chat, Co-Designer chats, and any long-lived development chat as non-disposable unless they were explicitly created as a disposable test target.
 - For destructive delete, require the full exact session id. Do not use prefix ids for deletion.
-- If target classification is unclear, create a fresh disposable probe instead of reusing an existing chat.
-- Prefer the exact delete surface for disposable probes that can be safely targeted now. That delete path already closes visible tabs, deletes persisted artifacts, and queues exact offline cleanup for the same target.
+- If target classification is unclear, stop and resolve the target through exact persisted inspection or a separate approved test plan instead of improvising a new create-like tool.
+- Prefer the exact delete surface for disposable targets that can be safely targeted now. That delete path already closes visible tabs, deletes persisted artifacts, and queues exact offline cleanup for the same target.
 - If delete reports title-only tab matches, stop and keep targeting exact session resources. Do not widen the target set.
 
 ## Preferred Order
-1. Create a disposable probe through `create_disposable_local_delete_probe` when a safe disposable target does not already exist.
-2. Confirm the exact target session id through `list_live_agent_chats` before destructive cleanup.
-3. Delete the exact disposable target through `delete_live_agent_chat_artifacts` when the live path is safely available.
-4. Use `close_visible_live_chat_tabs` for non-destructive tab cleanup when the goal is only to clear visible editor state.
-
-## Disposable Probe Procedure
-1. Create a new disposable probe with `create_disposable_local_delete_probe`.
-2. Record the returned exact session id.
-3. Use that returned exact session id as the only destructive target for the cleanup step.
-4. Delete the probe promptly after the validation step is complete.
+1. Confirm the exact target session id through `list_live_agent_chats` or bounded persisted inspection before destructive cleanup.
+2. Delete the exact disposable target through `delete_live_agent_chat_artifacts` when the live path is safely available.
+3. Use `close_visible_live_chat_tabs` for non-destructive tab cleanup when the goal is only to clear visible editor state.
 
 ## Exact Live Delete Procedure
 1. Run `list_live_agent_chats` and identify the exact disposable target session id.
@@ -44,7 +37,6 @@ user-invocable: false
 - When the exact prune path removes the leftover artifact and the row disappears immediately, treat the issue as persisted state residue rather than a broad UI-cache problem.
 
 ## Tool Notes
-- `create_disposable_local_delete_probe` is the preferred creation surface for disposable Local delete probes.
 - `delete_live_agent_chat_artifacts` is destructive, requires an exact session id, and now also queues exact offline cleanup for the same target.
 - `close_visible_live_chat_tabs` may accept an exact or prefix id, but that flexibility does not carry over to destructive delete.
 - `reveal_live_agent_chat` is for reopening or inspecting a known target, not for guessing which chat is safe to delete.

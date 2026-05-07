@@ -24,7 +24,6 @@ import {
   readAndDeleteOfflineLocalChatCleanupReports,
   type OfflineLocalChatCleanupSummary
 } from "./offlineLocalChatCleanup";
-import { buildDisposableDeleteProbeSpec, type DisposableDeleteProbeSpec } from "./disposableDeleteProbe";
 import { loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
 import { closeVisibleEditorChatTabsForSession } from "./chatInterop/editorTabLifecycle";
@@ -41,22 +40,6 @@ interface ExtensionError extends Error {
 }
 
 type DiscoveryScope = "current-workspace" | "all-local";
-
-interface DisposableDeleteProbeCommandRequest {
-  anchor?: string;
-  prompt?: string;
-  partialQuery?: boolean;
-  blockOnResponse?: boolean;
-  requireSelectionEvidence?: boolean;
-  waitForPersisted?: boolean;
-  showNotification?: boolean;
-}
-
-interface DisposableDeleteProbeCommandResult {
-  anchor: string;
-  prompt: string;
-  result: ChatCommandResult;
-}
 
 async function openMarkdownDocument(content: string): Promise<void> {
   const document = await vscode.workspace.openTextDocument({
@@ -417,30 +400,6 @@ function renderChatListMarkdown(chats: ChatSessionSummary[]): string {
   return `${lines.join("\n")}\n`;
 }
 
-async function createDisposableDeleteProbe(
-  chatInterop: ChatInteropApi,
-  request?: DisposableDeleteProbeCommandRequest
-): Promise<DisposableDeleteProbeCommandResult> {
-  const probe = buildDisposableDeleteProbeSpec(request);
-  const result = await runWithProgress("Creating disposable Local delete probe", () => chatInterop.createChat({
-    prompt: probe.prompt,
-    agentName: undefined,
-    mode: undefined,
-    modelSelector: undefined,
-    partialQuery: request?.partialQuery,
-    blockOnResponse: request?.blockOnResponse ?? false,
-    requireSelectionEvidence: request?.requireSelectionEvidence ?? false,
-    allowUnsafeCreateWithoutAgent: true,
-    waitForPersisted: request?.waitForPersisted
-  }));
-
-  return {
-    anchor: probe.anchor,
-    prompt: probe.prompt,
-    result
-  };
-}
-
 async function promptForChatPrompt(title: string, value = ""): Promise<string | undefined> {
   const prompt = await vscode.window.showInputBox({
     title,
@@ -665,35 +624,6 @@ function registerCommands(
 
   if (LOCAL_CHAT_MUTATION_SURFACES_ENABLED) {
     context.subscriptions.push(
-      vscode.commands.registerCommand("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe", async (request?: DisposableDeleteProbeCommandRequest) => {
-        const showNotification = request?.showNotification ?? true;
-        try {
-          const output = await createDisposableDeleteProbe(chatInterop, request);
-          if (showNotification) {
-            const message = output.result.ok
-              ? `${commandResultMessage(output.result, "Created disposable Local delete probe")} | anchor=${output.anchor}`
-              : `${commandResultMessage(output.result, "Unable to create disposable Local delete probe")} | anchor=${output.anchor}`;
-            if (output.result.ok) {
-              void vscode.window.showInformationMessage(message);
-            } else {
-              void vscode.window.showErrorMessage(message);
-            }
-          }
-          return output;
-        } catch (error) {
-          if (showNotification) {
-            await reportCommandError(error);
-          }
-          return {
-            anchor: request?.anchor?.trim() ?? "",
-            prompt: request?.prompt?.trim() ?? "",
-            result: {
-              ok: false,
-              error: errorMessage(error)
-            }
-          } satisfies DisposableDeleteProbeCommandResult;
-        }
-      }),
       vscode.commands.registerCommand("tiinex.aiVscodeTools.createLiveChat", async () => {
         const prompt = await promptForChatPrompt("Create Local Chat");
         if (!prompt) {

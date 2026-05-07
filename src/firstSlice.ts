@@ -29,7 +29,6 @@ const LOCAL_CHAT_CONTROL_COMMANDS = new Set([
 ]);
 
 const LOCAL_CHAT_MUTATION_COMMANDS = new Set([
-  "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
   "tiinex.aiVscodeTools.createLiveChat",
   "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
   "tiinex.aiVscodeTools.sendMessageToLiveChat",

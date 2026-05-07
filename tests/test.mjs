@@ -34,7 +34,6 @@ const distChatInteropService = path.join(packageRoot, "dist", "chatInterop", "se
 const distChatInteropStorage = path.join(packageRoot, "dist", "chatInterop", "storage.js");
 const distChatInteropSessionSendWorkflow = path.join(packageRoot, "dist", "chatInterop", "sessionSendWorkflow.js");
 const distOfflineLocalChatCleanup = path.join(packageRoot, "dist", "offlineLocalChatCleanup.js");
-const distDisposableDeleteProbe = path.join(packageRoot, "dist", "disposableDeleteProbe.js");
 const distFirstSlice = path.join(packageRoot, "dist", "firstSlice.js");
 const distExtension = path.join(packageRoot, "dist", "extension.js");
 const distCopilotCliSummary = path.join(packageRoot, "dist", "chatInterop", "copilotCliSummary.js");
@@ -73,7 +72,6 @@ const expectedLanguageModelToolNames = [
   "get_agent_session_profile",
   "survey_agent_sessions",
   "list_live_agent_chats",
-  "create_disposable_local_delete_probe",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",
@@ -99,7 +97,6 @@ const expectedExtensionCommandNames = [
   "tiinex.aiVscodeTools.revealLiveChat",
   "tiinex.aiVscodeTools.closeVisibleLiveChatTabs",
   "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
-  "tiinex.aiVscodeTools.createDisposableLocalDeleteProbe",
   "tiinex.aiVscodeTools.createLiveChat",
   "tiinex.aiVscodeTools.sendMessageToLiveChat",
   "tiinex.aiVscodeTools.sendMessageToFocusedLiveChat"
@@ -2882,40 +2879,6 @@ async function runOfflineLocalChatCleanupChecks() {
   await fs.rm(queuedPrefixSiblingWorkspaceStorageDir, { recursive: true, force: true });
 }
 
-async function runDisposableDeleteProbeChecks() {
-  const disposableDeleteProbeModule = await import(pathToFileURL(distDisposableDeleteProbe).href);
-  const fixedNow = new Date(2026, 4, 6, 7, 8, 9);
-
-  const generated = disposableDeleteProbeModule.buildDisposableDeleteProbeSpec(undefined, fixedNow);
-  assert(
-    generated.anchor === "AA_DELETE_PROBE_2026_05_06_07_08_09",
-    `Disposable delete probe helper did not generate the expected timestamp anchor. Got: ${generated.anchor}`
-  );
-  assert(
-    generated.prompt === "AA_DELETE_PROBE_2026_05_06_07_08_09 Please answer with the single word READY.",
-    `Disposable delete probe helper did not prefix the default prompt with the generated anchor. Got: ${generated.prompt}`
-  );
-
-  const explicit = disposableDeleteProbeModule.buildDisposableDeleteProbeSpec({
-    anchor: "  CUSTOM_ANCHOR  ",
-    prompt: "  Please say READY now.  "
-  }, fixedNow);
-  assert(explicit.anchor === "CUSTOM_ANCHOR", `Disposable delete probe helper did not trim the explicit anchor. Got: ${explicit.anchor}`);
-  assert(
-    explicit.prompt === "CUSTOM_ANCHOR Please say READY now.",
-    `Disposable delete probe helper did not prefix the trimmed explicit prompt with the explicit anchor. Got: ${explicit.prompt}`
-  );
-
-  const preAnchored = disposableDeleteProbeModule.buildDisposableDeleteProbeSpec({
-    anchor: "READY_PROBE",
-    prompt: "READY_PROBE Please answer with the single word READY."
-  }, fixedNow);
-  assert(
-    preAnchored.prompt === "READY_PROBE Please answer with the single word READY.",
-    `Disposable delete probe helper duplicated an anchor that was already present in the prompt. Got: ${preAnchored.prompt}`
-  );
-}
-
 async function runSessionSendWorkflowChecks() {
   const { createRequire } = await import('module');
   const require = createRequire(import.meta.url);
@@ -5131,7 +5094,7 @@ async function runManifestChecks() {
 
   const viewTitleCommands = viewTitleMenu.map((item) => item.command);
   const viewItemCommands = viewItemContextMenu.map((item) => item.command);
-  assert(viewTitleCommands.includes("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe"), "package.json view/title menu must expose Create Disposable Local Delete Probe.");
+  assert(!viewTitleCommands.includes("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe"), "package.json view/title menu must not expose Create Disposable Local Delete Probe.");
   assert(viewTitleCommands.includes("tiinex.aiVscodeTools.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
   assert(viewTitleCommands.includes("tiinex.aiVscodeTools.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
   assert(viewItemCommands.includes("tiinex.aiVscodeTools.revealLiveChat"), "package.json session context menu must expose Reveal Local Chat.");
@@ -5167,8 +5130,8 @@ async function runRoutingGuardChecks() {
     "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
   );
   assert(
-    languageModelToolsSource.includes("result.realPromptDispatchAttempted !== true"),
-    "Language-model stabilized recovery must refuse seed-only completion recovery when the real prompt was never dispatched."
+    !languageModelToolsSource.includes("create_disposable_local_delete_probe"),
+    "Language-model tooling must not keep the removed disposable delete probe surface."
   );
   assert(
     languageModelToolsSource.includes("Prefer snapshot, index, window, profile, transcript, or export surfaces over opening raw session files"),
@@ -5176,7 +5139,7 @@ async function runRoutingGuardChecks() {
   );
   await assertMissing(
     disposableProbeFallbackScriptPath,
-    "Disposable local delete probe PowerShell fallback must stay removed once extension-hosted probe creation is available."
+    "Disposable local delete probe PowerShell fallback must stay removed after the public probe tooling was removed."
   );
   assert(
     !toolsInstructions.includes("create-disposable-local-chat-probe.ps1"),
@@ -5185,7 +5148,6 @@ async function runRoutingGuardChecks() {
 
   for (const toolName of [
     "list_live_agent_chats",
-    "create_disposable_local_delete_probe",
     "create_live_agent_chat",
     "close_visible_live_chat_tabs",
     "delete_live_agent_chat_artifacts",
@@ -5474,7 +5436,6 @@ async function cleanupWorkspaceTempArtifacts() {
 const namedChecks = [
   ["cli", runCliChecks],
   ["mcp", runMcpChecks],
-  ["disposable-delete-probe", runDisposableDeleteProbeChecks],
   ["chat-interop-capabilities", runChatInteropCapabilityChecks],
   ["chat-focus-targets", runChatFocusTargetChecks],
   ["editor-focus-commands", runEditorFocusCommandChecks],
