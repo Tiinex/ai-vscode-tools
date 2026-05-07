@@ -420,10 +420,13 @@ function extractMetadata(fullState: any | undefined, requestRows: any[], deltaSt
   );
 
   const hasPendingEdits = deltaState.hasPendingEdits ?? coerceBoolean(fullState?.hasPendingEdits);
-  const pendingRequestCount = getPendingRequestCount(deltaState.pendingRequests)
-    ?? getPendingRequestCount(fullState?.pendingRequests)
-    ?? requestCandidates.filter((request) => isRequestCompleted(request) === false).length;
   const lastRequestCompleted = lastRequest ? isRequestCompleted(lastRequest) : undefined;
+  const derivedPendingRequestCount = requestCandidates.filter((request) => isRequestCompleted(request) === false).length;
+  const explicitPendingRequestCount = getPendingRequestCount(deltaState.pendingRequests)
+    ?? getPendingRequestCount(fullState?.pendingRequests);
+  const pendingRequestCount = explicitPendingRequestCount === undefined
+    ? derivedPendingRequestCount
+    : Math.max(explicitPendingRequestCount, derivedPendingRequestCount);
 
   return {
     title,

@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import { registerChatInterop } from "./chatInterop";
 import type { ChatCommandResult, ChatInteropApi, ChatSessionSummary, CreateChatRequest } from "./chatInterop";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
-import { getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
+import { getExactDeleteSelfTargetingReason, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
 import { SessionToolsAdapter, type SessionDescriptor } from "./coreAdapter";
 import {
   FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED,
@@ -598,7 +598,7 @@ function registerCommands(
           return;
         }
         await runCommand(async () => {
-          const selfTargetReason = getExactSelfTargetingReason(await chatInterop.listChats(), resolved.sessionId, "delete-artifacts");
+          const selfTargetReason = await getExactDeleteSelfTargetingReason(await chatInterop.listChats(), resolved.sessionId);
           if (selfTargetReason) {
             throw new Error(selfTargetReason);
           }

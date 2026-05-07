@@ -17,6 +17,7 @@ interface WorkspaceSessionIndexPayload {
 }
 
 const CHAT_SESSION_INDEX_KEY = "chat.ChatSessionStore.index";
+const CHAT_TERMINAL_SESSIONS_KEY = "chat.terminalSessions";
 const AGENT_SESSIONS_MODEL_CACHE_KEY = "agentSessions.model.cache";
 const AGENT_SESSIONS_STATE_CACHE_KEY = "agentSessions.state.cache";
 const CHAT_TODO_LIST_KEY = "memento/chat-todo-list";
@@ -84,6 +85,50 @@ export async function loadWorkspaceSessionIndex(workspaceStorageDir: string): Pr
     }
   } catch {
     return undefined;
+  }
+}
+
+export async function loadWorkspaceTerminalBoundChatSessionIds(workspaceStorageDir: string): Promise<string[] | undefined> {
+  const dbPath = path.join(workspaceStorageDir, "state.vscdb");
+  try {
+    const bytes = await fs.readFile(dbPath);
+    const SQL = await getSqlJs();
+    const db: SqlDatabaseLike = new SQL.Database(bytes);
+    try {
+      return parseWorkspaceTerminalBoundChatSessionIds(readItemTableTextValue(db, CHAT_TERMINAL_SESSIONS_KEY));
+    } finally {
+      db.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseWorkspaceTerminalBoundChatSessionIds(raw: string | undefined): string[] {
+  if (typeof raw !== "string" || !raw.trim()) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    const entries = Array.isArray(parsed)
+      ? parsed
+      : parsed && typeof parsed === "object"
+        ? Object.values(parsed as Record<string, unknown>)
+        : [];
+
+    const sessionIds = entries.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+
+      const sessionId = (entry as { sessionId?: unknown }).sessionId;
+      return typeof sessionId === "string" && sessionId.trim() ? [sessionId.trim()] : [];
+    });
+
+    return [...new Set(sessionIds)];
+  } catch {
+    return [];
   }
 }
 

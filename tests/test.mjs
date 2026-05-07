@@ -2375,6 +2375,38 @@ ${JSON.stringify({
   assert(stalePendingSession.pendingRequestCount === 0, `Storage delta test did not prefer full-state pendingRequests for stale pending sessions. Got: ${stalePendingSession.pendingRequestCount}`);
   assert(stalePendingSession.lastRequestCompleted === true, 'Storage delta test did not preserve lastRequestCompleted for stale pending full-state sessions.');
 
+    const pendingSessionFile = path.join(chatSessionsDir, 'session-pending.jsonl');
+    await fs.writeFile(pendingSessionFile, `${JSON.stringify({
+    kind: 0,
+    v: {
+      version: 3,
+      sessionId: 'session-pending',
+      customTitle: 'Pending Latest Request',
+      pendingRequests: [],
+      requests: [],
+      inputState: {}
+    }
+  })}
+${JSON.stringify({
+    kind: 2,
+    k: ['requests'],
+    v: [
+      {
+        requestId: 'request-pending',
+        timestamp: 1775930004000,
+        message: { text: 'still running' },
+        response: [{ value: 'partial response text' }],
+        modelState: { value: 0 }
+      }
+    ]
+  })}
+`, 'utf8');
+
+    const pendingLatestSession = (await storage.listSessions()).find((item) => item.id === 'session-pending');
+  assert(pendingLatestSession, 'Storage delta test did not discover the pending latest-request session.');
+  assert(pendingLatestSession.pendingRequestCount === 1, `Storage delta test did not infer a pending request from an unsettled latest request. Got: ${pendingLatestSession.pendingRequestCount}`);
+  assert(pendingLatestSession.lastRequestCompleted === false, 'Storage delta test incorrectly marked a latest request with modelState.value=0 as completed.');
+
     const deleteTargetSessionFile = path.join(chatSessionsDir, 'session-3.jsonl');
     const deleteTargetEditingDir = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3');
     const deleteTargetEditingFile = path.join(scopedWorkspaceRoot, 'chatEditingSessions', 'session-3.jsonl');
@@ -3886,6 +3918,7 @@ async function runSelfTargetGuardChecks() {
   const selfTargetGuardModule = await import(pathToFileURL(distChatInteropSelfTargetGuard).href);
   const {
     findRecentLikelyInvokingChat,
+    getExactDeleteSelfTargetingReasonFromTerminalSessionIds,
     getExactSelfTargetingReason,
     getFocusedSelfTargetingReason
   } = selfTargetGuardModule;
@@ -3899,6 +3932,8 @@ async function runSelfTargetGuardChecks() {
       mode: "agent",
       agent: "github.copilot.editsAgent",
       model: "copilot/gpt-5.4",
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
       archived: false,
       provider: "workspaceStorage",
       sessionFile: "/tmp/recent-session.jsonl"
@@ -3910,10 +3945,22 @@ async function runSelfTargetGuardChecks() {
       mode: "agent",
       agent: "github.copilot.editsAgent",
       model: "copilot/gpt-5-mini",
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
       archived: false,
       provider: "workspaceStorage",
       sessionFile: "/tmp/older-session.jsonl"
     }
+  ];
+
+  const executingChats = [
+    {
+      ...chats[0],
+      id: "executing-session",
+      pendingRequestCount: 1,
+      lastRequestCompleted: false
+    },
+    chats[1]
   ];
 
   assert(
@@ -3954,13 +4001,54 @@ async function runSelfTargetGuardChecks() {
   );
 
   assert(
-    getExactSelfTargetingReason(chats, "recent-session", "delete-artifacts", now)?.includes("currently invoking conversation") === true,
-    "Self-target guard test did not block exact delete-artifacts cleanup for the likely invoking chat heuristic case."
+    getExactSelfTargetingReason(chats, "recent-session", "delete-artifacts", now) === undefined,
+    "Self-target guard test incorrectly blocked exact delete-artifacts cleanup for the likely invoking chat heuristic case."
   );
 
   assert(
     getExactSelfTargetingReason(chats, "older-session", "delete-artifacts", now) === undefined,
     "Self-target guard test incorrectly blocked exact delete-artifacts cleanup for a different chat."
+  );
+
+  assert(
+    getExactDeleteSelfTargetingReasonFromTerminalSessionIds("recent-session", ["recent-session", "another-session"])?.includes("terminal-bound conversation") === true,
+    "Self-target guard test did not block delete-artifacts cleanup for the exact terminal-bound current chat."
+  );
+
+  assert(
+    getExactDeleteSelfTargetingReasonFromTerminalSessionIds("older-session", ["recent-session", "another-session"]) === undefined,
+    "Self-target guard test incorrectly blocked delete-artifacts cleanup for a different chat when using exact terminal-bound current-chat evidence."
+  );
+
+  assert(
+    getExactDeleteSelfTargetingReasonFromTerminalSessionIds(
+      "recent-session",
+      ["recent-session", "another-session"],
+      { allowTerminalBoundSelfTarget: true }
+    ) === undefined,
+    "Self-target guard test did not allow terminal-bound current-chat inspection when delete-artifacts is dry-run only."
+  );
+
+  assert(
+    (await selfTargetGuardModule.getExactDeleteSelfTargetingReason(executingChats, "executing-session"))?.includes("pending request") === true,
+    "Self-target guard test did not block delete-artifacts cleanup for a target chat that is still executing."
+  );
+
+  assert(
+    (await selfTargetGuardModule.getExactDeleteSelfTargetingReason([
+      {
+        ...chats[1],
+        id: "ambiguous-session",
+        pendingRequestCount: 0,
+        lastRequestCompleted: undefined
+      }
+    ], "ambiguous-session"))?.includes("explicit persisted settled-state evidence") === true,
+    "Self-target guard test did not require explicit settled-state evidence before allowing delete-artifacts cleanup."
+  );
+
+  assert(
+    await selfTargetGuardModule.getExactDeleteSelfTargetingReason(chats, "older-session") === undefined,
+    "Self-target guard test incorrectly blocked settled delete-artifacts cleanup when no exact current-chat or executing evidence was present."
   );
 
   assert(
@@ -5080,6 +5168,7 @@ async function runManifestChecks() {
   const windowTool = languageModelTools.find((tool) => tool.name === "get_agent_session_window");
   const transcriptTool = languageModelTools.find((tool) => tool.name === "export_agent_evidence_transcript");
   const estimateTool = languageModelTools.find((tool) => tool.name === "estimate_agent_context_breakdown");
+  const deleteTool = languageModelTools.find((tool) => tool.name === "delete_live_agent_chat_artifacts");
   const rawSessionCommand = extensionCommands.find((command) => command.command === "tiinex.aiVscodeTools.openSessionFile");
   const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "tiinex.aiVscodeTools.openSessionFile");
 
@@ -5089,6 +5178,7 @@ async function runManifestChecks() {
   assert(transcriptTool?.inputSchema?.properties?.maxBlocks, "package.json transcript tool schema must expose maxBlocks.");
   assert(transcriptTool?.inputSchema?.properties?.afterLatestCompact, "package.json transcript tool schema must expose afterLatestCompact.");
   assert(estimateTool?.inputSchema?.properties?.latestRequestFamilies, "package.json context estimate tool schema must expose latestRequestFamilies.");
+  assert(deleteTool?.inputSchema?.properties?.dryRun, "package.json delete live chat tool schema must expose dryRun.");
   assert(rawSessionCommand?.title === "Tiinex: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
   assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
 

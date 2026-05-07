@@ -1,6 +1,12 @@
+import path from "node:path";
 import type { ChatSessionSummary } from "./types";
+import { loadWorkspaceTerminalBoundChatSessionIds } from "../sessionIndex";
 
 export const SELF_TARGETING_GUARD_WINDOW_MS = 5 * 60 * 1000;
+
+interface ExactDeleteSelfTargetingOptions {
+  allowTerminalBoundSelfTarget?: boolean;
+}
 
 export function getExactSelfTargetingReason(
   chats: readonly ChatSessionSummary[],
@@ -8,7 +14,7 @@ export function getExactSelfTargetingReason(
   operation: "reveal" | "send" | "close-visible-tabs" | "delete-artifacts",
   now = Date.now()
 ): string | undefined {
-  if (operation === "close-visible-tabs" || operation === "send") {
+  if (operation === "close-visible-tabs" || operation === "send" || operation === "delete-artifacts") {
     return undefined;
   }
 
@@ -19,6 +25,71 @@ export function getExactSelfTargetingReason(
 
   return `Blocked live chat ${operation}: target session ${targetSessionId} appears to be the currently invoking conversation in this workspace. `
     + "This guard is heuristic and exists to avoid self-targeting loops or mutex contention. Open a different chat or wait until the active session is no longer the most recently updated one.";
+}
+
+export async function getExactDeleteSelfTargetingReason(
+  chats: readonly ChatSessionSummary[],
+  targetSessionId: string,
+  options: ExactDeleteSelfTargetingOptions = {}
+): Promise<string | undefined> {
+  const target = chats.find((chat) => sessionIdMatches(targetSessionId, chat.id));
+  const executionReason = getExactDeleteExecutionReason(target, targetSessionId);
+  if (executionReason) {
+    return executionReason;
+  }
+
+  const workspaceStorageDir = target ? tryGetWorkspaceStorageDir(target) : undefined;
+  if (!workspaceStorageDir) {
+    return undefined;
+  }
+
+  const terminalBoundSessionIds = await loadWorkspaceTerminalBoundChatSessionIds(workspaceStorageDir);
+  return getExactDeleteSelfTargetingReasonFromTerminalSessionIds(targetSessionId, terminalBoundSessionIds ?? [], options);
+}
+
+export function getExactDeleteSelfTargetingReasonFromTerminalSessionIds(
+  targetSessionId: string,
+  terminalBoundSessionIds: readonly string[],
+  options: ExactDeleteSelfTargetingOptions = {}
+): string | undefined {
+  const blockingSessionId = terminalBoundSessionIds.find((sessionId) => sessionIdMatches(targetSessionId, sessionId));
+  if (!blockingSessionId || options.allowTerminalBoundSelfTarget) {
+    return undefined;
+  }
+
+  return `Blocked live chat delete-artifacts: target session ${targetSessionId} matches the current terminal-bound conversation ${blockingSessionId} in this workspace. `
+    + "This guard uses the exact Local chat-to-terminal binding instead of the latest-updated heuristic. Delete a different disposable target, or run only a dry run against the current working chat.";
+}
+
+export function getExactDeleteExecutionReason(
+  target: ChatSessionSummary | undefined,
+  targetSessionId: string
+): string | undefined {
+  if (!target) {
+    return undefined;
+  }
+
+  if ((target.pendingRequestCount ?? 0) > 0) {
+    return `Blocked live chat delete-artifacts: target session ${targetSessionId} still has ${target.pendingRequestCount} pending request(s). `
+      + "Wait until the target chat finishes executing before attempting delete.";
+  }
+
+  if (target.lastRequestCompleted === false) {
+    return `Blocked live chat delete-artifacts: target session ${targetSessionId} has a last request that is not yet completed. `
+      + "Wait until the target chat finishes executing before attempting delete.";
+  }
+
+  if (target.lastRequestCompleted !== true) {
+    return `Blocked live chat delete-artifacts: target session ${targetSessionId} does not yet have explicit persisted settled-state evidence for its latest request. `
+      + "Delete is only allowed once the target chat's latest request is explicitly recorded as settled.";
+  }
+
+  if (target.hasPendingEdits === true && target.lastRequestCompleted !== true) {
+    return `Blocked live chat delete-artifacts: target session ${targetSessionId} still carries pending edits while the latest request is unsettled. `
+      + "Wait until the target chat is settled before attempting delete.";
+  }
+
+  return undefined;
 }
 
 export function getFocusedSelfTargetingReason(
@@ -74,6 +145,14 @@ export function sessionIdMatches(targetSessionId: string, candidateSessionId: st
   return targetSessionId === candidateSessionId
     || targetSessionId.startsWith(candidateSessionId)
     || candidateSessionId.startsWith(targetSessionId);
+}
+
+function tryGetWorkspaceStorageDir(chat: ChatSessionSummary): string | undefined {
+  if (chat.provider !== "workspaceStorage") {
+    return undefined;
+  }
+
+  return path.dirname(path.dirname(chat.sessionFile));
 }
 
 function parseIsoTimestamp(value: string | undefined): number | undefined {
