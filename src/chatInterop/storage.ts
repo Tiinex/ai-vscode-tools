@@ -65,13 +65,13 @@ export class ChatSessionStorage {
 
   async deleteSessionArtifacts(session: ChatSessionSummary): Promise<ChatArtifactDeletionReport> {
     const attemptedPaths = this.buildArtifactPaths(session);
-    const deletedPaths: string[] = [];
-    const missingPaths: string[] = [];
+    const deletedPaths = new Set<string>();
+    const missingPaths = new Set<string>();
 
     for (const artifactPath of attemptedPaths) {
       const stat = await safeStat(artifactPath);
       if (!stat) {
-        missingPaths.push(artifactPath);
+        missingPaths.add(artifactPath);
         continue;
       }
 
@@ -79,7 +79,7 @@ export class ChatSessionStorage {
         recursive: stat.isDirectory(),
         force: false
       });
-      deletedPaths.push(artifactPath);
+      deletedPaths.add(artifactPath);
     }
 
     if (session.provider === "workspaceStorage") {
@@ -87,10 +87,35 @@ export class ChatSessionStorage {
       await pruneWorkspaceSessionState(workspaceStorageDir, session.id);
     }
 
+    const lingeringPaths: string[] = [];
+    for (const artifactPath of attemptedPaths) {
+      const stat = await safeStat(artifactPath);
+      if (!stat) {
+        continue;
+      }
+
+      try {
+        await fs.rm(artifactPath, {
+          recursive: stat.isDirectory(),
+          force: false
+        });
+      } catch {
+        // Fall through to the post-delete stat so the caller gets an exact lingering path.
+      }
+
+      const remaining = await safeStat(artifactPath);
+      if (remaining) {
+        lingeringPaths.push(artifactPath);
+      } else {
+        deletedPaths.add(artifactPath);
+      }
+    }
+
     return {
       attemptedPaths,
-      deletedPaths,
-      missingPaths
+      deletedPaths: [...deletedPaths],
+      missingPaths: [...missingPaths],
+      lingeringPaths
     };
   }
 

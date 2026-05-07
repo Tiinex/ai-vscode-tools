@@ -1733,6 +1733,10 @@ async function runDeleteChatSafetyChecks() {
     static setSessions(sessions) {
       MockChatSessionStorage._sessions = sessions.map((session) => ({ ...session }));
       MockChatSessionStorage._deletedSessionIds = [];
+      MockChatSessionStorage._artifactDeletionOverride = undefined;
+    }
+    static setArtifactDeletionOverride(report) {
+      MockChatSessionStorage._artifactDeletionOverride = report ? { ...report } : undefined;
     }
     static getDeletedSessionIds() {
       return [...(MockChatSessionStorage._deletedSessionIds ?? [])];
@@ -1749,10 +1753,20 @@ async function runDeleteChatSafetyChecks() {
     async deleteSessionArtifacts(session) {
       MockChatSessionStorage._deletedSessionIds = [...(MockChatSessionStorage._deletedSessionIds ?? []), session.id];
       MockChatSessionStorage._sessions = (MockChatSessionStorage._sessions ?? []).filter((candidate) => candidate.id !== session.id);
+      if (MockChatSessionStorage._artifactDeletionOverride) {
+        return {
+          attemptedPaths: [session.sessionFile],
+          deletedPaths: [session.sessionFile],
+          missingPaths: [],
+          lingeringPaths: [],
+          ...MockChatSessionStorage._artifactDeletionOverride
+        };
+      }
       return {
         attemptedPaths: [session.sessionFile],
         deletedPaths: [session.sessionFile],
-        missingPaths: []
+        missingPaths: [],
+        lingeringPaths: []
       };
     }
   }
@@ -1914,6 +1928,21 @@ async function runDeleteChatSafetyChecks() {
     assert(MockChatSessionStorage.getDeletedSessionIds().includes('session-delete-target-sibling') === false, 'Delete safety test incorrectly deleted the resource-matched sibling session.');
     assert(closedTabs.includes('Delete Target') === true, 'Delete safety test did not close the exact resource-matched tab before deleting.');
     assert(closedTabs.includes('Delete Target Sibling') === false, 'Delete safety test incorrectly closed the sibling tab during exact resource-only delete.');
+
+    MockChatSessionStorage.setSessions(baseSessions);
+    MockChatSessionStorage.setArtifactDeletionOverride({
+      attemptedPaths: ['/tmp/session-delete-target.jsonl', '/tmp/chatEditingSessions/session-delete-target'],
+      deletedPaths: ['/tmp/session-delete-target.jsonl'],
+      missingPaths: [],
+      lingeringPaths: ['/tmp/chatEditingSessions/session-delete-target']
+    });
+    const serviceLingeringArtifacts = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const lingeringArtifactResult = await serviceLingeringArtifacts.deleteChat('session-delete-target');
+    assert(lingeringArtifactResult.ok === false, 'Delete safety test incorrectly reported success when a targeted artifact path still lingered after deletion.');
+    assert(
+      typeof lingeringArtifactResult.reason === 'string' && lingeringArtifactResult.reason.includes('artifact path(s) remained after deletion'),
+      'Delete safety test did not explain that lingering artifact paths block a successful delete result.'
+    );
   } finally {
     storageModule.ChatSessionStorage = originalChatSessionStorage;
     if (originalTabGroupsDescriptor) {

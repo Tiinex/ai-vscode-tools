@@ -1212,8 +1212,10 @@ function formatArtifactDeletionNotes(report: ChatCommandResult["artifactDeletion
   return [
     `Deleted Artifact Count: ${report.deletedPaths.length}`,
     `Missing Artifact Count: ${report.missingPaths.length}`,
+    `Lingering Artifact Count: ${report.lingeringPaths?.length ?? 0}`,
     `Deleted Artifact Paths: ${report.deletedPaths.length > 0 ? report.deletedPaths.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`,
-    `Missing Artifact Paths: ${report.missingPaths.length > 0 ? report.missingPaths.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`
+    `Missing Artifact Paths: ${report.missingPaths.length > 0 ? report.missingPaths.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`,
+    `Lingering Artifact Paths: ${(report.lingeringPaths?.length ?? 0) > 0 ? report.lingeringPaths!.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`
   ];
 }
 

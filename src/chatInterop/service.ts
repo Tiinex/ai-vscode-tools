@@ -519,6 +519,20 @@ export class ChatInteropService implements ChatInteropApi {
       }
 
       const artifactDeletion = await this.storage.deleteSessionArtifacts(session);
+      if ((artifactDeletion.lingeringPaths?.length ?? 0) > 0) {
+        const lingeringLabels = artifactDeletion.lingeringPaths?.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") ?? "-";
+        return {
+          ok: false,
+          reason: `Delete blocked for session ${session.id}: artifact path(s) remained after deletion (${lingeringLabels}).`,
+          session,
+          revealLifecycle: {
+            closedMatchingVisibleTabs: closedTabs.closedCount,
+            closedTabLabels: closedTabs.closedLabels
+          },
+          artifactDeletion
+        };
+      }
+
       const postDeleteSession = await this.storage.getExactSessionById(session.id);
       if (postDeleteSession) {
         return {

@@ -60,6 +60,7 @@ export interface ChatArtifactDeletionReport {
   attemptedPaths: string[];
   deletedPaths: string[];
   missingPaths: string[];
+  lingeringPaths?: string[];
 }
 
 export interface ChatSessionSummary {
