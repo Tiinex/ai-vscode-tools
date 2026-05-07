@@ -8,6 +8,20 @@ interface ExactDeleteSelfTargetingOptions {
   allowTerminalBoundSelfTarget?: boolean;
 }
 
+export async function getExactDeleteTerminalBoundSessionId(
+  chats: readonly ChatSessionSummary[],
+  targetSessionId: string
+): Promise<string | undefined> {
+  const target = chats.find((chat) => sessionIdMatches(targetSessionId, chat.id));
+  const workspaceStorageDir = target ? tryGetWorkspaceStorageDir(target) : undefined;
+  if (!workspaceStorageDir) {
+    return undefined;
+  }
+
+  const terminalBoundSessionIds = await loadWorkspaceTerminalBoundChatSessionIds(workspaceStorageDir);
+  return terminalBoundSessionIds?.find((sessionId) => sessionIdMatches(targetSessionId, sessionId));
+}
+
 export function getExactSelfTargetingReason(
   chats: readonly ChatSessionSummary[],
   targetSessionId: string,
@@ -38,13 +52,12 @@ export async function getExactDeleteSelfTargetingReason(
     return executionReason;
   }
 
-  const workspaceStorageDir = target ? tryGetWorkspaceStorageDir(target) : undefined;
-  if (!workspaceStorageDir) {
-    return undefined;
-  }
-
-  const terminalBoundSessionIds = await loadWorkspaceTerminalBoundChatSessionIds(workspaceStorageDir);
-  return getExactDeleteSelfTargetingReasonFromTerminalSessionIds(targetSessionId, terminalBoundSessionIds ?? [], options);
+  const terminalBoundSessionId = await getExactDeleteTerminalBoundSessionId(chats, targetSessionId);
+  return getExactDeleteSelfTargetingReasonFromTerminalSessionIds(
+    targetSessionId,
+    terminalBoundSessionId ? [terminalBoundSessionId] : [],
+    options
+  );
 }
 
 export function getExactDeleteSelfTargetingReasonFromTerminalSessionIds(
@@ -71,22 +84,22 @@ export function getExactDeleteExecutionReason(
 
   if ((target.pendingRequestCount ?? 0) > 0) {
     return `Blocked live chat delete-artifacts: target session ${targetSessionId} still has ${target.pendingRequestCount} pending request(s). `
-      + "Wait until the target chat finishes executing before attempting delete.";
+      + "Wait until the target chat finishes executing before attempting delete, or re-run with scheduleExactSelfDelete=true to queue deferred offline cleanup instead of live delete.";
   }
 
   if (target.lastRequestCompleted === false) {
     return `Blocked live chat delete-artifacts: target session ${targetSessionId} has a last request that is not yet completed. `
-      + "Wait until the target chat finishes executing before attempting delete.";
+      + "Wait until the target chat finishes executing before attempting delete, or re-run with scheduleExactSelfDelete=true to queue deferred offline cleanup instead of live delete.";
   }
 
   if (target.lastRequestCompleted !== true) {
     return `Blocked live chat delete-artifacts: target session ${targetSessionId} does not yet have explicit persisted settled-state evidence for its latest request. `
-      + "Delete is only allowed once the target chat's latest request is explicitly recorded as settled.";
+      + "Delete is only allowed once the target chat's latest request is explicitly recorded as settled. If you intend deferred cleanup instead of live delete, re-run with scheduleExactSelfDelete=true.";
   }
 
   if (target.hasPendingEdits === true && target.lastRequestCompleted !== true) {
     return `Blocked live chat delete-artifacts: target session ${targetSessionId} still carries pending edits while the latest request is unsettled. `
-      + "Wait until the target chat is settled before attempting delete.";
+      + "Wait until the target chat is settled before attempting delete, or re-run with scheduleExactSelfDelete=true to queue deferred offline cleanup instead of live delete.";
   }
 
   return undefined;

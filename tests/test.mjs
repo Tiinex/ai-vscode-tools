@@ -3918,6 +3918,7 @@ async function runSelfTargetGuardChecks() {
   const selfTargetGuardModule = await import(pathToFileURL(distChatInteropSelfTargetGuard).href);
   const {
     findRecentLikelyInvokingChat,
+    getExactDeleteTerminalBoundSessionId,
     getExactDeleteSelfTargetingReasonFromTerminalSessionIds,
     getExactSelfTargetingReason,
     getFocusedSelfTargetingReason
@@ -4030,8 +4031,19 @@ async function runSelfTargetGuardChecks() {
   );
 
   assert(
-    (await selfTargetGuardModule.getExactDeleteSelfTargetingReason(executingChats, "executing-session"))?.includes("pending request") === true,
+    await getExactDeleteTerminalBoundSessionId(chats, "recent-session") === undefined,
+    "Self-target guard test incorrectly resolved a terminal-bound current chat without any workspace state backing it."
+  );
+
+  const executingReason = await selfTargetGuardModule.getExactDeleteSelfTargetingReason(executingChats, "executing-session");
+  assert(
+    executingReason?.includes("pending request") === true,
     "Self-target guard test did not block delete-artifacts cleanup for a target chat that is still executing."
+  );
+
+  assert(
+    executingReason?.includes("scheduleExactSelfDelete=true") === true,
+    "Self-target guard test did not explain the deferred parameter to use when delete-artifacts was blocked for a running chat."
   );
 
   assert(
@@ -5179,6 +5191,7 @@ async function runManifestChecks() {
   assert(transcriptTool?.inputSchema?.properties?.afterLatestCompact, "package.json transcript tool schema must expose afterLatestCompact.");
   assert(estimateTool?.inputSchema?.properties?.latestRequestFamilies, "package.json context estimate tool schema must expose latestRequestFamilies.");
   assert(deleteTool?.inputSchema?.properties?.dryRun, "package.json delete live chat tool schema must expose dryRun.");
+  assert(deleteTool?.inputSchema?.properties?.scheduleExactSelfDelete, "package.json delete live chat tool schema must expose scheduleExactSelfDelete.");
   assert(rawSessionCommand?.title === "Tiinex: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
   assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
 

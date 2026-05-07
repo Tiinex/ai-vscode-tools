@@ -810,7 +810,7 @@
         "name": "delete_live_agent_chat_artifacts",
         "displayName": "Delete Live Agent Chat Artifacts",
         "userDescription": "Close visible editor-hosted tabs, delete persisted artifacts, and queue exact offline cleanup for one live chat session, or dry-run the same target-resolution path without deleting anything.",
-        "modelDescription": "Close visible editor-hosted Local chat tabs for one exact session identifier, delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk, and then queue exact offline cleanup for the same session target. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard. When dryRun=true, the tool still resolves the exact target session and applies the settled-state execution guard, but it returns before any tab close, artifact deletion, or offline cleanup is attempted; dry runs may inspect the current terminal-bound chat without enabling real deletion.",
+        "modelDescription": "Close visible editor-hosted Local chat tabs for one exact session identifier, delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk, and then queue exact offline cleanup for the same session target. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard. When dryRun=true, the tool still resolves the exact target session and applies the settled-state execution guard, but it returns before any tab close, artifact deletion, or offline cleanup is attempted; dry runs may inspect the current terminal-bound chat without enabling real deletion. When scheduleExactSelfDelete=true, the tool queues exact offline cleanup instead of attempting live deletion; it may also best-effort close visible editor-hosted chat tabs immediately when the target already looks settled and is not the current terminal-bound conversation.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "delete-live-agent-chat-artifacts",
         "inputSchema": {
@@ -823,6 +823,10 @@
             "dryRun": {
               "type": "boolean",
               "description": "If true, resolve and validate the exact target session, apply settled-state safety checks, and return before any tabs are closed, artifacts are deleted, or offline cleanup is queued. Dry runs may inspect the current terminal-bound chat without enabling real deletion."
+            },
+            "scheduleExactSelfDelete": {
+              "type": "boolean",
+              "description": "If true, queue exact offline cleanup for this session instead of attempting live deletion. This explicit deferred path should be used when the target is still running or when immediate live deletion is not desired; if the target already looks settled and is not the current terminal-bound conversation, the tool may also best-effort close visible editor-hosted chat tabs now."
             }
           },
           "required": [

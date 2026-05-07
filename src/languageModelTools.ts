@@ -6,7 +6,7 @@ import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInte
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
 import { probeLocalReopenCandidates, renderLocalReopenProbeMarkdown } from "./chatInterop/reopenProbe";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
-import { getExactDeleteSelfTargetingReason, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
+import { getExactDeleteSelfTargetingReason, getExactDeleteTerminalBoundSessionId, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
 import {
   buildLiveChatSupportMatrix,
   renderLiveChatSupportMatrixMarkdown,
@@ -160,6 +160,7 @@ interface CloseVisibleLiveChatTabsInput {
 interface DeleteLiveChatArtifactsInput {
   sessionId: string;
   dryRun?: boolean;
+  scheduleExactSelfDelete?: boolean;
 }
 
 interface FocusedEditorChatSelectionInput {
@@ -633,7 +634,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "delete_live_agent_chat_artifacts",
     displayName: "Delete Live Agent Chat Artifacts",
     userDescription: "Close visible editor-hosted tabs, delete persisted artifacts, and queue exact offline cleanup for one live chat session, or dry-run the same target-resolution path without deleting anything.",
-    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier, delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk, and then queue exact offline cleanup for the same session target. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard. When dryRun=true, the tool still resolves the exact target session and applies the settled-state execution guard, but it returns before any tab close, artifact deletion, or offline cleanup is attempted; dry runs may inspect the current terminal-bound chat without enabling real deletion.",
+    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier, delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk, and then queue exact offline cleanup for the same session target. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard. When dryRun=true, the tool still resolves the exact target session and applies the settled-state execution guard, but it returns before any tab close, artifact deletion, or offline cleanup is attempted; dry runs may inspect the current terminal-bound chat without enabling real deletion. When scheduleExactSelfDelete=true, the tool queues exact offline cleanup instead of attempting live deletion; it may also best-effort close visible editor-hosted chat tabs immediately when the target already looks settled and is not the current terminal-bound conversation.",
     toolReferenceName: "delete-live-agent-chat-artifacts",
     inputSchema: {
       type: "object",
@@ -645,6 +646,10 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         dryRun: {
           type: "boolean",
           description: "If true, resolve and validate the exact target session, apply settled-state safety checks, and return before any tabs are closed, artifacts are deleted, or offline cleanup is queued. Dry runs may inspect the current terminal-bound chat without enabling real deletion."
+        },
+        scheduleExactSelfDelete: {
+          type: "boolean",
+          description: "If true, queue exact offline cleanup for this session instead of attempting live deletion. This explicit deferred path should be used when the target is still running or when immediate live deletion is not desired; if the target already looks settled and is not the current terminal-bound conversation, the tool may also best-effort close visible editor-hosted chat tabs now."
         }
       },
       required: ["sessionId"]
@@ -1349,9 +1354,53 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         vscode.lm.registerTool(
           "delete_live_agent_chat_artifacts",
           new LiveChatTool<DeleteLiveChatArtifactsInput>(
-            (input) => `${input.dryRun ? "Dry-running" : "Deleting"} live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
+            (input) => `${input.dryRun ? "Dry-running" : input.scheduleExactSelfDelete ? "Scheduling offline delete for" : "Deleting"} live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
             async (input) => {
+              if (input.dryRun && input.scheduleExactSelfDelete) {
+                throw new Error("delete_live_agent_chat_artifacts does not allow dryRun=true together with scheduleExactSelfDelete=true. Choose either inspection or deferred self-delete.");
+              }
+
               const { session, workspaceStorageDir } = await resolveExactWorkspaceStorageLiveChatForOfflineCleanup(chatInterop, input.sessionId);
+              if (input.scheduleExactSelfDelete) {
+                const chats = await chatInterop.listChats();
+                const terminalBoundSessionId = await getExactDeleteTerminalBoundSessionId(chats, input.sessionId);
+                const targetLooksSettled = (session.pendingRequestCount ?? 0) === 0 && session.lastRequestCompleted === true;
+                const canCloseNow = targetLooksSettled && !terminalBoundSessionId;
+                let closeNotes: string[];
+
+                if (canCloseNow) {
+                  const closeResult = await chatInterop.closeVisibleTabs(input.sessionId);
+                  closeNotes = [
+                    `Visible Tab Close Executed: ${closeResult.ok ? "yes" : "no"}`,
+                    closeResult.ok
+                      ? `Visible Tab Close Result: closedMatchingVisibleTabs=${closeResult.revealLifecycle?.closedMatchingVisibleTabs ?? 0}`
+                      : `Visible Tab Close Result: ${closeResult.reason ?? closeResult.error ?? "close-visible-tabs failed"}`
+                  ];
+                } else {
+                  closeNotes = [
+                    "Visible Tab Close Executed: no",
+                    terminalBoundSessionId
+                      ? `Visible Tab Close Result: skipped because target matches the current terminal-bound conversation ${terminalBoundSessionId}`
+                      : "Visible Tab Close Result: skipped because the target does not yet look settled"
+                  ];
+                }
+
+                const queuedResult = await queueOfflineLiveChatCleanupForResolvedSession(context, session, workspaceStorageDir);
+                return formatChatMutationResult(
+                  "Live Agent Chat Offline Delete Scheduled",
+                  session,
+                  undefined,
+                  undefined,
+                  [
+                    "Deferred Offline Delete: yes",
+                    "Delete Executed Now: no",
+                    "Offline Cleanup Queued: yes",
+                    ...closeNotes,
+                    ...queuedResult.split(/\r?\n/).filter((line) => line.startsWith("- ")).map((line) => line.slice(2))
+                  ]
+                );
+              }
+
               await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "delete-artifacts", {
                 allowTerminalBoundDeleteSelfTarget: input.dryRun === true
               });
