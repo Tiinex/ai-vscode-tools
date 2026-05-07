@@ -238,7 +238,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `create-chat-direct-agent-command` passes as an approved reliability gate rather than only existing and being exercised.
 		- [x] Unit Test: `stabilized-create-workflow` passes as an approved reliability gate rather than only existing and being exercised.
 		- [x] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
-		- [ ] Manual Test: create-and-send flow is revalidated end-to-end on the current Windows host.
+		- [x] Manual Test: host validation confirmed stabilized create with verified requested agent selection, and exact follow-up send failed explicitly rather than retargeting on the current Windows host.
 		- [ ] Skill: role-facing guidance exists for exact live-chat create and send.
 		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current behavior.
 
