@@ -61,8 +61,7 @@ async function maybeReportOfflineLocalChatCleanup(context: vscode.ExtensionConte
     return;
   }
 
-  const reconcileResult = await reconcileOfflineLocalChatCleanupUx(summary);
-  void vscode.window.showInformationMessage(formatOfflineLocalChatCleanupStartupMessage(summary, reconcileResult));
+  await reconcileOfflineLocalChatCleanupUx(summary);
 }
 
 async function queueExactOfflineLocalChatCleanup(
@@ -111,18 +110,6 @@ export async function reconcileOfflineLocalChatCleanupUx(
     closedCount,
     closedLabels: [...closedLabels]
   };
-}
-
-export function formatOfflineLocalChatCleanupStartupMessage(
-  summary: OfflineLocalChatCleanupSummary,
-  reconcileResult: OfflineLocalChatCleanupUxReconcileResult
-): string {
-  const base = formatOfflineLocalChatCleanupSummary(summary);
-  if (reconcileResult.reconciledSessionIds.length === 0) {
-    return base;
-  }
-
-  return `${base} Reconciled exact editor chat tabs for ${reconcileResult.reconciledSessionIds.length} removed session(s); closed ${reconcileResult.closedCount} tab(s).`;
 }
 
 async function openFileInWorkbench(uri: vscode.Uri): Promise<void> {

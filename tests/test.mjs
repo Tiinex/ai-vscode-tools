@@ -2765,10 +2765,6 @@ async function runOfflineLocalChatCleanupChecks() {
     assert(visibleTabs.some((tab) => tab.label === 'Deleted Session Tab') === false, 'Offline cleanup UX reconcile test left the exact deleted-session tab visible.');
     assert(visibleTabs.some((tab) => tab.label === 'Keep Session Tab') === true, 'Offline cleanup UX reconcile test incorrectly closed an unrelated editor chat tab.');
     assert(visibleTabs.some((tab) => tab.label === 'Title Only Session Drop') === true, 'Offline cleanup UX reconcile test incorrectly closed a title-only editor chat tab.');
-    assert(
-      extensionModule.formatOfflineLocalChatCleanupStartupMessage(summary, reconcileResult).includes('closed 1 tab(s)'),
-      'Offline cleanup startup message test did not include the exact UX reconcile summary.'
-    );
   } finally {
     if (originalTabGroupsDescriptor) {
       Object.defineProperty(vscodeModule.window, 'tabGroups', originalTabGroupsDescriptor);

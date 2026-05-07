@@ -5,13 +5,11 @@
 - Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 - Companion AI repo these tools primarily support: https://github.com/Tiinex/ai
 
-![Tiinex — AI — VS Code — Tools — logo](assets/logo.png)
-
 Tiinex — AI — VS Code — Tools is a VS Code extension for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging. It is built for people who need to understand what actually happened in Local chat state, recover from drift or compaction, and perform bounded operational actions without guessing.
 
 For everyday users, that means fast inspection and safer cleanup. For VS Code Copilot developers and developers targeting other IDEs, it also means there is a concrete, portable model here for how to separate persisted evidence, live-session operations, and offline cleanup.
 
-In practice, these tools are primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use them independently for Local chat inspection and recovery work, but if you found them through the Marketplace and want the broader project context, start there as well.
+In practice, these tools are primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use them independently for Local chat inspection and recovery work, but if you want the broader project context, start there as well.
 
 ## Why Install It
 
@@ -38,13 +36,16 @@ Naming policy:
 - Machine-facing LM tool identifiers remain stable descriptive snake_case names such as `list_live_agent_chats` and `export_agent_session_markdown` so automation and cross-IDE ports do not have to chase cosmetic renames.
 - If you port these tools to another IDE, keep the user-facing shell branded and the machine-facing tool identifiers predictable.
 
-Core commands:
+Contributed commands:
+
+Some commands are intentionally hidden from the Command Palette and are instead surfaced through the Tiinex Sessions view or automation-facing tool surfaces.
 
 - `Tiinex: Refresh Sessions`
 - `Tiinex: Open Latest Snapshot`
 - `Tiinex: Open Latest Evidence Transcript`
 - `Tiinex: Open Latest Context Estimate`
 - `Tiinex: Open Latest Profile`
+- `Tiinex: Survey Recent Sessions`
 - `Tiinex: Open Session Snapshot`
 - `Tiinex: Open Session Index`
 - `Tiinex: Open Session Evidence Transcript`
@@ -55,7 +56,6 @@ Core commands:
 - `Tiinex: Reveal Local Chat`
 - `Tiinex: Close Visible Local Chat Tabs`
 - `Tiinex: Delete Local Chat Artifacts`
-- `Tiinex: Schedule Offline Local Chat Cleanup`
 - `Tiinex: Create Local Chat`
 - `Tiinex: Send Message To Local Chat`
 - `Tiinex: Send Message To Focused Local Chat`
@@ -106,9 +106,12 @@ IDE-portable parts in this repo:
 
 Minimum porting contract:
 
-This repo does not yet publish a standalone SDK package for ports. The closest real contract today is the reference shape already present in code. If you want equivalent tools in another IDE, implement an equivalent split even if the exact type names or host APIs differ.
+This repo does not yet publish a standalone SDK package for ports. The closest real contract today is the exported adapter and request/result shape already present in code. The sketch below is therefore intentionally close to the current code shape rather than a purely conceptual pseudo-interface. If you want equivalent tools in another IDE, implement an equivalent split even if the exact type names or host APIs differ.
 
 ```ts
+type RenderDetailLevel = "summary" | "full";
+type AnchorOccurrence = "first" | "last";
+
 type SessionDescriptor = {
 	sessionId: string;
 	title?: string;
@@ -120,26 +123,39 @@ type SessionDescriptor = {
 
 type SessionTarget = {
 	storageRoots?: string[];
+	includeNoise?: boolean;
 	latest?: boolean;
 	sessionId?: string;
 	sessionFile?: string;
-	includeNoise?: boolean;
-	detailLevel?: "summary" | "full";
+	detailLevel?: RenderDetailLevel;
+	maxChars?: number;
 	anchorText?: string;
-	anchorOccurrence?: "first" | "last";
+	anchorOccurrence?: AnchorOccurrence;
 	afterLatestCompact?: boolean;
 	maxBlocks?: number;
 	latestRequestFamilies?: number;
-	maxChars?: number;
 };
 
 interface PersistedEvidenceAdapter {
 	discoverSessions(storageRoots?: string[]): Promise<SessionDescriptor[]>;
-	renderSnapshot(target: SessionTarget): Promise<string>;
-	renderIndex(target: SessionTarget, tail?: number): Promise<string>;
+	renderList(limit?: number, maxChars?: number, storageRoots?: string[]): Promise<string>;
 	renderTranscriptEvidence(target: SessionTarget): Promise<string>;
+	renderWindow(target: SessionTarget & {
+		anchorText?: string;
+		anchorOccurrence?: AnchorOccurrence;
+		afterLatestCompact?: boolean;
+		before?: number;
+		after?: number;
+		maxMatches?: number;
+		includeNoise?: boolean;
+		maxChars?: number;
+	}): Promise<string>;
+	renderExport(target: SessionTarget & { includeNoise?: boolean }): Promise<string>;
+	renderSnapshot(target: SessionTarget): Promise<string>;
 	renderContextEstimate(target: SessionTarget): Promise<string>;
 	renderProfile(target: SessionTarget): Promise<string>;
+	renderIndex(target: SessionTarget, tail?: number): Promise<string>;
+	renderSurvey(limit?: number, storageRoots?: string[]): Promise<string>;
 }
 
 interface ExactCleanupRequest {
@@ -148,25 +164,62 @@ interface ExactCleanupRequest {
 	artifactPaths: string[];
 }
 
-interface LiveCommandResult {
+type ChatModelSelector = {
+	id: string;
+	vendor?: string;
+};
+
+interface CreateChatRequest {
+	prompt: string;
+	agentName?: string;
+	mode?: string;
+	modelSelector?: ChatModelSelector;
+	partialQuery?: boolean;
+	blockOnResponse?: boolean;
+	requireSelectionEvidence?: boolean;
+	waitForPersisted?: boolean;
+}
+
+interface SendChatMessageRequest extends CreateChatRequest {
+	sessionId: string;
+	allowTransportWorkaround?: boolean;
+}
+
+interface ChatSessionSummary {
+	id: string;
+	title: string;
+	lastUpdated: string;
+	mode?: string;
+	agent?: string;
+	requestAgentId?: string;
+	requestAgentName?: string;
+	model?: string;
+	archived: boolean;
+	provider: "workspaceStorage" | "emptyWindow";
+	sessionFile: string;
+}
+
+interface ChatCommandResult {
 	ok: boolean;
 	reason?: string;
+	session?: ChatSessionSummary;
+	sessions?: ChatSessionSummary[];
 }
 
 interface LiveChatAdapter {
-	listChats(): Promise<unknown[]>;
-	revealChat(sessionId: string): Promise<LiveCommandResult>;
-	closeVisibleTabs(sessionId: string): Promise<LiveCommandResult>;
-	deleteChat(sessionId: string): Promise<LiveCommandResult>;
-	createChat?(request: unknown): Promise<LiveCommandResult>;
-	sendMessage?(request: unknown): Promise<LiveCommandResult>;
-	sendFocusedMessage?(request: unknown): Promise<LiveCommandResult>;
+	listChats(): Promise<ChatSessionSummary[]>;
+	revealChat(sessionId: string): Promise<ChatCommandResult>;
+	closeVisibleTabs(sessionId: string): Promise<ChatCommandResult>;
+	deleteChat(sessionId: string): Promise<ChatCommandResult>;
+	createChat(request: CreateChatRequest): Promise<ChatCommandResult>;
+	sendMessage(request: SendChatMessageRequest): Promise<ChatCommandResult>;
+	sendFocusedMessage(request: CreateChatRequest): Promise<ChatCommandResult>;
 }
 ```
 
 How to read that contract:
 
-- Required baseline: persisted evidence discovery plus bounded renderers for snapshot, index, transcript evidence, context estimate, and profile.
+- Required baseline: persisted evidence discovery plus bounded renderers for list, window, export, snapshot, index, transcript evidence, context estimate, profile, and survey.
 - Required delete safety: destructive cleanup must carry both explicit `targetSessionIds` and explicit `artifactPaths`; titles, fuzzy matching, and broad keep-lists are not enough.
 - Host-sensitive layer: live create, send, reveal, and focus flows belong behind a separate adapter and may be weaker than the evidence layer without invalidating the port.
 - Required UX shape: raw session files may exist as a last resort, but bounded inspection views should remain the default recovery surface.
@@ -191,8 +244,8 @@ Each platform lane below is tracked as a checklist.
 - `Use Case` defines the behavior that must be trusted.
 - `Unit Test` records automated coverage that exercises or guards that behavior.
 - `Manual Test` records host-level validation where runtime behavior still matters.
-- `Skill` records whether a role-facing skill or usage file exists for that lane.
-- `Skill Test` records whether that skill guidance has been validated against current behavior.
+- `Skill` records whether a role-facing skill or usage file exists for that lane, even when one maintained guidance file covers more than one lane.
+- `Skill Test` records whether that guidance has been checked against current behavior.
 
 - Persisted session inspection
 	- Windows
@@ -211,15 +264,15 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `self-target-guard` passes.
 		- [x] Manual Test: host validation confirmed that disposable target chats could be removed without wiping the active working chat.
 		- [x] Skill: role-facing guidance exists for exact local chat delete targeting.
-		- [ ] Skill Test: exact local chat delete targeting guidance has been validated against current behavior.
+		- [x] Skill Test: exact local chat delete targeting guidance has been checked against current behavior.
 
 - Exact offline local chat cleanup
 	- Windows
 		- [x] Use Case: queued exact-target cleanup survives a real VS Code exit and restart on the primary Windows surface.
 		- [x] Unit Test: `offline-local-chat-cleanup` passes.
 		- [x] Manual Test: host validation confirmed queued exact-target cleanup across a real VS Code exit and restart on the primary Windows surface.
-		- [x] Skill: role-facing guidance exists for exact offline local chat cleanup.
-		- [ ] Skill Test: exact offline local chat cleanup guidance has been validated against current behavior.
+		- [x] Skill: delete-workflow guidance covers exact offline local chat cleanup queueing for disposable targets.
+		- [x] Skill Test: exact offline local chat cleanup guidance has been checked against current behavior.
 
 - Exact live-chat create and send
 	- Windows
@@ -229,8 +282,8 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `create-chat-direct-agent-command` passes as an approved reliability gate rather than only existing and being exercised.
 		- [x] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
 		- [x] Manual Test: host validation confirmed direct create with first visible `/aa` dispatch, verified requested agent selection, and same-chat follow-up without repeated `/aa`.
-		- [ ] Skill: role-facing guidance exists for exact live-chat create and send.
-		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current behavior.
+		- [x] Skill: role-facing guidance exists for exact live-chat create and send.
+		- [x] Skill Test: exact live-chat create and send guidance has been checked against current behavior.
 
 - Focused live-chat send
 	- Windows
@@ -238,8 +291,8 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: focused send reports unverified or blocked targeting state instead of implying stronger targeting than the host can prove.
 		- [x] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
 		- [x] Manual Test: host validation confirmed focused-send blocked ambiguous targeting instead of implying stronger targeting than the host could prove.
-		- [ ] Skill: role-facing guidance exists for focused live-chat send.
-		- [ ] Skill Test: focused live-chat send guidance has been validated against current behavior.
+		- [x] Skill: create/send workflow guidance covers focused live-chat send.
+		- [x] Skill Test: focused live-chat send guidance has been checked against current behavior.
 
 ## Known Limits
 
@@ -259,6 +312,7 @@ From the repo root:
 
 ```bash
 npm install
+npm run build
 npm run test
 ```
 
