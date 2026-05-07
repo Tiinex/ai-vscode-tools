@@ -299,7 +299,6 @@ export class ChatInteropService implements ChatInteropApi {
       }
 
       const before = await this.storage.listSessions();
-      let cleanup: (() => Promise<void>) | undefined;
       let focusedInputMs = 0;
       let prefillMs = 0;
       let submitMs = 0;
@@ -320,106 +319,41 @@ export class ChatInteropService implements ChatInteropApi {
         }
       });
 
-      try {
-        let dispatch: ChatDispatchInfo;
+      const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
+      const dispatch: ChatDispatchInfo = {
+        surface: "focused-chat-submit",
+        dispatchedPrompt
+      };
 
-        if (shouldUsePromptFileDispatch(request)) {
-          const promptFileDispatch = await this.dispatchViaPromptFile(request);
-          cleanup = promptFileDispatch.cleanup;
-          dispatch = promptFileDispatch.dispatch;
-        } else {
-          const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
-          dispatch = {
-            surface: "focused-chat-submit",
-            dispatchedPrompt
-          };
+      const focusedInputStartedAt = Date.now();
+      await vscode.commands.executeCommand(commandSupport.focusInputCommand);
+      focusedInputMs = Date.now() - focusedInputStartedAt;
+      await delay(this.openDelayMs);
 
-          const focusedInputStartedAt = Date.now();
-          await vscode.commands.executeCommand(commandSupport.focusInputCommand);
-          focusedInputMs = Date.now() - focusedInputStartedAt;
-          await delay(this.openDelayMs);
+      const prefillStartedAt = Date.now();
+      await this.prefillFocusedChat(request, dispatchedPrompt);
+      prefillMs = Date.now() - prefillStartedAt;
+      await delay(this.openDelayMs);
 
-          const prefillStartedAt = Date.now();
-          await this.prefillFocusedChat(request, dispatchedPrompt);
-          prefillMs = Date.now() - prefillStartedAt;
-          await delay(this.openDelayMs);
+      const submitStartedAt = Date.now();
+      await vscode.commands.executeCommand(commandSupport.submitCommand);
+      submitMs = Date.now() - submitStartedAt;
 
-          const submitStartedAt = Date.now();
-          await vscode.commands.executeCommand(commandSupport.submitCommand);
-          submitMs = Date.now() - submitStartedAt;
-        }
+      const beforeById = new Map(before.map((item) => [item.id, item.lastUpdated]));
 
-        const beforeById = new Map(before.map((item) => [item.id, item.lastUpdated]));
+      const waitForPersisted = request.waitForPersisted !== undefined ? request.waitForPersisted : this.defaultWaitForPersisted;
 
-        const waitForPersisted = request.waitForPersisted !== undefined ? request.waitForPersisted : this.defaultWaitForPersisted;
-
-        if (!waitForPersisted) {
-          // Non-blocking/one-shot path: check once for an immediate persisted touch and return.
-          const after = await this.storage.listSessions();
-          const candidate = pickTouchedSession(beforeById, after);
-          const selection = buildSelectionVerification(request, candidate, dispatch);
-
-          if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
-            return {
-              ok: false,
-              reason: buildSelectionEvidenceFailure(selection, false),
-              session: candidate,
-              selection,
-              dispatch,
-              revealLifecycle: buildFocusedSendTimingLifecycle()
-            };
-          }
-
-          return {
-            ok: true,
-            session: candidate,
-            selection,
-            dispatch,
-            revealLifecycle: buildFocusedSendTimingLifecycle()
-          };
-        }
-
-        const focusedMutationWaitStartedAt = Date.now();
-        const {
-          session,
-          selection,
-          observedMutation,
-          settled,
-          pollCount,
-          scanMs
-        } = await this.waitForFocusedSessionMutation(before, request, dispatch);
-        focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
-        focusedMutationPollCount = pollCount;
-        focusedMutationScanMs = scanMs;
-        if (!session || !observedMutation) {
-          return {
-            ok: false,
-            reason: "Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.",
-            selection,
-            dispatch,
-            revealLifecycle: buildFocusedSendTimingLifecycle()
-          };
-        }
-
-        if (request.blockOnResponse && !settled) {
-          return {
-            ok: false,
-            reason: await appendUnsettledSessionDiagnostic(
-              "Focused chat submit dispatched and a persisted mutation was observed, but the session did not reach a settled state within the expected timeout.",
-              session
-            ),
-            session,
-            selection,
-            dispatch,
-            revealLifecycle: buildFocusedSendTimingLifecycle()
-          };
-        }
+      if (!waitForPersisted) {
+        // Non-blocking/one-shot path: check once for an immediate persisted touch and return.
+        const after = await this.storage.listSessions();
+        const candidate = pickTouchedSession(beforeById, after);
+        const selection = buildSelectionVerification(request, candidate, dispatch);
 
         if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
           return {
             ok: false,
             reason: buildSelectionEvidenceFailure(selection, false),
-            session,
+            session: candidate,
             selection,
             dispatch,
             revealLifecycle: buildFocusedSendTimingLifecycle()
@@ -428,20 +362,67 @@ export class ChatInteropService implements ChatInteropApi {
 
         return {
           ok: true,
+          session: candidate,
+          selection,
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
+        };
+      }
+
+      const focusedMutationWaitStartedAt = Date.now();
+      const {
+        session,
+        selection,
+        observedMutation,
+        settled,
+        pollCount,
+        scanMs
+      } = await this.waitForFocusedSessionMutation(before, request, dispatch);
+      focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
+      focusedMutationPollCount = pollCount;
+      focusedMutationScanMs = scanMs;
+      if (!session || !observedMutation) {
+        return {
+          ok: false,
+          reason: "Focused chat submit dispatched but no persisted session mutation was observed within the expected timeout.",
+          selection,
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
+        };
+      }
+
+      if (request.blockOnResponse && !settled) {
+        return {
+          ok: false,
+          reason: await appendUnsettledSessionDiagnostic(
+            "Focused chat submit dispatched and a persisted mutation was observed, but the session did not reach a settled state within the expected timeout.",
+            session
+          ),
           session,
           selection,
           dispatch,
           revealLifecycle: buildFocusedSendTimingLifecycle()
         };
-      } finally {
-        if (cleanup) {
-          try {
-            await cleanup();
-          } catch {
-            // Prompt-file cleanup must not change send behavior.
-          }
-        }
       }
+
+      if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
+        return {
+          ok: false,
+          reason: buildSelectionEvidenceFailure(selection, false),
+          session,
+          selection,
+          dispatch,
+          revealLifecycle: buildFocusedSendTimingLifecycle()
+        };
+      }
+
+      return {
+        ok: true,
+        session,
+        selection,
+        dispatch,
+        revealLifecycle: buildFocusedSendTimingLifecycle()
+      };
     } catch (error) {
       return toErrorResult(error);
     } finally {
@@ -798,13 +779,23 @@ export class ChatInteropService implements ChatInteropApi {
   ): Promise<void> {
     await vscode.commands.executeCommand(command);
     await delay(this.openDelayMs);
-    await this.dispatchToActiveChat(
+    const dispatched = await this.dispatchViaFocusedChatSubmit(
       {
         ...request,
         agentName: undefined
       },
       prompt
     );
+
+    if (!dispatched) {
+      await this.dispatchToActiveChat(
+        {
+          ...request,
+          agentName: undefined
+        },
+        prompt
+      );
+    }
   }
 
   private async dispatchViaPromptFile(
@@ -829,18 +820,25 @@ export class ChatInteropService implements ChatInteropApi {
         slashCommand: artifact.slashCommand
       });
       await delay(this.promptRegistrationDelayMs);
-      await this.dispatchToActiveChat(
+      const dispatched = await this.dispatchViaFocusedChatSubmit(
         {
           ...request,
           agentName: undefined
         },
         `/${artifact.slashCommand}`
       );
-      const submitted = await this.submitPrefilledActiveChat(`/${artifact.slashCommand}`);
-      if (!submitted) {
-        await this.traceCreateDebug("prompt-file.submit-unavailable", {
+
+      if (!dispatched) {
+        await this.traceCreateDebug("prompt-file.focused-submit-unavailable", {
           slashCommand: artifact.slashCommand
         });
+        await this.dispatchToActiveChat(
+          {
+            ...request,
+            agentName: undefined
+          },
+          `/${artifact.slashCommand}`
+        );
       }
     } catch (error) {
       await cleanup();
@@ -867,28 +865,6 @@ export class ChatInteropService implements ChatInteropApi {
     };
 
     await vscode.commands.executeCommand(OPEN_CHAT_COMMAND, options);
-  }
-
-  private async submitPrefilledActiveChat(query: string): Promise<boolean> {
-    const commandSupport = await this.getFocusedChatInteropSupport();
-    if (!commandSupport.canSubmitFocusedChatMessage || !commandSupport.focusInputCommand || !commandSupport.submitCommand) {
-      return false;
-    }
-
-    const isSlashCommandDispatch = query.trimStart().startsWith("/");
-    if (isSlashCommandDispatch) {
-      await delay(this.slashCommandSettleDelayMs);
-    } else {
-      await delay(this.openDelayMs);
-    }
-
-    await this.traceCreateDebug("create-submit.before-focus-input", { query });
-    await vscode.commands.executeCommand(commandSupport.focusInputCommand);
-    await delay(this.openDelayMs);
-    await this.traceCreateDebug("create-submit.before-submit", { query });
-    await vscode.commands.executeCommand(commandSupport.submitCommand);
-    await this.traceCreateDebug("create-submit.after-submit", { query });
-    return true;
   }
 
   private async traceCreateDebug(step: string, details: Record<string, unknown> = {}): Promise<void> {

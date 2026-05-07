@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { sendMessageToSession } from "./sessionSendWorkflow";
-import { buildSelectionVerification, type ChatCommandResult, type ChatDispatchInfo, type ChatInteropApi, type ChatModelSelector, type ChatSessionSummary, type CreateChatRequest } from "./types";
+import { type ChatCommandResult, type ChatInteropApi, type ChatModelSelector, type ChatSessionSummary, type CreateChatRequest } from "./types";
 
 export interface StabilizedCreateAndSendResult {
   createResult: ChatCommandResult;
@@ -27,11 +27,6 @@ export async function createStabilizedChatAndSend(
   chatInterop: ChatInteropApi,
   request: CreateChatRequest
 ): Promise<StabilizedCreateAndSendResult> {
-  const exactSupport = await chatInterop.getExactSessionInteropSupport();
-  if (shouldUseFirstMessageAgentDispatch(request, exactSupport.canSendExactSessionMessage)) {
-    return createCustomAgentChatWithFirstMessageDispatch(chatInterop, request);
-  }
-
   const seedPrompt = buildSeedPrompt();
   const createResult = await chatInterop.createChat({
     prompt: seedPrompt,
@@ -96,100 +91,25 @@ export async function createStabilizedChatAndSend(
   const patchedModelId = shouldPatchModel(createResult, request.modelSelector)
     ? await appendModelPatch(createResult.session, request.modelSelector)
     : undefined;
-  const shouldReassertCustomAgentInFocusedFallback = Boolean(request.agentName?.trim())
-    && !exactSupport.canSendExactSessionMessage;
 
   const workflow = await sendMessageToSession(chatInterop, {
     sessionId: createResult.session.id,
     prompt: request.prompt,
-    agentName: shouldReassertCustomAgentInFocusedFallback ? request.agentName : undefined,
+    agentName: request.agentName,
     // Mode/model stabilization happens during create plus persisted patching.
-    // When exact-session send is unavailable, focused fallback still needs the
-    // custom agent dispatch path so the visible chat selector lands on the same
-    // agent as the persisted mode patch.
+    // The follow-up send keeps mode/model unset and lets the established
+    // agent-aware create/send path carry participant selection.
     mode: undefined,
     modelSelector: undefined,
     partialQuery: false,
     blockOnResponse: request.blockOnResponse,
-    requireSelectionEvidence: shouldReassertCustomAgentInFocusedFallback ? false : request.requireSelectionEvidence
+    requireSelectionEvidence: request.requireSelectionEvidence
   });
 
   return {
     createResult,
     workflow,
     seedPrompt,
-    realPromptDispatchAttempted: true,
-    patchedModeId,
-    patchedModelId,
-    resolvedModeId
-  };
-}
-
-async function createCustomAgentChatWithFirstMessageDispatch(
-  chatInterop: ChatInteropApi,
-  request: CreateChatRequest
-): Promise<StabilizedCreateAndSendResult> {
-  const createResult = await chatInterop.createChat({
-    prompt: request.prompt,
-    agentName: request.agentName,
-    partialQuery: false,
-    blockOnResponse: request.blockOnResponse,
-    requireSelectionEvidence: false
-  });
-
-  if (!createResult.ok || !createResult.session) {
-    return {
-      createResult,
-      workflow: createResult,
-      seedPrompt: "(none; first-message custom-agent dispatch)",
-      realPromptDispatchAttempted: createResult.dispatch?.surface === "prompt-file-slash-command"
-    };
-  }
-
-  if (seedSessionHasControlThreadArtifacts(createResult.session)) {
-    return {
-      createResult,
-      workflow: {
-        ok: false,
-        reason: `Created session picked up control-thread artifacts before the custom-agent create completed: ${(createResult.session.controlThreadArtifactKinds ?? []).join(", ") || "unknown"}.`,
-        session: createResult.session,
-        selection: createResult.selection,
-        dispatch: createResult.dispatch,
-        revealLifecycle: createResult.revealLifecycle
-      },
-      seedPrompt: "(none; first-message custom-agent dispatch)",
-      realPromptDispatchAttempted: true
-    };
-  }
-
-  const resolvedModeId = request.mode?.trim() || await resolveWorkspaceAgentModeUri(request.agentName);
-  const patchedModeId = shouldPatchCustomMode(resolvedModeId)
-    ? await appendModePatch(createResult.session, resolvedModeId)
-    : undefined;
-
-  const patchedModelId = shouldPatchModel(createResult, request.modelSelector)
-    ? await appendModelPatch(createResult.session, request.modelSelector)
-    : undefined;
-
-  const workflowSession: ChatSessionSummary = {
-    ...createResult.session,
-    mode: patchedModeId ?? createResult.session.mode,
-    model: patchedModelId ?? createResult.session.model,
-    agent: normalizeRequestedAgentName(request.agentName) ?? createResult.session.agent
-  };
-  const dispatch = getResultDispatch(createResult, request);
-  const selection = buildSelectionVerification(request, workflowSession, dispatch);
-  const workflow: ChatCommandResult = {
-    ...createResult,
-    session: workflowSession,
-    selection,
-    dispatch
-  };
-
-  return {
-    createResult,
-    workflow,
-    seedPrompt: "(none; first-message custom-agent dispatch)",
     realPromptDispatchAttempted: true,
     patchedModeId,
     patchedModelId,
@@ -307,35 +227,6 @@ function delaySeedSettlement(ms: number): Promise<void> {
 function buildSeedPrompt(): string {
   const token = `AA_STABLE_INIT_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   return `Svara exakt med ${token} och inget mer.`;
-}
-
-function shouldUseFirstMessageAgentDispatch(request: CreateChatRequest, canSendExactSessionMessage: boolean): boolean {
-  return Boolean(normalizeRequestedAgentName(request.agentName)) && !canSendExactSessionMessage;
-}
-
-function normalizeRequestedAgentName(agentName: string | undefined): string | undefined {
-  const normalized = agentName?.trim().replace(/^#+/, "");
-  return normalized && normalized.length > 0 ? normalized : undefined;
-}
-
-function getResultDispatch(createResult: ChatCommandResult, request: CreateChatRequest): ChatDispatchInfo {
-  if (createResult.dispatch) {
-    return createResult.dispatch;
-  }
-
-  if (createResult.selection) {
-    return {
-      surface: createResult.selection.dispatchSurface,
-      dispatchedPrompt: createResult.selection.dispatchedPrompt,
-      slashCommand: createResult.selection.dispatchedSlashCommand
-    };
-  }
-
-  return {
-    surface: normalizeRequestedAgentName(request.agentName) ? "prompt-file-slash-command" : "chat-open",
-    dispatchedPrompt: request.prompt,
-    slashCommand: undefined
-  };
 }
 
 function shouldPatchCustomMode(modeId: string | undefined): modeId is string {

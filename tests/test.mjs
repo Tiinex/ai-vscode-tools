@@ -1315,14 +1315,13 @@ async function runFocusedSendBehaviorChecks() {
     const nbResult = await service.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, waitForPersisted: false });
     assert(nbResult.ok === true, 'Non-blocking focused-send did not succeed when persisted touch occurred');
     assert(nbResult.session && nbResult.session.id === 's1', 'Non-blocking focused-send returned wrong session id');
-    assert(executedCommands[0]?.command === 'workbench.action.chat.focusInput', 'Non-blocking focused-send did not focus the chat input before prompt-file dispatch.');
-    assert(executedCommands[1]?.command === 'workbench.action.chat.open', 'Non-blocking focused-send did not dispatch the generated slash command through chat-open.');
-    assert(executedCommands[1]?.args?.query?.startsWith('/aa-live-chat-agent-architect-') === true, `Non-blocking focused-send did not use the generated prompt-file slash command. Got: ${executedCommands[1]?.args?.query}`);
-    assert(executedCommands[1]?.args?.isPartialQuery === false, 'Non-blocking focused-send did not dispatch the prompt-file slash command as a real query.');
-    assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Non-blocking focused-send did not refocus the chat input after slash-command prefill.');
-    assert(executedCommands[3]?.command === 'workbench.action.chat.submit', 'Non-blocking focused-send did not submit the generated slash command.');
-    assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Non-blocking focused-send did not write the temporary prompt artifact.');
-    assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Non-blocking focused-send did not clean up the temporary prompt artifact.');
+    assert(executedCommands[0]?.command === 'workbench.action.chat.focusInput', 'Non-blocking focused-send did not focus the chat input before dispatch.');
+    assert(executedCommands[1]?.command === 'workbench.action.chat.open', 'Non-blocking focused-send did not prefill the focused chat input through chat-open.');
+    assert(executedCommands[1]?.args?.query === '#agent-architect\nhello', `Non-blocking focused-send did not use the expected agent-prefixed prompt. Got: ${executedCommands[1]?.args?.query}`);
+    assert(executedCommands[1]?.args?.isPartialQuery === true, 'Non-blocking focused-send did not prefill the focused chat input as a partial query.');
+    assert(executedCommands[2]?.command === 'workbench.action.chat.submit', 'Non-blocking focused-send did not submit the focused chat prompt.');
+    assert(fsOps.some((entry) => entry.op === 'writeFile') === false, 'Non-blocking focused-send should not write a temporary prompt artifact after the focused-send rollback.');
+    assert(fsOps.some((entry) => entry.op === 'rm') === false, 'Non-blocking focused-send should not need temporary prompt-file cleanup after the focused-send rollback.');
     executedCommands.length = 0;
 
     // Blocking scenario: no persisted mutation appears within the timeout
@@ -1615,9 +1614,11 @@ async function runCreateChatDirectAgentCommandChecks() {
     assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Direct agent-open createChat test did not open a new chat editor first.');
     assert(executedCommands[1]?.command === 'workbench.action.focusActiveEditorGroup', 'Direct agent-open createChat test did not refocus the new editor chat group after opening it.');
     assert(executedCommands[2]?.command === 'workbench.action.chat.openagent-architect', 'Direct agent-open createChat test did not prefer the runtime openagent-architect command.');
-    assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Direct agent-open createChat test did not dispatch the prompt through chat-open after opening the direct agent chat.');
-    assert(executedCommands[3]?.args?.query === 'Create a local recovery tools helper named artifact-list-item-checker using the provided build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
-    assert(executedCommands[3]?.args?.isPartialQuery === false, 'Direct agent-open createChat test did not dispatch the prompt as a real query.');
+    assert(executedCommands[3]?.command === 'workbench.action.chat.focusInput', 'Direct agent-open createChat test did not focus the newly opened chat before dispatch.');
+    assert(executedCommands[4]?.command === 'workbench.action.chat.open', 'Direct agent-open createChat test did not prefill the focused chat input after opening the direct agent chat.');
+    assert(executedCommands[4]?.args?.query === 'Create a local recovery tools helper named artifact-list-item-checker using the provided build input.', 'Direct agent-open createChat test did not preserve the original prompt body.');
+    assert(executedCommands[4]?.args?.isPartialQuery === true, 'Direct agent-open createChat test did not use partial-query prefill for the focused submit path.');
+    assert(executedCommands[5]?.command === 'workbench.action.chat.submit', 'Direct agent-open createChat test did not submit the focused chat after prefilling it.');
 
     executedCommands.length = 0;
     MockChatSessionStorage.setBehaviors([
@@ -1824,11 +1825,12 @@ async function runCreateChatDirectAgentCommandChecks() {
       assert(promptFileResult.ok === true, 'Prompt-file createChat test did not succeed when a session was created and settled.');
       assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Prompt-file createChat test did not open a new chat editor first.');
       assert(executedCommands[1]?.command === 'workbench.action.focusActiveEditorGroup', 'Prompt-file createChat test did not refocus the new editor chat group after opening it.');
-      assert(executedCommands[2]?.command === 'workbench.action.chat.open', 'Prompt-file createChat test did not dispatch the generated slash command through chat-open.');
-      assert(executedCommands[2]?.args?.query?.startsWith('/aa-live-chat-anchor-senior-') === true, `Prompt-file createChat test did not dispatch the generated slash command. Got: ${executedCommands[2]?.args?.query}`);
-      assert(executedCommands[2]?.args?.isPartialQuery === false, 'Prompt-file createChat test did not dispatch the generated slash command as a real query.');
-      assert(executedCommands[3]?.command === 'workbench.action.chat.focusInput', 'Prompt-file createChat test did not focus the chat input before explicit slash-command submit.');
-      assert(executedCommands[4]?.command === 'workbench.action.chat.submit', 'Prompt-file createChat test did not explicitly submit the prefyllda slash-command dispatch.');
+      assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Prompt-file createChat test did not focus the chat input before slash-command prefill.');
+      assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Prompt-file createChat test did not dispatch the generated slash command through chat-open.');
+      assert(executedCommands[3]?.args?.query?.startsWith('/aa-live-chat-anchor-senior-') === true, `Prompt-file createChat test did not dispatch the generated slash command. Got: ${executedCommands[3]?.args?.query}`);
+      assert(executedCommands[3]?.args?.isPartialQuery === false, 'Prompt-file createChat test did not dispatch the generated slash command as a real query.');
+      assert(executedCommands[4]?.command === 'workbench.action.chat.focusInput', 'Prompt-file createChat test did not refocus the chat input after slash-command prefill.');
+      assert(executedCommands[5]?.command === 'workbench.action.chat.submit', 'Prompt-file createChat test did not explicitly submit the slash-command dispatch.');
       assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Prompt-file createChat test did not write the temporary prompt artifact.');
       assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Prompt-file createChat test did not clean up the temporary prompt artifact.');
     } finally {
@@ -2643,7 +2645,7 @@ async function runStabilizedCreateWorkflowChecks() {
     assert(seedListChatsCalls >= 2, `Stabilized workflow test did not wait for the seed session to settle. Got ${seedListChatsCalls} listChats call(s).`);
     assert(sentRequests.length === 1, "Stabilized workflow test did not send the real prompt exactly once.");
     assert(sentRequests[0].prompt === "real prompt", "Stabilized workflow test did not preserve the real prompt for the final send.");
-    assert(sentRequests[0].agentName === undefined, `Stabilized workflow test should keep the follow-up send fully prompt-only after mode stabilization. Got agentName=${sentRequests[0].agentName}`);
+    assert(sentRequests[0].agentName === "support-doc.fresh-reader", `Stabilized workflow test did not preserve the requested agent on the follow-up send. Got agentName=${sentRequests[0].agentName}`);
     assert(sentRequests[0].mode === undefined, `Stabilized workflow test should keep the follow-up send prompt-only after mode stabilization. Got: ${sentRequests[0].mode}`);
     assert(sentRequests[0].modelSelector === undefined, "Stabilized workflow test should keep the follow-up send prompt-only after model stabilization.");
     assert(result.resolvedModeId === expectedAgentFileUri, `Stabilized workflow test did not resolve the workspace runtime-agent file URI. Got: ${result.resolvedModeId}`);
@@ -2654,104 +2656,6 @@ async function runStabilizedCreateWorkflowChecks() {
     assert(parsedPatchedRows.length === 3, `Stabilized workflow test did not keep the session file parseable JSONL. Got ${parsedPatchedRows.length} rows.`);
     assert(targetSessionRaw.includes(`"id":"${expectedAgentFileUri}"`), "Stabilized workflow test did not append the requested mode patch to the session file.");
     assert(targetSessionRaw.includes('"identifier":"copilot/gpt-5.4"'), "Stabilized workflow test did not append the requested selectedModel patch to the session file.");
-
-    const firstMessageSessionFile = path.join(chatSessionsDir, "session-first-message.jsonl");
-    await fs.writeFile(firstMessageSessionFile, JSON.stringify({ kind: 0, v: { sessionId: "session-first-message", requests: [], inputState: {} } }), "utf8");
-    const firstMessageCreateRequests = [];
-    const firstMessageInterop = {
-      async createChat(request) {
-        firstMessageCreateRequests.push(request);
-        return {
-          ok: true,
-          session: {
-            id: "session-first-message",
-            title: "First Message Agent Dispatch Session",
-            lastUpdated: "2026-04-12T01:00:00.000Z",
-            mode: "agent",
-            agent: "support-doc.fresh-reader",
-            model: "copilot/gpt-5-mini",
-            archived: false,
-            provider: "workspaceStorage",
-            sessionFile: firstMessageSessionFile
-          },
-          selection: {
-            mode: { status: "mismatch", requested: expectedAgentFileUri, observed: "agent" },
-            model: { status: "mismatch", requested: "copilot/gpt-5.4", observed: "copilot/gpt-5-mini" },
-            agent: { status: "dispatched-via-artifact", requested: "#support-doc.fresh-reader", observed: "/aa-live-chat-support-doc-fresh-reader-dispatch" },
-            dispatchedPrompt: "real prompt through create",
-            dispatchSurface: "prompt-file-slash-command",
-            dispatchedSlashCommand: "/aa-live-chat-support-doc-fresh-reader-dispatch",
-            allRequestedVerified: false
-          },
-          dispatch: {
-            surface: "prompt-file-slash-command",
-            dispatchedPrompt: "real prompt through create",
-            slashCommand: "/aa-live-chat-support-doc-fresh-reader-dispatch"
-          }
-        };
-      },
-      async listChats() {
-        return [{
-          id: "session-first-message",
-          title: "First Message Agent Dispatch Session",
-          lastUpdated: "2026-04-12T01:00:00.000Z",
-          mode: "agent",
-          agent: "anchor",
-          model: "copilot/gpt-5-mini",
-          archived: false,
-          provider: "workspaceStorage",
-          sessionFile: firstMessageSessionFile
-        }];
-      },
-      async getExactSessionInteropSupport() {
-        return {
-          canRevealExactSession: true,
-          canSendExactSessionMessage: false,
-          revealUnsupportedReason: undefined,
-          sendUnsupportedReason: "exact send unavailable"
-        };
-      },
-      async getFocusedChatInteropSupport() {
-        return {
-          canSubmitFocusedChatMessage: true,
-          focusInputCommand: "workbench.action.chat.focusInput",
-          submitCommand: "workbench.action.chat.submit",
-          unsupportedReason: undefined
-        };
-      },
-      async sendMessage() {
-        throw new Error("sendMessage should not be used when stabilized create must dispatch the custom agent as the first message.");
-      },
-      async sendFocusedMessage() {
-        throw new Error("sendFocusedMessage should not be used when the first-message custom-agent path goes through createChat.");
-      },
-      async closeVisibleTabs() {
-        return { ok: true };
-      },
-      async revealChat() {
-        return { ok: true };
-      }
-    };
-
-    const firstMessageResult = await createStabilizedChatAndSend(firstMessageInterop, {
-      prompt: "real prompt through create",
-      agentName: "support-doc.fresh-reader",
-      modelSelector: { id: "gpt-5.4", vendor: "copilot" },
-      blockOnResponse: true,
-      requireSelectionEvidence: false
-    });
-
-    const firstMessageSessionRaw = await fs.readFile(firstMessageSessionFile, "utf8");
-  assert(firstMessageCreateRequests.length === 1, "First-message stabilized create test did not issue exactly one create request.");
-  assert(firstMessageCreateRequests[0].prompt === "real prompt through create", "First-message stabilized create test did not send the real prompt as the initial create payload.");
-  assert(firstMessageCreateRequests[0].agentName === "support-doc.fresh-reader", "First-message stabilized create test did not keep the requested custom agent on the initial create payload.");
-  assert(firstMessageCreateRequests[0].requireSelectionEvidence === false, "First-message stabilized create test should defer final selection judgment until after patching.");
-    assert(firstMessageResult.seedPrompt === "(none; first-message custom-agent dispatch)", `First-message stabilized create test did not report the expected no-seed marker. Got: ${firstMessageResult.seedPrompt}`);
-    assert(firstMessageResult.realPromptDispatchAttempted === true, "First-message stabilized create test did not record that the real prompt was dispatched as part of create.");
-    assert(firstMessageResult.workflow.session?.mode === expectedAgentFileUri, "First-message stabilized create test did not reflect the patched custom mode in the final workflow session.");
-    assert(firstMessageResult.workflow.selection?.agent.status === "verified", "First-message stabilized create test did not verify the custom agent after the patched create flow.");
-    assert(firstMessageSessionRaw.includes(`"id":"${expectedAgentFileUri}"`), "First-message stabilized create test did not append the requested mode patch to the session file.");
-    assert(firstMessageSessionRaw.includes('"identifier":"copilot/gpt-5.4"'), "First-message stabilized create test did not append the requested model patch to the session file.");
 
     const companionOnlyFile = path.join(companionDir, "companion-only.agent.test.md");
     await fs.writeFile(companionOnlyFile, "# companion-only test\n", "utf8");
@@ -2867,6 +2771,7 @@ async function runStabilizedCreateWorkflowChecks() {
   assert(companionOnlyCreateRequests[0].modelSelector === undefined, "Companion-only stabilized workflow test should keep the seed create neutral.");
   assert(companionOnlyCreateRequests[0].allowUnsafeCreateWithoutAgent === true, "Companion-only stabilized workflow test did not opt the neutral seed create into the internal unsafe-create escape hatch.");
   assert(companionOnlyRequests.length === 1, "Companion-only stabilized workflow test did not send the real prompt exactly once.");
+  assert(companionOnlyRequests[0].agentName === "companion-only", `Companion-only stabilized workflow test did not preserve the requested agent on the follow-up send. Got agentName=${companionOnlyRequests[0].agentName}`);
   assert(companionOnlyRequests[0].mode === undefined, `Companion-only stabilized workflow test should not resolve a workspace runtime mode from a companion file. Got: ${companionOnlyRequests[0].mode}`);
   assert(companionOnlyResult.resolvedModeId === undefined, `Companion-only stabilized workflow test incorrectly resolved a workspace runtime mode from a companion file. Got: ${companionOnlyResult.resolvedModeId}`);
   assert(companionOnlyResult.patchedModeId === undefined, "Companion-only stabilized workflow test should not patch mode from a companion file pretending to be a workspace runtime agent.");
