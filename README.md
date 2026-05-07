@@ -236,9 +236,8 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: requested agent selection is preserved or explicitly reported as unverified on the current Windows host.
 		- [x] Use Case: exact follow-up send either reaches the intended Local chat session or fails explicitly without retarget-prone fallback on the current Windows host.
 		- [x] Unit Test: `create-chat-direct-agent-command` passes as an approved reliability gate rather than only existing and being exercised.
-		- [x] Unit Test: `stabilized-create-workflow` passes as an approved reliability gate rather than only existing and being exercised.
 		- [x] Unit Test: `session-send-workflow` passes as an approved reliability gate rather than only existing and being exercised.
-		- [x] Manual Test: host validation confirmed stabilized create with verified requested agent selection, and exact follow-up send failed explicitly rather than retargeting on the current Windows host.
+		- [x] Manual Test: host validation confirmed direct create with first visible `/aa` dispatch, verified requested agent selection, and same-chat follow-up without repeated `/aa`.
 		- [ ] Skill: role-facing guidance exists for exact live-chat create and send.
 		- [ ] Skill Test: exact live-chat create and send guidance has been validated against current behavior.
 

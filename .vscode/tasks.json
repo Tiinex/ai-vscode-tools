@@ -91,12 +91,12 @@
 			"isBackground": false
 		},
 		{
-			"label": "stabilized create checks",
+			"label": "direct create checks",
 			"type": "shell",
 			"command": "node",
 			"args": [
 				"tests/test.mjs",
-				"stabilized-create-workflow"
+				"create-chat-direct-agent-command"
 			],
 			"isBackground": false
 		},
@@ -117,7 +117,7 @@
 			"args": [
 				"tests/test.mjs",
 				"session-send-workflow",
-				"stabilized-create-workflow"
+				"create-chat-direct-agent-command"
 			],
 			"isBackground": false
 		},

@@ -1,12 +1,11 @@
 import path from "node:path";
 import * as vscode from "vscode";
-import { hasObservedCustomAgentMismatch, type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, type CreateChatRequest, type SendChatMessageRequest } from "./chatInterop";
+import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, type CreateChatRequest, type SendChatMessageRequest } from "./chatInterop";
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
 import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
 import { probeLocalReopenCandidates, renderLocalReopenProbeMarkdown } from "./chatInterop/reopenProbe";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
-import { createStabilizedChatAndSend } from "./chatInterop/stabilizedCreateWorkflow";
 import { getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
 import {
   buildLiveChatSupportMatrix,
@@ -587,7 +586,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route when the first visible message should carry the requested agent.",
-    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the first visible user request is dispatched through a temporary prompt-file slash command so the chat starts cleanly with the requested role. Prefer this for normal agent-chat creation. Use send_message_with_lifecycle only when startup state must first be stabilized or patched before the real prompt. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the first visible user request is dispatched through a temporary prompt-file slash command so the chat starts cleanly with the requested role. Prefer this for normal agent-chat creation. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
     toolReferenceName: "create-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -692,47 +691,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         }
       },
       required: ["sessionId"]
-    }
-  },
-  {
-    name: "send_message_with_lifecycle",
-    displayName: "Send Message With Lifecycle",
-    userDescription: "Escalation create route when startup state must be stabilized before the real prompt.",
-    modelDescription: "Stabilized Local create route. Seeds a new chat, patches persisted mode or model when needed, and then continues through the normal Local follow-up path. Use this only when startup state must be stabilized before the real prompt; it is not the normal clean observer-facing create path. For ordinary new agent chats, prefer create_live_agent_chat so the first visible message can start directly with the requested role. This tool still depends on the same Local follow-up surface and cannot bypass host limits such as missing ordinary Local exact-session send.",
-    toolReferenceName: "send-message-with-lifecycle",
-    inputSchema: {
-      type: "object",
-      properties: {
-        prompt: {
-          type: "string",
-          description: "The real prompt to send after the lifecycle has stabilized the target chat."
-        },
-        agentName: {
-          type: "string",
-          description: "Optional requested custom agent name. The lifecycle will resolve a workspace agent file when possible and patch persisted mode before the real prompt is sent."
-        },
-        mode: {
-          type: "string",
-          description: "Optional explicit mode id to patch into persisted session state before the real prompt is sent."
-        },
-        modelId: {
-          type: "string",
-          description: "Optional model identifier to request during create and patch from persisted metadata if the create path falls back."
-        },
-        modelVendor: {
-          type: "string",
-          description: "Optional model vendor for the requested model selector."
-        },
-        blockOnResponse: {
-          type: "boolean",
-          description: "Block until the real follow-up response is produced when supported by the underlying lifecycle path."
-        },
-        requireSelectionEvidence: {
-          type: "boolean",
-          description: "Fail if the final lifecycle result cannot explicitly evidence the requested selection."
-        }
-      },
-      required: ["prompt"]
     }
   },
   {
@@ -1150,160 +1108,6 @@ function formatArtifactDeletionNotes(report: ChatCommandResult["artifactDeletion
     `Missing Artifact Paths: ${report.missingPaths.length > 0 ? report.missingPaths.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`,
     `Lingering Artifact Paths: ${(report.lingeringPaths?.length ?? 0) > 0 ? report.lingeringPaths!.map((artifactPath) => JSON.stringify(artifactPath)).join(", ") : "-"}`
   ];
-}
-
-function formatStabilizedLifecycleResult(
-  result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>,
-  extraNotes: string[] = []
-): string {
-  if (!result.workflow.ok) {
-    throw new Error(result.workflow.reason ?? result.workflow.error ?? "Failed to complete stabilized live chat lifecycle.");
-  }
-
-  const notes = [
-    `Seed Prompt Used: ${JSON.stringify(result.seedPrompt)}`,
-    `Initial Create Session ID: ${result.createResult.session?.id ?? "-"}`,
-    `Resolved Mode For Stabilization: ${result.resolvedModeId ?? "-"}`,
-    `Persisted Mode Patch Applied: ${result.patchedModeId ?? "no"}`,
-    `Persisted Model Patch Applied: ${result.patchedModelId ?? "no"}`,
-    ...extraNotes
-  ];
-
-  return formatChatMutationResult(
-    "Live Agent Chat Updated Via Stabilized Lifecycle",
-    result.workflow.session,
-    result.workflow.selection,
-    result.workflow.revealLifecycle,
-    notes
-  );
-}
-
-const STABILIZED_RECOVERY_POLL_DELAY_MS = 1000;
-const STABILIZED_RECOVERY_POLL_ATTEMPTS = 8;
-
-async function tryRecoverCompletedStabilizedLifecycle(
-  chatInterop: ChatInteropApi,
-  result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>
-): Promise<{ result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>; notes: string[] } | undefined> {
-  if (result.workflow.ok) {
-    return undefined;
-  }
-
-  if (result.realPromptDispatchAttempted !== true) {
-    return undefined;
-  }
-
-  const sessionId = result.workflow.session?.id ?? result.createResult.session?.id;
-  if (!sessionId) {
-    return undefined;
-  }
-
-  const recoveredSession = await waitForRecoveredSettledSession(chatInterop, sessionId);
-  if (!recoveredSession) {
-    return undefined;
-  }
-
-  return {
-    result: {
-      ...result,
-      workflow: {
-        ...result.workflow,
-        ok: true,
-        reason: undefined,
-        error: undefined,
-        session: recoveredSession,
-        selection: result.workflow.selection ?? result.createResult.selection,
-        revealLifecycle: result.workflow.revealLifecycle ?? result.createResult.revealLifecycle
-      }
-    },
-    notes: [
-      "Completion Recovery: persisted session state settled after the initial tool error, so this result was recovered from stored session evidence."
-    ]
-  };
-}
-
-async function waitForRecoveredSettledSession(
-  chatInterop: ChatInteropApi,
-  sessionId: string
-): Promise<ChatSessionSummary | undefined> {
-  for (let attempt = 0; attempt <= STABILIZED_RECOVERY_POLL_ATTEMPTS; attempt += 1) {
-    const session = (await chatInterop.listChats()).find((candidate) => candidate.id === sessionId);
-    if (isRecoveredSessionSettled(session)) {
-      return session;
-    }
-
-    if (attempt < STABILIZED_RECOVERY_POLL_ATTEMPTS) {
-      await delayStabilizedRecovery(STABILIZED_RECOVERY_POLL_DELAY_MS);
-    }
-  }
-
-  return undefined;
-}
-
-function isRecoveredSessionSettled(session: ChatSessionSummary | undefined): boolean {
-  if (!session) {
-    return false;
-  }
-
-  if ((session.pendingRequestCount ?? 0) > 0) {
-    return false;
-  }
-
-  if (session.lastRequestCompleted === false) {
-    return false;
-  }
-
-  if (session.hasPendingEdits === true) {
-    return session.lastRequestCompleted === true && (session.pendingRequestCount ?? 0) === 0;
-  }
-
-  return true;
-}
-
-function delayStabilizedRecovery(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function throwOnUnsafeStabilizedCreateSelection(
-  chatInterop: ChatInteropApi,
-  input: LiveChatMutationInput,
-  result: Awaited<ReturnType<typeof createStabilizedChatAndSend>>
-): Promise<void> {
-  const selection = result.workflow.selection;
-  if (!selection) {
-    return;
-  }
-
-  const failures: string[] = [];
-  if (input.mode?.trim() && selection.mode.status !== "verified") {
-    failures.push(`Mode selection did not verify: ${formatSelectionCheck(selection.mode)}`);
-  }
-  if (hasObservedCustomAgentMismatch(input.agentName, selection)) {
-    failures.push(`Agent selection resolved to the wrong persisted participant: ${formatSelectionCheck(selection.agent)}`);
-  } else if (input.agentName?.trim() && input.requireSelectionEvidence && selection.agent.status !== "verified") {
-    failures.push(`Agent selection did not verify: ${formatSelectionCheck(selection.agent)}`);
-  }
-  if (input.modelId?.trim() && selection.model.status !== "verified") {
-    failures.push(`Model selection did not verify: ${formatSelectionCheck(selection.model)}`);
-  }
-
-  if (failures.length === 0) {
-    return;
-  }
-
-  const sessionId = result.workflow.session?.id ?? result.createResult.session?.id;
-  let cleanupNote = "";
-  if (sessionId) {
-    const cleanupResult = await chatInterop.closeVisibleTabs(sessionId);
-    if (cleanupResult.ok) {
-      const closedCount = cleanupResult.revealLifecycle?.closedMatchingVisibleTabs ?? 0;
-      cleanupNote = ` Visible cleanup closed ${closedCount} matching tabs for the mismatched chat.`;
-    }
-  }
-
-  throw new Error(
-    `${failures.join(" ")} The requested create-time selection would otherwise inherit unsafe UI state on this build.${cleanupNote}`
-  );
 }
 
 function formatSelectionCheck(check: NonNullable<ChatCommandResult["selection"]>["agent"]): string {

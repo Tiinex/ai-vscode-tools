@@ -313,7 +313,7 @@ export function buildCreateChatSelectionBlocker(
   }
 
   if (!request.agentName?.trim() && request.allowUnsafeCreateWithoutAgent !== true) {
-    return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use send_message_with_lifecycle with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
+    return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use create_live_agent_chat with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
   if (request.requireSelectionEvidence) {

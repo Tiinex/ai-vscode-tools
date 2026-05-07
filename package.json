@@ -801,7 +801,7 @@
         "name": "create_live_agent_chat",
         "displayName": "Create Live Agent Chat",
         "userDescription": "Preferred clean new-chat route when the first visible message should carry the requested agent.",
-        "modelDescription": "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the first visible user request is dispatched through a temporary prompt-file slash command so the chat starts cleanly with the requested role. Prefer this for normal agent-chat creation. Use send_message_with_lifecycle only when startup state must first be stabilized or patched before the real prompt. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+        "modelDescription": "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the first visible user request is dispatched through a temporary prompt-file slash command so the chat starts cleanly with the requested role. Prefer this for normal agent-chat creation. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "create-live-agent-chat",
         "inputSchema": {
@@ -838,50 +838,6 @@
             "requireSelectionEvidence": {
               "type": "boolean",
               "description": "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
-            }
-          },
-          "required": [
-            "prompt"
-          ]
-        }
-      },
-      {
-        "name": "send_message_with_lifecycle",
-        "displayName": "Send Message With Lifecycle",
-        "userDescription": "Escalation create route when startup state must be stabilized before the real prompt.",
-        "modelDescription": "Stabilized Local create route. Seeds a new chat, patches persisted mode or model when needed, and then continues through the normal Local follow-up path. Use this only when startup state must be stabilized before the real prompt; it is not the normal clean observer-facing create path. For ordinary new agent chats, prefer create_live_agent_chat so the first visible message can start directly with the requested role. This tool still depends on the same Local follow-up surface and cannot bypass host limits such as missing ordinary Local exact-session send.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "send-message-with-lifecycle",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "prompt": {
-              "type": "string",
-              "description": "The real prompt to send after the lifecycle has stabilized the target chat."
-            },
-            "agentName": {
-              "type": "string",
-              "description": "Optional requested custom agent name. The lifecycle will resolve a workspace agent file when possible and patch persisted mode before the real prompt is sent."
-            },
-            "mode": {
-              "type": "string",
-              "description": "Optional explicit mode id to patch into persisted session state before the real prompt is sent."
-            },
-            "modelId": {
-              "type": "string",
-              "description": "Optional model identifier to request during create and patch from persisted metadata if the create path falls back."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Optional model vendor for the requested model selector."
-            },
-            "blockOnResponse": {
-              "type": "boolean",
-              "description": "Block until the real follow-up response is produced when supported by the underlying lifecycle path."
-            },
-            "requireSelectionEvidence": {
-              "type": "boolean",
-              "description": "Fail if the final lifecycle result cannot explicitly evidence the requested selection."
             }
           },
           "required": [
