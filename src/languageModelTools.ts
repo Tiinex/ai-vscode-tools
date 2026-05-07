@@ -118,6 +118,14 @@ interface SendCopilotCliPromptInput {
   prompt: string;
 }
 
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
 type DiscoveryScope = "all-local" | "current-workspace";
 
 interface ListLiveChatsInput {
@@ -154,10 +162,6 @@ interface DeleteLiveChatArtifactsInput {
   sessionId: string;
 }
 
-interface ScheduleOfflineLiveChatCleanupInput {
-  sessionId: string;
-}
-
 interface FocusedEditorChatSelectionInput {
   sessionId?: string;
 }
@@ -173,9 +177,12 @@ interface LiveChatMutationInput {
   requireSelectionEvidence?: boolean;
 }
 
-interface CreateDisposableLocalDeleteProbeInput extends Omit<LiveChatMutationInput, "prompt"> {
+interface CreateDisposableLocalDeleteProbeInput {
   prompt?: string;
   anchor?: string;
+  partialQuery?: boolean;
+  blockOnResponse?: boolean;
+  requireSelectionEvidence?: boolean;
 }
 
 interface DisposableDeleteProbeCommandResult {
@@ -625,7 +632,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "create_disposable_local_delete_probe",
     displayName: "Create Disposable Local Delete Probe",
     userDescription: "Create a disposable Local probe chat for destructive delete verification.",
-    modelDescription: "Create a disposable Local probe chat specifically for destructive delete verification. This route generates or carries a unique anchor, uses the extension-hosted create path, and returns structured probe details so the target can be verified in persisted state before any destructive cleanup step. Prefer this over shell-side bootstrap helpers when you need a disposable test chat rather than a general new Local chat.",
+    modelDescription: "Create a disposable Local probe chat specifically for destructive delete verification. This is a thin convenience wrapper around neutral Local chat creation: it generates or carries a unique anchor, uses the extension-hosted create path, and returns structured probe details so the target can be verified in persisted state before any destructive cleanup step. Prefer this over shell-side bootstrap helpers when you need a disposable test chat rather than a general new Local chat. Do not treat it as a custom-agent or custom-mode create surface.",
     toolReferenceName: "create-disposable-local-delete-probe",
     inputSchema: {
       type: "object",
@@ -638,22 +645,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
           type: "string",
           description: "Optional probe prompt body. If omitted, the default READY probe prompt is used and prefixed with the anchor."
         },
-        agentName: {
-          type: "string",
-          description: "Optional custom agent selector to prefix as #agentName in the dispatched probe prompt."
-        },
-        mode: {
-          type: "string",
-          description: "Optional chat mode, for example Agent."
-        },
-        modelId: {
-          type: "string",
-          description: "Optional model identifier to select for the disposable probe chat."
-        },
-        modelVendor: {
-          type: "string",
-          description: "Optional model vendor for the probe model selector."
-        },
         partialQuery: {
           type: "boolean",
           description: "Open the probe with a partial query instead of dispatching a full request when supported."
@@ -664,7 +655,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         requireSelectionEvidence: {
           type: "boolean",
-          description: "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
+          description: "Fail if the final probe creation result cannot be explicitly evidenced after dispatch."
         }
       }
     }
@@ -689,8 +680,8 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
   {
     name: "delete_live_agent_chat_artifacts",
     displayName: "Delete Live Agent Chat Artifacts",
-    userDescription: "Close visible editor-hosted tabs and delete persisted artifacts for one live chat session.",
-    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier and then delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard.",
+    userDescription: "Close visible editor-hosted tabs, delete persisted artifacts, and queue exact offline cleanup for one live chat session.",
+    modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier, delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk, and then queue exact offline cleanup for the same session target. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard.",
     toolReferenceName: "delete-live-agent-chat-artifacts",
     inputSchema: {
       type: "object",
@@ -742,23 +733,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         }
       },
       required: ["prompt"]
-    }
-  },
-  {
-    name: "schedule_offline_live_agent_chat_cleanup",
-    displayName: "Schedule Offline Live Chat Cleanup",
-    userDescription: "Queue exact offline cleanup for one live chat session after VS Code exits.",
-    modelDescription: "Queue exact offline cleanup for one Local live chat session after VS Code exits. This destructive route requires the full session id, derives exact artifact paths for the target workspaceStorage session, and launches the detached offline cleanup runtime that waits for VS Code to close before pruning queued artifacts and state. Use this when direct delete should not run immediately or when you want the same exact-target semantics preserved for deferred cleanup.",
-    toolReferenceName: "schedule-offline-live-chat-cleanup",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: {
-          type: "string",
-          description: "Exact session identifier for the live chat whose offline cleanup should be queued. Prefixes are rejected for this destructive route."
-        }
-      },
-      required: ["sessionId"]
     }
   },
   {
@@ -1074,9 +1048,6 @@ function toDisposableDeleteProbeCommandRequest(input: CreateDisposableLocalDelet
   return {
     anchor: input.anchor,
     prompt: input.prompt,
-    agentName: input.agentName,
-    mode: input.mode,
-    modelSelector: input.modelId ? { id: input.modelId, vendor: input.modelVendor } : undefined,
     partialQuery: input.partialQuery,
     blockOnResponse: input.blockOnResponse,
     requireSelectionEvidence: input.requireSelectionEvidence,
@@ -1090,44 +1061,6 @@ function toSendChatMessageRequest(input: SendLiveChatMessageInput): SendChatMess
     allowTransportWorkaround: input.allowTransportWorkaround,
     ...toCreateChatRequest(input)
   };
-}
-
-function buildTransportDecoyPrompt(): string {
-  return `AA_TRANSPORT_DECOY_${Date.now()} Reply with exactly: DECOY_ACK`;
-}
-
-async function tryPrepareLatestSessionTransportWorkaround(
-  chatInterop: ChatInteropApi,
-  request: SendChatMessageRequest
-): Promise<string[]> {
-  const chats = await chatInterop.listChats();
-  const guardReason = getExactSelfTargetingReason(chats, request.sessionId, "send");
-  if (!guardReason) {
-    return [];
-  }
-
-  if (!request.allowTransportWorkaround) {
-    throw new Error(guardReason);
-  }
-
-  const exactSupport = await chatInterop.getExactSessionInteropSupport();
-  if (exactSupport.canSendExactSessionMessage) {
-    throw new Error(`${guardReason} Exact Local send is available on this build, so the decoy workaround is intentionally disabled here.`);
-  }
-
-  const decoyResult = await chatInterop.createChat({
-    prompt: buildTransportDecoyPrompt(),
-    blockOnResponse: false,
-    requireSelectionEvidence: false
-  });
-  if (!decoyResult.ok || !decoyResult.session?.id) {
-    throw new Error(decoyResult.reason ?? decoyResult.error ?? "Failed to create the transport decoy chat needed to break latest-session ambiguity.");
-  }
-  return [
-    "Transport Workaround Used: latest-session decoy",
-    `Transport Decoy Session ID: ${decoyResult.session.id}`,
-    "Transport Workaround Interpretation: this run used an explicit decoy to break the heuristic latest-session self-targeting guard before the real send. Treat it as transport-workaround evidence, not strict exact-session proof."
-  ];
 }
 
 function formatChatMutationResult(
@@ -1446,15 +1379,12 @@ function formatOfflineCleanupQueuedResult(
   ].join("\n");
 }
 
-async function scheduleOfflineLiveChatCleanup(
+async function queueOfflineLiveChatCleanupForResolvedSession(
   context: vscode.ExtensionContext,
-  chatInterop: ChatInteropApi,
-  targetSessionId: string
+  session: ChatSessionSummary,
+  workspaceStorageDir: string,
+  globalStorageDir = context.globalStorageUri.fsPath
 ): Promise<string> {
-  // This route only queues exact-target cleanup for after VS Code exits, so it
-  // must not inherit the live delete self-target heuristic.
-  const { session, workspaceStorageDir } = await resolveExactWorkspaceStorageLiveChatForOfflineCleanup(chatInterop, targetSessionId);
-  const globalStorageDir = context.globalStorageUri.fsPath;
   const requestsPath = await queueOfflineLocalChatCleanupRequest(
     globalStorageDir,
     buildWorkspaceStorageOfflineLocalChatCleanupRequest(workspaceStorageDir, session.id)
@@ -1695,26 +1625,33 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           new LiveChatTool<DeleteLiveChatArtifactsInput>(
             (input) => `Deleting live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
             async (input) => {
+              const { session, workspaceStorageDir } = await resolveExactWorkspaceStorageLiveChatForOfflineCleanup(chatInterop, input.sessionId);
               await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "delete-artifacts");
               const result = await chatInterop.deleteChat(input.sessionId);
               if (!result.ok) {
                 throw new Error(result.reason ?? result.error ?? `Failed to delete live agent chat artifacts for ${input.sessionId}.`);
+              }
+              const notes = formatArtifactDeletionNotes(result.artifactDeletion);
+              try {
+                const queuedResult = await queueOfflineLiveChatCleanupForResolvedSession(context, session, workspaceStorageDir);
+                notes.push(
+                  "Offline Cleanup Queued: yes",
+                  ...queuedResult.split(/\r?\n/).filter((line) => line.startsWith("- ")).map((line) => line.slice(2))
+                );
+              } catch (error) {
+                notes.push(
+                  "Offline Cleanup Queued: no",
+                  `Offline Cleanup Queue Error: ${errorMessage(error)}`
+                );
               }
               return formatChatMutationResult(
                 "Live Agent Chat Artifacts Deleted",
                 result.session,
                 result.selection,
                 result.revealLifecycle,
-                formatArtifactDeletionNotes(result.artifactDeletion)
+                notes
               );
             }
-          )
-        ),
-        vscode.lm.registerTool(
-          "schedule_offline_live_agent_chat_cleanup",
-          new LiveChatTool<ScheduleOfflineLiveChatCleanupInput>(
-            (input) => `Queueing offline live chat cleanup for ${JSON.stringify(input.sessionId)}`,
-            async (input) => scheduleOfflineLiveChatCleanup(context, chatInterop, input.sessionId)
           )
         ),
         vscode.lm.registerTool(
@@ -1755,7 +1692,6 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             (input) => `Sending a message to live agent chat ${JSON.stringify(input.sessionId)}`,
             async (input) => {
               const request = toSendChatMessageRequest(input);
-              const transportNotes = await tryPrepareLatestSessionTransportWorkaround(chatInterop, request);
               const result = await sendMessageToSession(chatInterop, request);
               if (!result.ok) {
                 throw new Error(result.reason ?? result.error ?? `Failed to send a message to live agent chat ${input.sessionId}.`);
@@ -1764,8 +1700,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
                 "Live Agent Chat Updated",
                 result.session,
                 result.selection,
-                result.revealLifecycle,
-                transportNotes
+                result.revealLifecycle
               );
             }
           )

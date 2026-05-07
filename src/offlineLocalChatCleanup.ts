@@ -26,6 +26,7 @@ export interface OfflineLocalChatCleanupReport {
   removedModelEntries?: number;
   removedStateEntries?: number;
   removedTodoEntries?: number;
+  removedEditorChatViewStateEntries?: number;
   missing?: boolean;
 }
 
@@ -216,6 +217,7 @@ export function formatOfflineLocalChatCleanupSummary(summary: OfflineLocalChatCl
     removedModelEntries: number;
     removedStateEntries: number;
     removedTodoEntries: number;
+    removedEditorChatViewStateEntries: number;
   }>((accumulator, report) => {
     accumulator.dbCount += report.missing ? 0 : 1;
     accumulator.deletedArtifactCount += report.deletedArtifactPaths?.length ?? 0;
@@ -224,6 +226,7 @@ export function formatOfflineLocalChatCleanupSummary(summary: OfflineLocalChatCl
     accumulator.removedModelEntries += report.removedModelEntries ?? 0;
     accumulator.removedStateEntries += report.removedStateEntries ?? 0;
     accumulator.removedTodoEntries += report.removedTodoEntries ?? 0;
+    accumulator.removedEditorChatViewStateEntries += report.removedEditorChatViewStateEntries ?? 0;
     return accumulator;
   }, {
     dbCount: 0,
@@ -232,7 +235,8 @@ export function formatOfflineLocalChatCleanupSummary(summary: OfflineLocalChatCl
     removedIndexEntries: 0,
     removedModelEntries: 0,
     removedStateEntries: 0,
-    removedTodoEntries: 0
+    removedTodoEntries: 0,
+    removedEditorChatViewStateEntries: 0
   });
 
   return [
@@ -242,6 +246,7 @@ export function formatOfflineLocalChatCleanupSummary(summary: OfflineLocalChatCl
     `Removed index entries: ${totals.removedIndexEntries}.`,
     `Removed model cache entries: ${totals.removedModelEntries}.`,
     `Removed state cache entries: ${totals.removedStateEntries}.`,
-    `Removed todo entries: ${totals.removedTodoEntries}.`
+    `Removed todo entries: ${totals.removedTodoEntries}.`,
+    `Removed editor chat view state entries: ${totals.removedEditorChatViewStateEntries}.`
   ].join(" ");
 }

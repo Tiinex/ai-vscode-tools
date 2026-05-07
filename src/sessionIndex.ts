@@ -20,9 +20,14 @@ const CHAT_SESSION_INDEX_KEY = "chat.ChatSessionStore.index";
 const AGENT_SESSIONS_MODEL_CACHE_KEY = "agentSessions.model.cache";
 const AGENT_SESSIONS_STATE_CACHE_KEY = "agentSessions.state.cache";
 const CHAT_TODO_LIST_KEY = "memento/chat-todo-list";
+const WORKBENCH_EDITOR_CHAT_SESSION_KEY = "memento/workbench.editor.chatSession";
 
 interface AgentSessionModelCacheEntry {
   resource?: string;
+}
+
+interface WorkbenchEditorChatSessionState {
+  chatEditorViewState?: unknown[];
 }
 
 export interface WorkspaceSessionStatePruneReport {
@@ -30,6 +35,7 @@ export interface WorkspaceSessionStatePruneReport {
   removedModelCacheEntries: number;
   removedStateCacheEntries: number;
   removedTodoListEntry: boolean;
+  removedEditorChatViewStateEntries: number;
 }
 
 function shouldIncludeIndexedSession(entry: WorkspaceSessionIndexEntry): boolean {
@@ -95,6 +101,7 @@ export async function pruneWorkspaceSessionState(
   let removedModelCacheEntries = 0;
   let removedStateCacheEntries = 0;
   let removedTodoListEntry = false;
+  let removedEditorChatViewStateEntries = 0;
 
   for (const dbPath of dbPaths) {
     const report = await pruneWorkspaceSessionStateFile(dbPath, sessionId);
@@ -107,6 +114,7 @@ export async function pruneWorkspaceSessionState(
     removedModelCacheEntries += report.removedModelCacheEntries;
     removedStateCacheEntries += report.removedStateCacheEntries;
     removedTodoListEntry = removedTodoListEntry || report.removedTodoListEntry;
+    removedEditorChatViewStateEntries += report.removedEditorChatViewStateEntries;
   }
 
   if (!sawDatabase) {
@@ -117,7 +125,8 @@ export async function pruneWorkspaceSessionState(
     removedIndexEntry,
     removedModelCacheEntries,
     removedStateCacheEntries,
-    removedTodoListEntry
+    removedTodoListEntry,
+    removedEditorChatViewStateEntries
   };
 }
 
@@ -135,6 +144,7 @@ async function pruneWorkspaceSessionStateFile(
       let removedModelCacheEntries = 0;
       let removedStateCacheEntries = 0;
       let removedTodoListEntry = false;
+      let removedEditorChatViewStateEntries = 0;
 
       const rawIndex = readItemTableTextValue(db, CHAT_SESSION_INDEX_KEY);
       if (typeof rawIndex === "string" && rawIndex.trim()) {
@@ -188,6 +198,17 @@ async function pruneWorkspaceSessionStateFile(
         }
       }
 
+      const rawWorkbenchEditorChatSession = readItemTableTextValue(db, WORKBENCH_EDITOR_CHAT_SESSION_KEY);
+      if (typeof rawWorkbenchEditorChatSession === "string" && rawWorkbenchEditorChatSession.trim()) {
+        const parsed = JSON.parse(rawWorkbenchEditorChatSession) as WorkbenchEditorChatSessionState;
+        const filtered = filterWorkbenchEditorChatSessionState(parsed, sessionId);
+        removedEditorChatViewStateEntries = filtered.removed;
+        if (removedEditorChatViewStateEntries > 0) {
+          writeItemTableTextValue(db, WORKBENCH_EDITOR_CHAT_SESSION_KEY, JSON.stringify(filtered.filtered));
+          dirty = true;
+        }
+      }
+
       if (dirty) {
         const exported = db.export();
         await fs.writeFile(dbPath, Buffer.from(exported));
@@ -197,7 +218,8 @@ async function pruneWorkspaceSessionStateFile(
         removedIndexEntry,
         removedModelCacheEntries,
         removedStateCacheEntries,
-        removedTodoListEntry
+        removedTodoListEntry,
+        removedEditorChatViewStateEntries
       };
     } finally {
       db.close();
@@ -205,6 +227,28 @@ async function pruneWorkspaceSessionStateFile(
   } catch {
     return undefined;
   }
+}
+
+function filterWorkbenchEditorChatSessionState(
+  payload: WorkbenchEditorChatSessionState,
+  sessionId: string
+): { filtered: WorkbenchEditorChatSessionState; removed: number } {
+  const entries = Array.isArray(payload?.chatEditorViewState) ? payload.chatEditorViewState : [];
+  const filteredEntries = entries.filter((entry) => {
+    if (!Array.isArray(entry) || typeof entry[0] !== "string") {
+      return true;
+    }
+
+    return entry[0] !== toLocalChatSessionResourceString(sessionId);
+  });
+
+  return {
+    filtered: {
+      ...payload,
+      chatEditorViewState: filteredEntries
+    },
+    removed: entries.length - filteredEntries.length
+  };
 }
 
 function readItemTableTextValue(db: SqlDatabaseLike, key: string): string | undefined {

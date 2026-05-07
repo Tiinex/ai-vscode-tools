@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $extensionsRoot = Join-Path $env:USERPROFILE '.vscode\extensions'
 $targetId = 'local.ai-vscode-tools'
+$staleTargetIds = @('local.ai-vscode-tooling')
 $linkPath = Join-Path $extensionsRoot $targetId
 $extensionsJsonPath = Join-Path $extensionsRoot 'extensions.json'
 $distEntry = Join-Path $repoRoot 'dist\extension.js'
@@ -150,6 +151,34 @@ function Set-ExtensionRegistryValue {
     }
 }
 
+function ConvertFrom-JsonCompat {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RawJson
+    )
+
+    $command = Get-Command ConvertFrom-Json -ErrorAction Stop
+    if ($command.Parameters.ContainsKey('Depth')) {
+        return $RawJson | ConvertFrom-Json -Depth 100
+    }
+
+    return $RawJson | ConvertFrom-Json
+}
+
+function ConvertTo-JsonCompat {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Value
+    )
+
+    $command = Get-Command ConvertTo-Json -ErrorAction Stop
+    if ($command.Parameters.ContainsKey('Depth')) {
+        return $Value | ConvertTo-Json -Depth 100
+    }
+
+    return $Value | ConvertTo-Json
+}
+
 function Repair-ExtensionRegistryMetadata {
     param(
         [Parameter(Mandatory = $true)]
@@ -169,7 +198,7 @@ function Repair-ExtensionRegistryMetadata {
         return $false
     }
 
-    $registry = $raw | ConvertFrom-Json -Depth 100
+    $registry = ConvertFrom-JsonCompat -RawJson $raw
     $entries = if ($registry -is [System.Collections.IEnumerable] -and -not ($registry -is [string])) {
         @($registry)
     }
@@ -242,9 +271,69 @@ function Repair-ExtensionRegistryMetadata {
         return $false
     }
 
-    $json = $registry | ConvertTo-Json -Depth 100
+    $json = ConvertTo-JsonCompat -Value $registry
     Set-Content -LiteralPath $RegistryPath -Value $json -Encoding UTF8
     return $true
+}
+
+function Remove-StaleExtensionRegistryEntries {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RegistryPath,
+        [Parameter(Mandatory = $true)]
+        [string[]]$StaleIds
+    )
+
+    if (-not (Test-Path $RegistryPath)) {
+        return 0
+    }
+
+    $raw = Get-Content -LiteralPath $RegistryPath -Raw
+    if (-not $raw.Trim()) {
+        return 0
+    }
+
+    $registry = ConvertFrom-JsonCompat -RawJson $raw
+    $entries = if ($registry -is [System.Collections.IEnumerable] -and -not ($registry -is [string])) {
+        @($registry)
+    }
+    elseif ($registry.PSObject.Properties.Match('extensions').Count -gt 0) {
+        @($registry.extensions)
+    }
+    else {
+        @()
+    }
+
+    if ($entries.Count -eq 0) {
+        return 0
+    }
+
+    $removedCount = 0
+    $filteredEntries = @()
+    foreach ($entry in $entries) {
+        $id = Get-ExtensionRegistryIdentifierId -Entry $entry
+        if ($StaleIds -contains $id) {
+            $removedCount += 1
+            continue
+        }
+
+        $filteredEntries += $entry
+    }
+
+    if ($removedCount -eq 0) {
+        return 0
+    }
+
+    if ($registry -is [System.Collections.IEnumerable] -and -not ($registry -is [string])) {
+        $registry = $filteredEntries
+    }
+    else {
+        $registry.extensions = $filteredEntries
+    }
+
+    $json = ConvertTo-JsonCompat -Value $registry
+    Set-Content -LiteralPath $RegistryPath -Value $json -Encoding UTF8
+    return $removedCount
 }
 
 New-Item -ItemType Directory -Force -Path $extensionsRoot | Out-Null
@@ -278,6 +367,7 @@ else {
 }
 
 $registryUpdated = Repair-ExtensionRegistryMetadata -RegistryPath $extensionsJsonPath -TargetPath $linkPath -TargetId $targetId
+$staleRegistryEntriesRemoved = Remove-StaleExtensionRegistryEntries -RegistryPath $extensionsJsonPath -StaleIds $staleTargetIds
 
 $distPresent = Test-Path $distEntry
 
@@ -288,6 +378,7 @@ $distPresent = Test-Path $distEntry
     Targets = ($currentTargets -join '; ')
     StaleLinkRemoved = $staleLinkRemoved
     RegistryUpdated = $registryUpdated
+    StaleRegistryEntriesRemoved = $staleRegistryEntriesRemoved
     RegistryPath = $extensionsJsonPath
     DistEntryPresent = $distPresent
     ReloadRequired = $true

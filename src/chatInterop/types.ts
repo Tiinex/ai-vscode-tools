@@ -91,6 +91,9 @@ export interface CreateChatRequest {
   partialQuery?: boolean;
   blockOnResponse?: boolean;
   requireSelectionEvidence?: boolean;
+  // Internal-only escape hatch for disposable probe creation when the current
+  // host cannot complete the custom-agent new-chat bootstrap reliably.
+  allowUnsafeCreateWithoutAgent?: boolean;
   // If false, the focused-send call will return immediately after dispatch
   // without waiting for a persisted session mutation. Default: true (wait).
   waitForPersisted?: boolean;
@@ -309,7 +312,7 @@ export function buildCreateChatSelectionBlocker(
     return "Live createChat with explicit mode or model selection is unsupported on this VS Code/Copilot build because observed create-time selection can inherit the active chat UI state. Use createChat only without selection overrides, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
-  if (!request.agentName?.trim()) {
+  if (!request.agentName?.trim() && request.allowUnsafeCreateWithoutAgent !== true) {
     return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use send_message_with_lifecycle with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 

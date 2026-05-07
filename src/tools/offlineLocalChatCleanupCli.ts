@@ -7,6 +7,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import initSqlJs from "sql.js";
 import {
+  buildWorkspaceStorageOfflineLocalChatCleanupRequest,
   createOfflineLocalChatCleanupReportPath,
   getOfflineLocalChatCleanupLockPath,
   getOfflineLocalChatCleanupRequestsPath,
@@ -19,6 +20,7 @@ const INDEX_KEY = "chat.ChatSessionStore.index";
 const MODEL_KEY = "agentSessions.model.cache";
 const STATE_KEY = "agentSessions.state.cache";
 const TODO_KEY = "memento/chat-todo-list";
+const WORKBENCH_EDITOR_CHAT_SESSION_KEY = "memento/workbench.editor.chatSession";
 
 type SqlDatabaseLike = any;
 
@@ -155,6 +157,32 @@ function filterIndexPayload(payload: unknown, targetIds: Set<string>): { filtere
   };
 }
 
+function filterWorkbenchEditorChatSessionState(payload: unknown, targetIds: Set<string>): { filtered: unknown; removed: number } {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return { filtered: payload, removed: 0 };
+  }
+
+  const entries = Array.isArray((payload as { chatEditorViewState?: unknown }).chatEditorViewState)
+    ? ((payload as { chatEditorViewState: unknown[] }).chatEditorViewState)
+    : [];
+  const filteredEntries = entries.filter((entry) => {
+    if (!Array.isArray(entry) || typeof entry[0] !== "string") {
+      return true;
+    }
+
+    const sessionId = decodeSessionId(entry[0]);
+    return !sessionId || !targetIds.has(sessionId);
+  });
+
+  return {
+    filtered: {
+      ...(payload as Record<string, unknown>),
+      chatEditorViewState: filteredEntries
+    },
+    removed: entries.length - filteredEntries.length
+  };
+}
+
 async function deleteArtifactPaths(artifactPaths: string[], dryRun: boolean): Promise<{ deletedArtifactPaths: string[]; missingArtifactPaths: string[] }> {
   const deletedArtifactPaths: string[] = [];
   const missingArtifactPaths: string[] = [];
@@ -282,11 +310,13 @@ async function runCleanupJobs(
         const modelRaw = readValue(db, MODEL_KEY);
         const stateRaw = readValue(db, STATE_KEY);
         const todoRaw = readValue(db, TODO_KEY);
+        const workbenchEditorChatSessionRaw = readValue(db, WORKBENCH_EDITOR_CHAT_SESSION_KEY);
 
         const indexResult = filterIndexPayload(indexRaw ? JSON.parse(indexRaw) : undefined, targetIds);
         const modelResult = filterCacheEntries(modelRaw ? JSON.parse(modelRaw) : undefined, targetIds);
         const stateResult = filterCacheEntries(stateRaw ? JSON.parse(stateRaw) : undefined, targetIds);
         const todoResult = filterTodoMap(todoRaw ? JSON.parse(todoRaw) : undefined, targetIds);
+        const editorChatStateResult = filterWorkbenchEditorChatSessionState(workbenchEditorChatSessionRaw ? JSON.parse(workbenchEditorChatSessionRaw) : undefined, targetIds);
 
         if (!options.dryRun) {
           if (typeof indexRaw === "string") {
@@ -300,6 +330,9 @@ async function runCleanupJobs(
           }
           if (typeof todoRaw === "string") {
             writeValue(db, TODO_KEY, JSON.stringify(todoResult.filtered));
+          }
+          if (typeof workbenchEditorChatSessionRaw === "string") {
+            writeValue(db, WORKBENCH_EDITOR_CHAT_SESSION_KEY, JSON.stringify(editorChatStateResult.filtered));
           }
 
           await fs.writeFile(dbPath, Buffer.from(db.export()));
@@ -315,7 +348,8 @@ async function runCleanupJobs(
           removedIndexEntries: indexResult.removed,
           removedModelEntries: modelResult.removed,
           removedStateEntries: stateResult.removed,
-          removedTodoEntries: todoResult.removed
+          removedTodoEntries: todoResult.removed,
+          removedEditorChatViewStateEntries: editorChatStateResult.removed
         });
         artifactReportPending = false;
       } finally {
@@ -446,10 +480,14 @@ async function runPrune(values: ReturnType<typeof parseArgs>["values"]): Promise
     throw new Error("prune requires at least one --target-session-id in direct mode");
   }
 
+  const defaultArtifactPaths = normalizedTargetSessionIds.flatMap((sessionId) =>
+    buildWorkspaceStorageOfflineLocalChatCleanupRequest(workspaceStorageDir, sessionId).artifactPaths
+  );
+
   const jobs: CleanupJob[] = [{
     workspaceStorageDir,
     targetSessionIds: normalizedTargetSessionIds,
-    artifactPaths: filterArtifactPathsForWorkspace(workspaceStorageDir, artifactPaths)
+    artifactPaths: filterArtifactPathsForWorkspace(workspaceStorageDir, [...defaultArtifactPaths, ...artifactPaths])
   }];
   return runCleanupJobs(jobs, { dryRun });
 }

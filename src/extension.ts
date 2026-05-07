@@ -42,9 +42,13 @@ interface ExtensionError extends Error {
 
 type DiscoveryScope = "current-workspace" | "all-local";
 
-interface DisposableDeleteProbeCommandRequest extends Omit<CreateChatRequest, "prompt"> {
+interface DisposableDeleteProbeCommandRequest {
   anchor?: string;
   prompt?: string;
+  partialQuery?: boolean;
+  blockOnResponse?: boolean;
+  requireSelectionEvidence?: boolean;
+  waitForPersisted?: boolean;
   showNotification?: boolean;
 }
 
@@ -76,6 +80,22 @@ async function maybeReportOfflineLocalChatCleanup(context: vscode.ExtensionConte
 
   const reconcileResult = await reconcileOfflineLocalChatCleanupUx(summary);
   void vscode.window.showInformationMessage(formatOfflineLocalChatCleanupStartupMessage(summary, reconcileResult));
+}
+
+async function queueExactOfflineLocalChatCleanup(
+  context: vscode.ExtensionContext,
+  workspaceStorageDir: string,
+  sessionId: string
+): Promise<void> {
+  await queueOfflineLocalChatCleanupRequest(
+    context.globalStorageUri.fsPath,
+    buildWorkspaceStorageOfflineLocalChatCleanupRequest(workspaceStorageDir, sessionId)
+  );
+  launchOfflineLocalChatCleanup({
+    extensionRoot: context.extensionPath,
+    globalStorageDir: context.globalStorageUri.fsPath,
+    waitForPid: process.pid
+  });
 }
 
 export interface OfflineLocalChatCleanupUxReconcileResult {
@@ -404,14 +424,16 @@ async function createDisposableDeleteProbe(
   const probe = buildDisposableDeleteProbeSpec(request);
   const result = await runWithProgress("Creating disposable Local delete probe", () => chatInterop.createChat({
     prompt: probe.prompt,
-    agentName: request?.agentName,
-    mode: request?.mode,
-    modelSelector: request?.modelSelector,
+    agentName: undefined,
+    mode: undefined,
+    modelSelector: undefined,
     partialQuery: request?.partialQuery,
     blockOnResponse: request?.blockOnResponse ?? false,
     requireSelectionEvidence: request?.requireSelectionEvidence ?? false,
+    allowUnsafeCreateWithoutAgent: true,
     waitForPersisted: request?.waitForPersisted
   }));
+
   return {
     anchor: probe.anchor,
     prompt: probe.prompt,
@@ -626,40 +648,16 @@ function registerCommands(
             throw new Error(commandResultMessage(result, "Unable to delete Local chat artifacts"));
           }
           const message = commandResultMessage(result, "Deleted Local chat artifacts");
-          const scheduleAction = "Schedule offline cleanup";
-          const choice = resolved.workspaceStorageDir
-            ? await vscode.window.showInformationMessage(message, scheduleAction)
-            : await vscode.window.showInformationMessage(message);
-          if (choice === scheduleAction) {
-            await queueOfflineLocalChatCleanupRequest(
-              context.globalStorageUri.fsPath,
-              buildWorkspaceStorageOfflineLocalChatCleanupRequest(resolved.workspaceStorageDir, resolved.sessionId)
-            );
-            launchOfflineLocalChatCleanup({
-              extensionRoot: context.extensionPath,
-              globalStorageDir: context.globalStorageUri.fsPath,
-              waitForPid: process.pid
-            });
-            void vscode.window.showInformationMessage("Offline Local chat cleanup queued for the exact session target. Close VS Code completely to let the helper delete queued Local chat artifacts and prune scheduled workspace state.");
+          if (resolved.workspaceStorageDir) {
+            try {
+              await queueExactOfflineLocalChatCleanup(context, resolved.workspaceStorageDir, resolved.sessionId);
+              void vscode.window.showInformationMessage(`${message} Offline Local chat cleanup was queued for the exact session target. Close VS Code completely to let the helper delete queued Local chat artifacts and prune scheduled workspace state.`);
+            } catch (error) {
+              void vscode.window.showWarningMessage(`${message} Exact offline cleanup could not be queued automatically: ${errorMessage(error)}`);
+            }
+          } else {
+            void vscode.window.showInformationMessage(message);
           }
-        }, resolved);
-      }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTools.scheduleOfflineLocalChatCleanup", async (session?: SessionDescriptor) => {
-        const resolved = await resolveSession(adapter, getSessionStorageRoots(), session);
-        if (!resolved) {
-          return;
-        }
-        await runCommand(async () => {
-          await queueOfflineLocalChatCleanupRequest(
-            context.globalStorageUri.fsPath,
-            buildWorkspaceStorageOfflineLocalChatCleanupRequest(resolved.workspaceStorageDir, resolved.sessionId)
-          );
-          launchOfflineLocalChatCleanup({
-            extensionRoot: context.extensionPath,
-            globalStorageDir: context.globalStorageUri.fsPath,
-            waitForPid: process.pid
-          });
-          void vscode.window.showInformationMessage("Offline Local chat cleanup queued for the exact session target. Close VS Code completely to let the helper delete queued Local chat artifacts and prune scheduled workspace state.");
         }, resolved);
       })
     );
@@ -669,22 +667,8 @@ function registerCommands(
     context.subscriptions.push(
       vscode.commands.registerCommand("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe", async (request?: DisposableDeleteProbeCommandRequest) => {
         const showNotification = request?.showNotification ?? true;
-        const agentName = request?.agentName?.trim() || (showNotification ? await promptForAgentName("Create Disposable Local Delete Probe") : undefined);
-        if (!agentName) {
-          return {
-            anchor: request?.anchor?.trim() ?? "",
-            prompt: request?.prompt?.trim() ?? "",
-            result: {
-              ok: false,
-              reason: "An explicit agent name is required for safe disposable probe creation on this host."
-            }
-          } satisfies DisposableDeleteProbeCommandResult;
-        }
         try {
-          const output = await createDisposableDeleteProbe(chatInterop, {
-            ...request,
-            agentName
-          });
+          const output = await createDisposableDeleteProbe(chatInterop, request);
           if (showNotification) {
             const message = output.result.ok
               ? `${commandResultMessage(output.result, "Created disposable Local delete probe")} | anchor=${output.anchor}`
