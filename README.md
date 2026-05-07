@@ -200,7 +200,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: bounded inspection lanes are the intended default, and raw session files remain last resort only.
 		- [x] Unit Test: `manifest` passes.
 		- [x] Unit Test: `routing-guard` passes.
-		- [ ] Manual Test: host-level inspection flow is revalidated against the current Windows surface.
+		- [x] Manual Test: host-level inspection flow is revalidated against the current Windows surface.
 		- [ ] Skill: role-facing guidance exists for persisted session inspection.
 		- [ ] Skill Test: persisted session inspection guidance has been validated against current behavior.
 
