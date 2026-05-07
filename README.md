@@ -201,8 +201,8 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `manifest` passes.
 		- [x] Unit Test: `routing-guard` passes.
 		- [x] Manual Test: host-level inspection flow is revalidated against the current Windows surface.
-		- [ ] Skill: role-facing guidance exists for persisted session inspection.
-		- [ ] Skill Test: persisted session inspection guidance has been validated against current behavior.
+		- [x] Skill: role-facing guidance exists for persisted session inspection.
+		- [x] Skill Test: persisted session inspection guidance has been validated against current behavior.
 
 - Disposable local delete probes
 	- Windows
