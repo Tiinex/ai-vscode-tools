@@ -16,15 +16,18 @@ import {
 } from "./firstSlice";
 import { registerLanguageModelTools } from "./languageModelTools";
 import {
+  collectRemovedTargetSessionIds,
   buildWorkspaceStorageOfflineLocalChatCleanupRequest,
   formatOfflineLocalChatCleanupSummary,
   launchOfflineLocalChatCleanup,
   queueOfflineLocalChatCleanupRequest,
-  readAndDeleteOfflineLocalChatCleanupReports
+  readAndDeleteOfflineLocalChatCleanupReports,
+  type OfflineLocalChatCleanupSummary
 } from "./offlineLocalChatCleanup";
 import { buildDisposableDeleteProbeSpec, type DisposableDeleteProbeSpec } from "./disposableDeleteProbe";
 import { loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
+import { closeVisibleEditorChatTabsForSession } from "./chatInterop/editorTabLifecycle";
 
 const MAX_DIRECT_SESSION_FILE_OPEN_BYTES = 45 * 1024 * 1024;
 const SESSION_FILE_PREVIEW_HEAD_LINES = 12;
@@ -71,7 +74,52 @@ async function maybeReportOfflineLocalChatCleanup(context: vscode.ExtensionConte
     return;
   }
 
-  void vscode.window.showInformationMessage(formatOfflineLocalChatCleanupSummary(summary));
+  const reconcileResult = await reconcileOfflineLocalChatCleanupUx(summary);
+  void vscode.window.showInformationMessage(formatOfflineLocalChatCleanupStartupMessage(summary, reconcileResult));
+}
+
+export interface OfflineLocalChatCleanupUxReconcileResult {
+  reconciledSessionIds: string[];
+  closedCount: number;
+  closedLabels: string[];
+}
+
+export async function reconcileOfflineLocalChatCleanupUx(
+  summary: OfflineLocalChatCleanupSummary
+): Promise<OfflineLocalChatCleanupUxReconcileResult> {
+  const reconciledSessionIds = collectRemovedTargetSessionIds(summary);
+  const closedLabels = new Set<string>();
+  let closedCount = 0;
+
+  for (const sessionId of reconciledSessionIds) {
+    const result = await closeVisibleEditorChatTabsForSession({
+      sessionId,
+      sessionTitle: sessionId,
+      matchMode: "resource-only"
+    });
+    closedCount += result.closedCount;
+    for (const label of result.closedLabels) {
+      closedLabels.add(label);
+    }
+  }
+
+  return {
+    reconciledSessionIds,
+    closedCount,
+    closedLabels: [...closedLabels]
+  };
+}
+
+export function formatOfflineLocalChatCleanupStartupMessage(
+  summary: OfflineLocalChatCleanupSummary,
+  reconcileResult: OfflineLocalChatCleanupUxReconcileResult
+): string {
+  const base = formatOfflineLocalChatCleanupSummary(summary);
+  if (reconcileResult.reconciledSessionIds.length === 0) {
+    return base;
+  }
+
+  return `${base} Reconciled exact editor chat tabs for ${reconcileResult.reconciledSessionIds.length} removed session(s); closed ${reconcileResult.closedCount} tab(s).`;
 }
 
 async function openFileInWorkbench(uri: vscode.Uri): Promise<void> {

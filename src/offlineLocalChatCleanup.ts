@@ -201,6 +201,12 @@ export async function readAndDeleteOfflineLocalChatCleanupReports(
   }
 }
 
+export function collectRemovedTargetSessionIds(summary: OfflineLocalChatCleanupSummary): string[] {
+  return [...new Set(
+    summary.reports.flatMap((report) => report.removedTargetSessionIds ?? []).map((sessionId) => sessionId.trim()).filter(Boolean)
+  )];
+}
+
 export function formatOfflineLocalChatCleanupSummary(summary: OfflineLocalChatCleanupSummary): string {
   const totals = summary.reports.reduce<{
     dbCount: number;

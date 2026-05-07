@@ -36,6 +36,7 @@ const distChatInteropStabilizedCreateWorkflow = path.join(packageRoot, "dist", "
 const distOfflineLocalChatCleanup = path.join(packageRoot, "dist", "offlineLocalChatCleanup.js");
 const distDisposableDeleteProbe = path.join(packageRoot, "dist", "disposableDeleteProbe.js");
 const distFirstSlice = path.join(packageRoot, "dist", "firstSlice.js");
+const distExtension = path.join(packageRoot, "dist", "extension.js");
 const distCopilotCliSummary = path.join(packageRoot, "dist", "chatInterop", "copilotCliSummary.js");
 const distLocalToCopilotCliHandoff = path.join(packageRoot, "dist", "chatInterop", "localToCopilotCliHandoff.js");
 const distCopilotCliTools = path.join(packageRoot, "dist", "tools", "copilot-cli.js");
@@ -2871,6 +2872,14 @@ async function runStabilizedCreateWorkflowChecks() {
 
 async function runOfflineLocalChatCleanupChecks() {
   const cleanupModule = await import(pathToFileURL(distOfflineLocalChatCleanup).href);
+  const { createRequire } = await import('module');
+  const require = createRequire(import.meta.url);
+  const vscodeModule = require('vscode');
+  vscodeModule.ThemeIcon ??= class ThemeIcon {
+    constructor(id) {
+      this.id = id;
+    }
+  };
   const globalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-global");
   const directWorkspaceStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-workspace");
   const queuedIntegrationGlobalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-queued-global");
@@ -2960,6 +2969,86 @@ async function runOfflineLocalChatCleanupChecks() {
     cleanupModule.formatOfflineLocalChatCleanupSummary(summary).includes("Removed state cache entries: 22."),
     "Offline cleanup summary test did not aggregate report totals."
   );
+  assert(
+    JSON.stringify(cleanupModule.collectRemovedTargetSessionIds(summary)) === JSON.stringify(['session-drop-1']),
+    'Offline cleanup summary test did not expose the exact removed session ids from the consumed reports.'
+  );
+
+  const extensionModule = await import(pathToFileURL(distExtension).href);
+  const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
+  let visibleTabs = [
+    {
+      label: 'Deleted Session Tab',
+      isActive: true,
+      isDirty: false,
+      isPinned: false,
+      isPreview: false,
+      input: {
+        constructor: { name: 'ChatEditorInput' },
+        viewType: 'chat-view',
+        uri: { toString: () => `vscode-chat-session://local/${Buffer.from('session-drop-1').toString('base64')}` }
+      }
+    },
+    {
+      label: 'Keep Session Tab',
+      isActive: false,
+      isDirty: false,
+      isPinned: false,
+      isPreview: false,
+      input: {
+        constructor: { name: 'ChatEditorInput' },
+        viewType: 'chat-view',
+        uri: { toString: () => `vscode-chat-session://local/${Buffer.from('session-keep').toString('base64')}` }
+      }
+    },
+    {
+      label: 'Title Only Session Drop',
+      isActive: false,
+      isDirty: false,
+      isPinned: false,
+      isPreview: false,
+      input: {
+        constructor: { name: 'ChatEditorInput' },
+        viewType: 'chat-view'
+      }
+    }
+  ];
+  try {
+    Object.defineProperty(vscodeModule.window, 'tabGroups', {
+      configurable: true,
+      value: {
+        get all() {
+          return [{ isActive: true, viewColumn: 1, tabs: visibleTabs }];
+        },
+        close: async (tabs) => {
+          const labelsToClose = new Set(tabs.map((tab) => tab.label));
+          visibleTabs = visibleTabs.filter((tab) => !labelsToClose.has(tab.label));
+        }
+      }
+    });
+
+    const reconcileResult = await extensionModule.reconcileOfflineLocalChatCleanupUx({
+      reportFilePaths: [],
+      reports: [
+        {
+          removedTargetSessionIds: ['session-drop-1', 'session-drop-1']
+        }
+      ]
+    });
+    assert(reconcileResult.reconciledSessionIds.length === 1 && reconcileResult.reconciledSessionIds[0] === 'session-drop-1', 'Offline cleanup UX reconcile test did not de-duplicate exact removed session ids.');
+    assert(reconcileResult.closedCount === 1, `Offline cleanup UX reconcile test did not close exactly one matching editor tab. Got ${reconcileResult.closedCount}.`);
+    assert(visibleTabs.some((tab) => tab.label === 'Deleted Session Tab') === false, 'Offline cleanup UX reconcile test left the exact deleted-session tab visible.');
+    assert(visibleTabs.some((tab) => tab.label === 'Keep Session Tab') === true, 'Offline cleanup UX reconcile test incorrectly closed an unrelated editor chat tab.');
+    assert(visibleTabs.some((tab) => tab.label === 'Title Only Session Drop') === true, 'Offline cleanup UX reconcile test incorrectly closed a title-only editor chat tab.');
+    assert(
+      extensionModule.formatOfflineLocalChatCleanupStartupMessage(summary, reconcileResult).includes('closed 1 tab(s)'),
+      'Offline cleanup startup message test did not include the exact UX reconcile summary.'
+    );
+  } finally {
+    if (originalTabGroupsDescriptor) {
+      Object.defineProperty(vscodeModule.window, 'tabGroups', originalTabGroupsDescriptor);
+    }
+  }
 
   const directSessionFile = path.join(directWorkspaceStorageDir, "chatSessions", "session-drop-1.jsonl");
   const directTranscriptFile = path.join(directWorkspaceStorageDir, "transcripts", "session-drop-1.jsonl");
