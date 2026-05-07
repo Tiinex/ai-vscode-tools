@@ -247,7 +247,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: focused send waits for persisted mutation and settled target state instead of reporting success on optimistic dispatch alone.
 		- [x] Use Case: focused send reports unverified or blocked targeting state instead of implying stronger targeting than the host can prove.
 		- [x] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
-		- [ ] Manual Test: focused-send behavior is revalidated on the current Windows host.
+		- [x] Manual Test: host validation confirmed focused-send blocked ambiguous targeting instead of implying stronger targeting than the host could prove.
 		- [ ] Skill: role-facing guidance exists for focused live-chat send.
 		- [ ] Skill Test: focused live-chat send guidance has been validated against current behavior.
 
