@@ -209,7 +209,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: disposable probe creation goes through the extension-hosted path instead of a shell fallback.
 		- [x] Unit Test: `disposable-delete-probe` passes.
 		- [x] Manual Test: host validation confirmed disposable probe creation through the extension-hosted path instead of a shell fallback.
-		- [ ] Skill: role-facing guidance exists for disposable local delete probes.
+		- [x] Skill: role-facing guidance exists for disposable local delete probes.
 		- [ ] Skill Test: disposable local delete probe guidance has been validated against current behavior.
 
 - Exact local chat delete targeting
@@ -219,7 +219,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Unit Test: `editor-tab-matcher` passes.
 		- [x] Unit Test: `self-target-guard` passes.
 		- [x] Manual Test: host validation confirmed that disposable target chats could be removed without wiping the active working chat.
-		- [ ] Skill: role-facing guidance exists for exact local chat delete targeting.
+		- [x] Skill: role-facing guidance exists for exact local chat delete targeting.
 		- [ ] Skill Test: exact local chat delete targeting guidance has been validated against current behavior.
 
 - Exact offline local chat cleanup
@@ -227,7 +227,7 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: queued exact-target cleanup survives a real VS Code exit and restart on the primary Windows surface.
 		- [x] Unit Test: `offline-local-chat-cleanup` passes.
 		- [x] Manual Test: host validation confirmed queued exact-target cleanup across a real VS Code exit and restart on the primary Windows surface.
-		- [ ] Skill: role-facing guidance exists for exact offline local chat cleanup.
+		- [x] Skill: role-facing guidance exists for exact offline local chat cleanup.
 		- [ ] Skill Test: exact offline local chat cleanup guidance has been validated against current behavior.
 
 - Exact live-chat create and send
