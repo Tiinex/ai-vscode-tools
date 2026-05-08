@@ -1023,7 +1023,7 @@
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run typecheck && node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cli": "node dist/tools/cli.js",
     "mcp": "node dist/tools/mcp-server.js",
@@ -1035,7 +1035,7 @@
     "release:major": "npm version major -m \"release: %s\"",
     "preversion": "npm run test",
     "test": "npm run build && node scripts/ensure-vscode-test-stub.mjs && node tests/test.mjs",
-    "watch": "tsc -p tsconfig.json --watch"
+    "watch": "node scripts/build.mjs --watch"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
@@ -1045,6 +1045,7 @@
   "devDependencies": {
     "@types/node": "^22.15.3",
     "@types/vscode": "^1.99.0",
+    "esbuild": "^0.25.4",
     "typescript": "^5.8.3"
   }
 }

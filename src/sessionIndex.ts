@@ -50,7 +50,7 @@ type SqlDatabaseLike = any;
 async function getSqlJs(): Promise<Awaited<ReturnType<typeof initSqlJs>>> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
-      locateFile: (file) => path.resolve(__dirname, "..", "node_modules", "sql.js", "dist", file)
+      locateFile: (file) => path.resolve(__dirname, "vendor", "sql.js", file)
     });
   }
   return sqlPromise;
