@@ -1,9 +1,8 @@
 {
   "name": "ai-vscode-tools",
-  "displayName": "Tiinex — AI — VS Code — Tools",
+  "displayName": "Tiinex AI — VS Code Tools",
   "description": "Tools for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging in VS Code.",
   "version": "0.1.0",
-  "private": true,
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -14,7 +13,7 @@
     "url": "https://github.com/Tiinex/ai-vscode-tools/issues"
   },
   "icon": "assets/logo-transparent.png",
-  "publisher": "local",
+  "publisher": "tiinex",
   "engines": {
     "vscode": "^1.99.0",
     "node": ">=20"
@@ -135,6 +134,7 @@
         {
           "id": "tiinex.aiVscodeTools.sessions",
           "name": "Tiinex Sessions",
+          "icon": "assets/logo.png",
           "when": "config.tiinex.aiVscodeTools.showSessionsView"
         }
       ]
@@ -1027,6 +1027,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cli": "node dist/tools/cli.js",
     "mcp": "node dist/tools/mcp-server.js",
+    "package:vsix": "npx --yes @vscode/vsce package",
+    "publish:vsce": "npx --yes @vscode/vsce publish",
+    "release:check": "npm run test && npm run package:vsix",
+    "release:patch": "npm version patch -m \"release: %s\"",
+    "release:minor": "npm version minor -m \"release: %s\"",
+    "release:major": "npm version major -m \"release: %s\"",
+    "preversion": "npm run test",
     "test": "npm run build && node scripts/ensure-vscode-test-stub.mjs && node tests/test.mjs",
     "watch": "tsc -p tsconfig.json --watch"
   },

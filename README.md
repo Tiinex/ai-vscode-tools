@@ -67,6 +67,41 @@ Core settings:
 - `tiinex.aiVscodeTools.postCreateTimeoutMs`
 - `tiinex.aiVscodeTools.waitForPersistedDefault`
 
+## Release Flow
+
+This repo is now configured for Marketplace publication under the `tiinex` publisher.
+
+Before packaging or publishing:
+
+- sign in to the VS Code Marketplace with the publisher account that owns `tiinex`
+- make sure `npm test` passes locally
+- keep releases on semantic versioning: patch for fixes, minor for backward-compatible features, major for breaking changes
+
+Release commands:
+
+- `npm run release:check` runs the local release gate: tests plus VSIX packaging
+- `npm run release:patch` bumps a patch release, updates `package.json`, creates a git commit, and creates the matching git tag
+- `npm run release:minor` does the same for a minor release
+- `npm run release:major` does the same for a major release
+- `npm run package:vsix` builds and packages a local VSIX using the current manifest
+- `npm run publish:vsce` publishes the current version to the Visual Studio Marketplace
+
+VS Code task shortcuts:
+
+- `release check ai vscode tools extension`
+- `release patch ai vscode tools extension`
+- `release minor ai vscode tools extension`
+- `release major ai vscode tools extension`
+
+The expected extension identifier for publication is `tiinex.ai-vscode-tools`.
+
+Recommended release order:
+
+- run the release-check task or `npm run release:check`
+- run exactly one semantic-version task or command for the intended release size
+- push the resulting commit and git tag
+- publish the new version to Marketplace
+
 ## Product Shape
 
 This repo is not an agent-authoring framework and it does not claim a broad automation platform. Its job is narrower and more useful than that:

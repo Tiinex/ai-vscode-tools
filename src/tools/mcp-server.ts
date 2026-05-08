@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import {
   buildContextEstimate,
@@ -29,9 +31,13 @@ import {
 
 const deliveryModeSchema = z.enum(["file-only", "file-and-inline-if-safe", "inline-if-safe"]);
 
+const packageVersion = JSON.parse(
+  readFileSync(path.resolve(__dirname, "../../package.json"), "utf8")
+) as { version?: string };
+
 const server = new McpServer({
   name: "tiinexAiVscodeTools",
-  version: "0.1.0"
+  version: packageVersion.version ?? "0.0.0"
 });
 
 const READ_ONLY_ANNOTATIONS = {

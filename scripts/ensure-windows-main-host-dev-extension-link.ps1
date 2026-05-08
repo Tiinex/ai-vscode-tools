@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $extensionsRoot = Join-Path $env:USERPROFILE '.vscode\extensions'
-$targetId = 'local.ai-vscode-tools'
+$targetId = 'tiinex.ai-vscode-tools'
 $staleTargetIds = @('local.ai-vscode-tooling')
 $linkPath = Join-Path $extensionsRoot $targetId
 $extensionsJsonPath = Join-Path $extensionsRoot 'extensions.json'

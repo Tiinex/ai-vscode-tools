@@ -18,7 +18,7 @@
 			}
 		},
 		{
-			"label": "build recovery tools extension",
+			"label": "build ai vscode tools extension",
 			"type": "shell",
 			"command": "npm",
 			"args": [
@@ -31,7 +31,82 @@
 			]
 		},
 		{
-			"label": "watch recovery tools extension",
+			"label": "test ai vscode tools extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"test"
+			],
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "package ai vscode tools extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"package:vsix"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "release check ai vscode tools extension",
+			"dependsOrder": "sequence",
+			"dependsOn": [
+				"test ai vscode tools extension",
+				"package ai vscode tools extension"
+			],
+			"problemMatcher": []
+		},
+		{
+			"label": "release patch ai vscode tools extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"release:patch"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "release minor ai vscode tools extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"release:minor"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "release major ai vscode tools extension",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"release:major"
+			],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "watch ai vscode tools extension",
 			"type": "shell",
 			"command": "npm",
 			"args": [

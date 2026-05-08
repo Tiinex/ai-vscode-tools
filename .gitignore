@@ -9,3 +9,4 @@ TEMP-*.md
 *-senior.*
 *-junior.*
 .github/instructions/*.temporary.instructions.md
+*.vsix
