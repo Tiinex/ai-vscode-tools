@@ -33,6 +33,7 @@ const distChatInteropTypes = path.join(packageRoot, "dist", "chatInterop", "type
 const distChatInteropService = path.join(packageRoot, "dist", "chatInterop", "service.js");
 const distChatInteropStorage = path.join(packageRoot, "dist", "chatInterop", "storage.js");
 const distChatInteropSessionSendWorkflow = path.join(packageRoot, "dist", "chatInterop", "sessionSendWorkflow.js");
+const distChatInteropUnsettledDiagnostics = path.join(packageRoot, "dist", "chatInterop", "unsettledDiagnostics.js");
 const distOfflineLocalChatCleanup = path.join(packageRoot, "dist", "offlineLocalChatCleanup.js");
 const distFirstSlice = path.join(packageRoot, "dist", "firstSlice.js");
 const distExtension = path.join(packageRoot, "dist", "extension.js");
@@ -43,6 +44,7 @@ const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools"
 const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
+const extensionSourcePath = path.join(packageRoot, "src", "extension.ts");
 const toolsInstructionPath = path.join(packageRoot, ".github", "instructions", "fix-and-improve-tools.temporary.instructions.md");
 const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
 const disposableProbeFallbackScriptPath = path.join(packageRoot, "tools", "create-disposable-local-chat-probe.ps1");
@@ -72,6 +74,7 @@ const expectedLanguageModelToolNames = [
   "get_agent_session_profile",
   "survey_agent_sessions",
   "list_live_agent_chats",
+  "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",
@@ -725,13 +728,11 @@ async function runChatInteropCapabilityChecks() {
   const {
     buildUnsupportedFocusedSendReason,
     buildUnsupportedRevealReason,
-    buildUnsupportedSendReason,
     findFocusedChatInputCommand,
     findFocusedChatSubmitCommand,
     getExactSessionInteropSupport,
     getFocusedChatInteropSupport,
-    findExactSessionOpenCommand,
-    findExactSessionSendCommand
+    findExactSessionOpenCommand
   } = capabilitiesModule;
 
   assert(
@@ -753,31 +754,8 @@ async function runChatInteropCapabilityChecks() {
   );
 
   assert(
-    findExactSessionSendCommand([
-      "workbench.action.chat.openSessionWithPrompt",
-      "workbench.action.chat.openSessionWithPrompt.copilotcli"
-    ]) === "workbench.action.chat.openSessionWithPrompt",
-    "Chat interop capability test did not prefer the generic openSessionWithPrompt command over the CLI-specific variant."
-  );
-
-  assert(
-    findExactSessionSendCommand(["workbench.action.chat.openSessionWithPrompt.copilotcli"]) === undefined,
-    "Chat interop capability test incorrectly treated the CLI-specific openSessionWithPrompt command as valid for ordinary local chats."
-  );
-
-  assert(
     buildUnsupportedRevealReason(["workbench.action.chat.openSession.copilotcli"]).includes("Copilot CLI-specific openSession command"),
     "Chat interop capability test did not explain the CLI-only reveal limitation."
-  );
-
-  assert(
-    buildUnsupportedSendReason(["workbench.action.chat.openSessionWithPrompt.copilotcli"]).includes("Copilot CLI-specific openSessionWithPrompt command"),
-    "Chat interop capability test did not explain the CLI-only send limitation."
-  );
-
-  assert(
-    buildUnsupportedSendReason([]).includes("No generic internal openSessionWithPrompt chat command"),
-    "Chat interop capability test did not report the missing generic send command boundary case."
   );
 
   assert(
@@ -800,20 +778,16 @@ async function runChatInteropCapabilityChecks() {
     "workbench.action.chat.openSessionWithPrompt"
   ]);
   assert(
-    genericSupport.canRevealExactSession === true && genericSupport.canSendExactSessionMessage === true,
-    "Chat interop capability test did not report generic exact-session support correctly."
+    genericSupport.canRevealExactSession === true,
+    "Chat interop capability test did not report generic exact-session reveal support correctly."
   );
 
   const cliOnlySupport = getExactSessionInteropSupport([
     "workbench.action.chat.openSessionWithPrompt.copilotcli"
   ]);
   assert(
-    cliOnlySupport.canRevealExactSession === false && cliOnlySupport.canSendExactSessionMessage === false,
-    "Chat interop capability test incorrectly marked CLI-only exact-session support as available for ordinary local chats."
-  );
-  assert(
-    cliOnlySupport.sendUnsupportedReason?.includes("Copilot CLI-specific openSessionWithPrompt command") === true,
-    "Chat interop capability test did not preserve the CLI-only unsupported reason in the support summary."
+    cliOnlySupport.canRevealExactSession === false,
+    "Chat interop capability test incorrectly marked CLI-only exact-session reveal support as available for ordinary local chats."
   );
 
   const focusedSupport = getFocusedChatInteropSupport([
@@ -1218,11 +1192,11 @@ async function runFocusedSendBehaviorChecks() {
       this._call = (this._call || 0) + 1;
       const seq = MockChatSessionStorage._behaviors || [];
       const idx = Math.min(this._call - 1, Math.max(0, seq.length - 1));
-      return seq[idx] || [];
+      const behavior = seq[idx] || [];
+      return typeof behavior === 'function' ? await behavior(this._call) : behavior;
     }
     async getSessionById(sessionId) {
-      const last = (MockChatSessionStorage._behaviors || []).slice(-1)[0] || [];
-      return last.find((s) => s.id === sessionId);
+      return (await this.listSessions()).find((s) => s.id === sessionId);
     }
   }
 
@@ -1283,7 +1257,47 @@ async function runFocusedSendBehaviorChecks() {
     };
 
     const serviceModule = await import(pathToFileURL(distChatInteropService).href);
-    const { ChatInteropService } = serviceModule;
+    const unsettledDiagnosticsModule = await import(pathToFileURL(distChatInteropUnsettledDiagnostics).href);
+    const { ChatInteropService, readLatestPersistedRequestTiming } = serviceModule;
+    const { getSessionQuiescenceState } = unsettledDiagnosticsModule;
+
+    const persistedTimingRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-persisted-request-timing-'));
+    try {
+      const persistedTimingSessionFile = path.join(persistedTimingRoot, 'chatSessions', 'timing.jsonl');
+      await fs.mkdir(path.dirname(persistedTimingSessionFile), { recursive: true });
+      await fs.writeFile(persistedTimingSessionFile, `${[
+        JSON.stringify({
+          kind: 2,
+          k: ['requests'],
+          v: [{
+            requestId: 'request-timing',
+            timestamp: 1_000,
+            message: { text: 'timing probe' }
+          }]
+        }),
+        JSON.stringify({
+          kind: 1,
+          k: ['requests', 0, 'modelState'],
+          v: {
+            value: 1,
+            completedAt: 4_500
+          }
+        }),
+        JSON.stringify({
+          kind: 1,
+          k: ['requests', 0, 'elapsedMs'],
+          v: 3_600
+        })
+      ].join('\n')}\n`, 'utf8');
+
+      const persistedTiming = await readLatestPersistedRequestTiming(persistedTimingSessionFile);
+      assert(
+        persistedTiming.completionAfterRequestMs === 3_500,
+        `Persisted request timing did not fold later request patches. Got: ${JSON.stringify(persistedTiming)}`
+      );
+    } finally {
+      await fs.rm(persistedTimingRoot, { recursive: true, force: true });
+    }
 
     // Non-blocking scenario: immediate persisted touch observed
     MockChatSessionStorage.setBehaviors([
@@ -1443,6 +1457,153 @@ async function runFocusedSendBehaviorChecks() {
     assert(settledResult.session?.id === 's3', 'Blocking focused-send returned the wrong settled session.');
     assert(settledResult.session?.lastRequestCompleted === true, 'Blocking focused-send returned before the final request completion state was observed.');
 
+    MockChatSessionStorage.setBehaviors([
+      [
+        {
+          id: 's3-target',
+          title: 'session-3-target',
+          lastUpdated: '2026-04-11T02:30:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-target.jsonl'
+        },
+        {
+          id: 's3-background',
+          title: 'session-3-background',
+          lastUpdated: '2026-04-11T02:30:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-background.jsonl'
+        }
+      ],
+      [
+        {
+          id: 's3-target',
+          title: 'session-3-target',
+          lastUpdated: '2026-04-11T02:30:01.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: true,
+          pendingRequestCount: 1,
+          lastRequestCompleted: false,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-target.jsonl'
+        },
+        {
+          id: 's3-background',
+          title: 'session-3-background',
+          lastUpdated: '2026-04-11T02:30:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-background.jsonl'
+        }
+      ],
+      [
+        {
+          id: 's3-target',
+          title: 'session-3-target',
+          lastUpdated: '2026-04-11T02:30:01.500Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-target.jsonl'
+        },
+        {
+          id: 's3-background',
+          title: 'session-3-background',
+          lastUpdated: '2026-04-11T02:30:02.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-background.jsonl'
+        }
+      ]
+    ]);
+
+    const competingTouchService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 1000, waitForPersistedDefault: true });
+    competingTouchService.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+    competingTouchService.traceCreateDebug = async () => {};
+
+    const competingTouchResult = await competingTouchService.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
+    assert(competingTouchResult.ok === true, 'Blocking focused-send did not succeed when the first observed target settled before a later unrelated touched session.');
+    assert(competingTouchResult.session?.id === 's3-target', `Blocking focused-send drifted to a later unrelated touched session instead of preserving the first observed target. Got: ${JSON.stringify(competingTouchResult.session)}`);
+
+    MockChatSessionStorage.setBehaviors([
+      [
+        {
+          id: 's3-unlocked',
+          title: 'session-3-unlocked',
+          lastUpdated: '2026-04-11T02:00:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-unlocked.jsonl'
+        }
+      ],
+      [
+        {
+          id: 's3-unlocked',
+          title: 'session-3-unlocked',
+          lastUpdated: '2026-04-11T02:00:01.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-unlocked.jsonl'
+        }
+      ]
+    ]);
+
+    const unlockedFocusedService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 1000, waitForPersistedDefault: true });
+    unlockedFocusedService.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+    const originalWaitForFocusedSessionMutation = unlockedFocusedService.waitForFocusedSessionMutation;
+    unlockedFocusedService.waitForFocusedSessionMutation = async function (...args) {
+      assert(this.mutex?.isLocked?.() === false, 'Focused send kept the live-chat mutex locked while waiting for persisted settle state.');
+      return originalWaitForFocusedSessionMutation.apply(this, args);
+    };
+
+    const unlockedFocusedResult = await unlockedFocusedService.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
+    assert(unlockedFocusedResult.ok === true, 'Focused-send mutex-release test did not succeed after dispatch.');
+
     // Host full-state snapshots can retain hasPendingEdits=true even after the request has completed.
     MockChatSessionStorage.setBehaviors([
       [
@@ -1556,6 +1717,165 @@ async function runFocusedSendBehaviorChecks() {
       await fs.rm(unsettledRoot, { recursive: true, force: true });
     }
 
+    const laggingTranscriptRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-lagging-transcript-session-'));
+    try {
+      const laggingSessionFile = path.join(laggingTranscriptRoot, 'chatSessions', 's6.jsonl');
+      const laggingTranscriptFile = path.join(laggingTranscriptRoot, 'GitHub.copilot-chat', 'transcripts', 's6.jsonl');
+      await fs.mkdir(path.dirname(laggingSessionFile), { recursive: true });
+      await fs.mkdir(path.dirname(laggingTranscriptFile), { recursive: true });
+      await fs.writeFile(laggingSessionFile, `${[
+        JSON.stringify({
+          kind: 0,
+          v: {
+            version: 3,
+            creationDate: 1778251857000,
+            sessionId: 's6',
+            responderUsername: 'GitHub Copilot',
+            requests: [{
+              requestId: 'request-lagging',
+              timestamp: 1778251857321,
+              response: [{ value: 'LIVE_WAIT_OK' }],
+              result: { details: 'GPT-5.4 • 1x' },
+              completionTokens: 37,
+              elapsedMs: 3758,
+              message: { text: 'hello' }
+            }]
+          }
+        })
+      ].join('\n')}\n`, 'utf8');
+      await fs.writeFile(laggingTranscriptFile, `${[
+        JSON.stringify({ type: 'session.start', data: { sessionId: 's6' } }),
+        JSON.stringify({ type: 'user.message', data: { content: 'hello' } }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' } })
+      ].join('\n')}\n`, 'utf8');
+
+      MockChatSessionStorage.setBehaviors([
+        [
+          {
+            id: 's6',
+            title: 'session-6',
+            lastUpdated: '2026-05-08T14:50:56.000Z',
+            mode: undefined,
+            agent: 'agent-architect',
+            model: undefined,
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: laggingSessionFile
+          }
+        ],
+        [
+          {
+            id: 's6',
+            title: 'session-6',
+            lastUpdated: '2026-05-08T14:50:57.321Z',
+            mode: undefined,
+            agent: 'agent-architect',
+            model: undefined,
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: laggingSessionFile
+          }
+        ]
+      ]);
+
+      const laggingTranscriptService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250, waitForPersistedDefault: true });
+      laggingTranscriptService.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+
+      const laggingTranscriptResult = await laggingTranscriptService.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
+      assert(laggingTranscriptResult.ok === true, `Blocking focused-send did not accept a lagging transcript once the latest request had a persisted response and result. Got: ${laggingTranscriptResult.reason}`);
+      assert(laggingTranscriptResult.session?.id === 's6', 'Blocking focused-send lagging-transcript override returned the wrong session.');
+    } finally {
+      await fs.rm(laggingTranscriptRoot, { recursive: true, force: true });
+    }
+
+      const staticTimestampFocusedRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-static-timestamp-focused-'));
+      try {
+        const staticTimestampFocusedSessionFile = path.join(staticTimestampFocusedRoot, 'chatSessions', 's7.jsonl');
+        const staticTimestampFocusedTranscriptFile = path.join(staticTimestampFocusedRoot, 'GitHub.copilot-chat', 'transcripts', 's7.jsonl');
+        await fs.mkdir(path.dirname(staticTimestampFocusedSessionFile), { recursive: true });
+        await fs.mkdir(path.dirname(staticTimestampFocusedTranscriptFile), { recursive: true });
+        await fs.writeFile(staticTimestampFocusedSessionFile, '{}\n', 'utf8');
+        await fs.writeFile(staticTimestampFocusedTranscriptFile, `${[
+          JSON.stringify({ type: 'session.start', data: { sessionId: 's7' }, timestamp: '2026-05-08T14:40:00.000Z' }),
+          JSON.stringify({ type: 'user.message', data: { content: 'hello' }, timestamp: '2026-05-08T14:40:00.100Z' }),
+          JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T14:40:00.200Z' })
+        ].join('\n')}\n`, 'utf8');
+
+        let staticTimestampFocusedAppended = false;
+        MockChatSessionStorage.setBehaviors([
+          [
+            {
+              id: 's7',
+              title: 'session-7',
+              lastUpdated: '2026-04-11T06:00:00.000Z',
+              mode: undefined,
+              agent: 'agent-architect',
+              model: undefined,
+              hasPendingEdits: false,
+              pendingRequestCount: 0,
+              lastRequestCompleted: true,
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: staticTimestampFocusedSessionFile
+            }
+          ],
+          async () => {
+            if (!staticTimestampFocusedAppended) {
+              staticTimestampFocusedAppended = true;
+              await fs.appendFile(staticTimestampFocusedSessionFile, `${JSON.stringify({
+                kind: 2,
+                k: ['requests'],
+                v: [{
+                  requestId: 'request-static-timestamp-focused',
+                  timestamp: 1778251857321,
+                  result: { details: 'GPT-5.4 • 1x' },
+                  message: { text: 'hello' }
+                }]
+              })}\n`, 'utf8');
+            }
+
+            return [{
+              id: 's7',
+              title: 'session-7',
+              lastUpdated: '2026-04-11T06:00:00.000Z',
+              mode: undefined,
+              agent: 'agent-architect',
+              model: undefined,
+              hasPendingEdits: false,
+              pendingRequestCount: 0,
+              lastRequestCompleted: true,
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: staticTimestampFocusedSessionFile
+            }];
+          }
+        ]);
+
+        const staticTimestampFocusedService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 1500, waitForPersistedDefault: true });
+        staticTimestampFocusedService.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+        let staticTimestampFocusedWaitResult;
+        let staticTimestampFocusedBeforeBaseline;
+        const originalStaticTimestampFocusedWait = staticTimestampFocusedService.waitForFocusedSessionMutation;
+        staticTimestampFocusedService.waitForFocusedSessionMutation = async function (...args) {
+          staticTimestampFocusedBeforeBaseline = args[0]?.get?.('s7');
+          staticTimestampFocusedWaitResult = await originalStaticTimestampFocusedWait.apply(this, args);
+          return staticTimestampFocusedWaitResult;
+        };
+
+        const staticTimestampFocusedResult = await staticTimestampFocusedService.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
+        const staticTimestampFocusedCurrentStats = await fs.stat(staticTimestampFocusedSessionFile);
+        assert(staticTimestampFocusedResult.ok === true, `Blocking focused-send did not accept a session-file mutation when lastUpdated stayed unchanged. Got: ${staticTimestampFocusedResult.reason}. Wait result: ${JSON.stringify(staticTimestampFocusedWaitResult)}. Baseline: ${JSON.stringify(staticTimestampFocusedBeforeBaseline)}. Current file stats: ${JSON.stringify({ size: staticTimestampFocusedCurrentStats.size, mtimeMs: staticTimestampFocusedCurrentStats.mtimeMs })}`);
+        assert(staticTimestampFocusedResult.session?.id === 's7', 'Blocking focused-send static-timestamp test returned the wrong session.');
+      } finally {
+        await fs.rm(staticTimestampFocusedRoot, { recursive: true, force: true });
+      }
+
     fs.mkdir = originalMkdir;
     fs.writeFile = originalWriteFile;
     fs.rm = originalRm;
@@ -1664,7 +1984,9 @@ async function runCreateChatDirectAgentCommandChecks() {
     ]);
 
     const serviceModule = await import(pathToFileURL(distChatInteropService).href);
+    const unsettledDiagnosticsModule = await import(pathToFileURL(distChatInteropUnsettledDiagnostics).href);
     const { ChatInteropService } = serviceModule;
+    const { getSessionQuiescenceState } = unsettledDiagnosticsModule;
     const service = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
 
     const result = await service.createChat({
@@ -1686,6 +2008,44 @@ async function runCreateChatDirectAgentCommandChecks() {
     assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Agent-bound createChat test did not write the temporary prompt artifact.');
     assert(fsOps.some((entry) => entry.op === 'writeFile' && String(entry.args?.[1]).includes('agent: "agent-architect"')) === true, 'Agent-bound createChat test did not encode the requested agent in the temporary prompt artifact.');
     assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Agent-bound createChat test did not clean up the temporary prompt artifact.');
+
+    executedCommands.length = 0;
+    fsOps.length = 0;
+    MockChatSessionStorage.setBehaviors([
+      [],
+      [
+        {
+          id: 'session-unlocked-wait',
+          title: 'Unlocked Wait Session',
+          lastUpdated: '2026-04-17T20:05:00.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-unlocked-wait.jsonl',
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true
+        }
+      ]
+    ]);
+
+    const unlockedWaitService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const originalWaitForCreatedSession = unlockedWaitService.waitForCreatedSession;
+    unlockedWaitService.waitForCreatedSession = async function (...args) {
+      assert(this.mutex?.isLocked?.() === false, 'CreateChat kept the live-chat mutex locked while waiting for persisted settle state.');
+      return originalWaitForCreatedSession.apply(this, args);
+    };
+
+    const unlockedWaitResult = await unlockedWaitService.createChat({
+      prompt: 'Verify that the create mutex is released before the settle wait begins.',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: false,
+      blockOnResponse: true
+    });
+
+    assert(unlockedWaitResult.ok === true, 'CreateChat mutex-release test did not succeed after dispatch.');
 
     executedCommands.length = 0;
     fsOps.length = 0;
@@ -1835,6 +2195,201 @@ async function runCreateChatDirectAgentCommandChecks() {
       timeoutCreateResult.reason === 'Create chat dispatched but no persisted created session was observed within the expected timeout.',
       `Direct agent-open createChat test did not surface the expected create-time timeout failure. Got: ${timeoutCreateResult.reason}`
     );
+
+    const laggingTranscriptCreateRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-lagging-transcript-create-'));
+    try {
+      const laggingCreateSessionFile = path.join(laggingTranscriptCreateRoot, 'chatSessions', 'create-lagging.jsonl');
+      const laggingCreateTranscriptFile = path.join(laggingTranscriptCreateRoot, 'GitHub.copilot-chat', 'transcripts', 'create-lagging.jsonl');
+      await originalMkdir(path.dirname(laggingCreateSessionFile), { recursive: true });
+      await originalMkdir(path.dirname(laggingCreateTranscriptFile), { recursive: true });
+      await originalWriteFile(laggingCreateSessionFile, `${[
+        JSON.stringify({
+          kind: 0,
+          v: {
+            version: 3,
+            creationDate: 1778251857000,
+            sessionId: 'create-lagging',
+            responderUsername: 'GitHub Copilot',
+            requests: [{
+              requestId: 'request-create-lagging',
+              timestamp: 1778251857321,
+              response: [{ value: 'LIVE_WAIT_OK' }],
+              result: { details: 'GPT-5.4 • 1x' },
+              completionTokens: 37,
+              elapsedMs: 3758,
+              message: { text: 'Svara endast LIVE_WAIT_OK.' }
+            }]
+          }
+        })
+      ].join('\n')}\n`, 'utf8');
+      await originalWriteFile(laggingCreateTranscriptFile, `${[
+        JSON.stringify({ type: 'session.start', data: { sessionId: 'create-lagging' } }),
+        JSON.stringify({ type: 'user.message', data: { content: 'Svara endast LIVE_WAIT_OK.' } }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' } })
+      ].join('\n')}\n`, 'utf8');
+
+      MockChatSessionStorage.setBehaviors([
+        [],
+        [
+          {
+            id: 'create-lagging',
+            title: 'Create Lagging Transcript Session',
+            lastUpdated: '2026-05-08T14:50:57.321Z',
+            mode: 'file:///tmp/agent-architect.agent.md',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: laggingCreateSessionFile,
+            hasPendingEdits: false,
+            pendingRequestCount: 1,
+            lastRequestCompleted: false
+          }
+        ]
+      ]);
+
+      const laggingCreateService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+      const laggingCreateResult = await laggingCreateService.createChat({
+        prompt: 'Create should succeed when the session file has a final result even if the transcript lags.',
+        agentName: 'agent-architect',
+        requireSelectionEvidence: false,
+        blockOnResponse: true
+      });
+
+      assert(laggingCreateResult.ok === true, `CreateChat did not accept a lagging transcript once the latest request had a persisted response and result, even when the summary still looked stale. Got: ${laggingCreateResult.reason}`);
+      assert(laggingCreateResult.session?.id === 'create-lagging', 'CreateChat lagging-transcript override returned the wrong session.');
+
+      const laggingCreateQuiescence = await getSessionQuiescenceState({
+        id: 'create-lagging',
+        title: 'Create Lagging Transcript Session',
+        lastUpdated: '2026-05-08T14:50:57.321Z',
+        mode: 'file:///tmp/agent-architect.agent.md',
+        agent: 'github.copilot.editsAgent',
+        model: 'copilot/gpt-5-mini',
+        archived: false,
+        provider: 'workspaceStorage',
+        sessionFile: laggingCreateSessionFile,
+        hasPendingEdits: false,
+        pendingRequestCount: 1,
+        lastRequestCompleted: false
+      });
+
+      assert(laggingCreateQuiescence.settled === true, 'Lagging-transcript quiescence should settle once the persisted latest request has both response and result.');
+      assert(laggingCreateQuiescence.transcriptSettled === true, 'Lagging-transcript quiescence should mark the transcript slice settled once the persisted tail overrides it.');
+      assert(laggingCreateQuiescence.transcriptReason === undefined, `Lagging-transcript quiescence should not retain an unsettled transcriptReason after the persisted tail override. Got: ${laggingCreateQuiescence.transcriptReason}`);
+    } finally {
+      await originalRm(laggingTranscriptCreateRoot, { recursive: true, force: true });
+    }
+
+    const unsettledCreateRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-unsettled-create-'));
+    try {
+      const unsettledCreateSessionFile = path.join(unsettledCreateRoot, 'chatSessions', 'create-unsettled.jsonl');
+      const unsettledCreateTranscriptFile = path.join(unsettledCreateRoot, 'GitHub.copilot-chat', 'transcripts', 'create-unsettled.jsonl');
+      await originalMkdir(path.dirname(unsettledCreateSessionFile), { recursive: true });
+      await originalMkdir(path.dirname(unsettledCreateTranscriptFile), { recursive: true });
+      await originalWriteFile(unsettledCreateSessionFile, '{}\n', 'utf8');
+      await originalWriteFile(unsettledCreateTranscriptFile, `${[
+        JSON.stringify({ type: 'session.start', data: { sessionId: 'create-unsettled' } }),
+        JSON.stringify({ type: 'user.message', data: { content: 'create probe' } }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' } }),
+        JSON.stringify({
+          type: 'assistant.message',
+          data: {
+            content: 'Planning follow-up',
+            toolRequests: [{ toolCallId: 'create-call-1', name: 'read_file', type: 'function' }]
+          }
+        })
+      ].join('\n')}\n`, 'utf8');
+
+      MockChatSessionStorage.setBehaviors([
+        [],
+        [
+          {
+            id: 'create-unsettled',
+            title: 'Create Unsettled Session',
+            lastUpdated: '2026-05-08T18:00:00.000Z',
+            mode: 'file:///tmp/agent-architect.agent.md',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: unsettledCreateSessionFile,
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true
+          }
+        ]
+      ]);
+
+      const unsettledCreateService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 80 });
+      const unsettledCreateResult = await unsettledCreateService.createChat({
+        prompt: 'Create a session that looks settled in summary but still has transcript-side tool activity.',
+        agentName: 'agent-architect',
+        requireSelectionEvidence: false,
+        blockOnResponse: true
+      });
+
+      assert(unsettledCreateResult.ok === false, 'CreateChat unexpectedly succeeded when summary looked settled but the companion transcript still showed unfinished tool activity.');
+      assert(
+        typeof unsettledCreateResult.reason === 'string' && unsettledCreateResult.reason.includes('unfinished assistant step after requesting a tool'),
+        `CreateChat did not preserve the transcript-aware unsettled diagnostic for false settled summaries. Got: ${unsettledCreateResult.reason}`
+      );
+    } finally {
+      await originalRm(unsettledCreateRoot, { recursive: true, force: true });
+    }
+
+    const missingTranscriptCreateRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-missing-transcript-create-'));
+    try {
+      const missingTranscriptSessionFile = path.join(missingTranscriptCreateRoot, 'chatSessions', 'create-missing-transcript.jsonl');
+      await originalMkdir(path.dirname(missingTranscriptSessionFile), { recursive: true });
+      await originalWriteFile(missingTranscriptSessionFile, `${[
+        JSON.stringify({
+          kind: 2,
+          k: ['requests'],
+          v: [{
+            requestId: 'request-create-missing-transcript',
+            timestamp: 1778251857321,
+            message: { text: 'still running' }
+          }]
+        })
+      ].join('\n')}\n`, 'utf8');
+
+      MockChatSessionStorage.setBehaviors([
+        [],
+        [
+          {
+            id: 'create-missing-transcript',
+            title: 'Create Missing Transcript Session',
+            lastUpdated: new Date().toISOString(),
+            mode: 'file:///tmp/agent-architect.agent.md',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: missingTranscriptSessionFile,
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true
+          }
+        ]
+      ]);
+
+      const missingTranscriptCreateService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 80 });
+      const missingTranscriptCreateResult = await missingTranscriptCreateService.createChat({
+        prompt: 'Create should not settle from summary alone when the transcript is missing and the session tail is incomplete.',
+        agentName: 'agent-architect',
+        requireSelectionEvidence: false,
+        blockOnResponse: true
+      });
+
+      assert(missingTranscriptCreateResult.ok === false, 'CreateChat incorrectly treated a missing transcript plus incomplete session tail as settled.');
+      assert(
+        typeof missingTranscriptCreateResult.reason === 'string' && missingTranscriptCreateResult.reason.includes('companion transcript is not yet readable'),
+        `CreateChat did not surface the missing-transcript unsettled diagnostic. Got: ${missingTranscriptCreateResult.reason}`
+      );
+    } finally {
+      await originalRm(missingTranscriptCreateRoot, { recursive: true, force: true });
+    }
 
     executedCommands.length = 0;
     fsOps.length = 0;
@@ -2914,59 +3469,6 @@ async function runSessionSendWorkflowChecks() {
   const workflowModule = await import(pathToFileURL(distChatInteropSessionSendWorkflow).href);
   const { canTrustGenericActiveChatAfterReveal, sendMessageToSession } = workflowModule;
 
-  const forwardedRequests = [];
-  const forwardedResult = {
-    ok: true,
-    session: {
-      id: 'session-exact',
-      title: 'Exact Target',
-      lastUpdated: '2026-05-07T10:00:00.000Z',
-      mode: 'agent',
-      agent: 'github.copilot.editsAgent',
-      model: 'copilot/gpt-5-mini',
-      archived: false,
-      provider: 'workspaceStorage',
-      sessionFile: '/tmp/session-exact.jsonl'
-    },
-    selection: {
-      mode: { status: 'verified', requested: undefined, observed: 'agent' },
-      model: { status: 'verified', requested: undefined, observed: 'copilot/gpt-5-mini' },
-      agent: { status: 'verified', requested: '#agent-architect', observed: 'agent-architect' },
-      dispatchedPrompt: 'exact prompt',
-      dispatchSurface: 'chat-open',
-      allRequestedVerified: true
-    }
-  };
-  const exactRequest = {
-    sessionId: 'session-exact',
-    prompt: 'exact prompt',
-    agentName: 'agent-architect',
-    blockOnResponse: true,
-    requireSelectionEvidence: false
-  };
-
-  const exactInterop = {
-    async getExactSessionInteropSupport() {
-      return {
-        canRevealExactSession: true,
-        canSendExactSessionMessage: true,
-        revealUnsupportedReason: undefined,
-        sendUnsupportedReason: undefined
-      };
-    },
-    async sendMessage(request) {
-      forwardedRequests.push(request);
-      return forwardedResult;
-    }
-  };
-
-  const exactSendResult = await sendMessageToSession(exactInterop, exactRequest);
-  assert(exactSendResult.ok === true, 'Session send workflow test did not forward exact-session sends when exact support was available.');
-  assert(forwardedRequests.length === 1, `Session send workflow test did not forward exactly one exact-session send request. Got: ${forwardedRequests.length}`);
-  assert(forwardedRequests[0].sessionId === 'session-exact', 'Session send workflow test did not preserve the target session id when exact send was available.');
-  assert(forwardedRequests[0].prompt === 'exact prompt', 'Session send workflow test did not preserve the prompt when exact send was available.');
-  assert(forwardedRequests[0].agentName === 'agent-architect', 'Session send workflow test did not preserve the requested agent name when exact send was available.');
-
   const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
   const originalExecuteCommand = vscodeModule.commands.executeCommand;
   const originalGetCommands = vscodeModule.commands.getCommands;
@@ -3003,7 +3505,11 @@ async function runSessionSendWorkflowChecks() {
     let focusedSendCalls = 0;
     let revealCalls = 0;
     let focusedFallbackModelSelector;
+    let focusedFallbackWaitForPersisted;
     const fallbackResult = await sendMessageToSession({
+      getPostCreateTimeoutMs() {
+        return 1_000;
+      },
       async getExactSessionInteropSupport() {
         return {
           canRevealExactSession: true,
@@ -3052,6 +3558,7 @@ async function runSessionSendWorkflowChecks() {
       async sendFocusedMessage(request) {
         focusedSendCalls += 1;
         focusedFallbackModelSelector = request.modelSelector;
+        focusedFallbackWaitForPersisted = request.waitForPersisted;
         return {
           ok: true,
           session: {
@@ -3100,10 +3607,140 @@ async function runSessionSendWorkflowChecks() {
     assert(focusedSendCalls === 1, `Session send workflow test did not call focused send exactly once in fallback mode. Got: ${focusedSendCalls}`);
     assert(fallbackResult.session?.id === 'session-fallback', 'Session send workflow fallback test did not preserve the exact target session id.');
     assert(focusedFallbackModelSelector === undefined, 'Session send workflow fallback test should keep model unset when no model was requested.');
+    assert(focusedFallbackWaitForPersisted === true, 'Session send workflow fallback test did not preserve persisted waiting when blockOnResponse=true.');
+
+    const staticTimestampWorkflowRoot = await fs.mkdtemp(path.join(workspaceRoot, 'session-send-static-timestamp-'));
+    try {
+      const staticTimestampWorkflowSessionFile = path.join(staticTimestampWorkflowRoot, 'session-static-target.jsonl');
+      const staticTimestampWorkflowTranscriptFile = path.join(staticTimestampWorkflowRoot, 'transcripts', 'session-static-target.jsonl');
+      await fs.mkdir(path.dirname(staticTimestampWorkflowSessionFile), { recursive: true });
+      await fs.mkdir(path.dirname(staticTimestampWorkflowTranscriptFile), { recursive: true });
+      await fs.writeFile(staticTimestampWorkflowSessionFile, '{}\n', 'utf8');
+      await fs.writeFile(staticTimestampWorkflowTranscriptFile, `${[
+        JSON.stringify({ type: 'session.start', data: { sessionId: 'session-static-target' }, timestamp: '2026-05-08T14:42:00.000Z' }),
+        JSON.stringify({ type: 'user.message', data: { content: 'hello' }, timestamp: '2026-05-08T14:42:00.100Z' }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T14:42:00.200Z' })
+      ].join('\n')}\n`, 'utf8');
+
+      let staticTimestampWorkflowAppended = false;
+      const staticTimestampWorkflowResult = await sendMessageToSession({
+        getPostCreateTimeoutMs() {
+          return 1_500;
+        },
+        async getExactSessionInteropSupport() {
+          return {
+            canRevealExactSession: true,
+            canSendExactSessionMessage: false,
+            revealUnsupportedReason: undefined,
+            sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+          };
+        },
+        async listChats() {
+          return [{
+            id: 'session-static-target',
+            title: 'Fallback Target',
+            lastUpdated: '2026-05-07T10:07:00.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: staticTimestampWorkflowSessionFile
+          }];
+        },
+        async revealChat(sessionId) {
+          return {
+            ok: true,
+            session: {
+              id: sessionId,
+              title: 'Fallback Target',
+              lastUpdated: '2026-05-07T10:07:00.000Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: staticTimestampWorkflowSessionFile
+            },
+            revealLifecycle: {
+              closedMatchingVisibleTabs: 0,
+              closedTabLabels: []
+            }
+          };
+        },
+        async sendFocusedMessage(request) {
+          if (!staticTimestampWorkflowAppended) {
+            staticTimestampWorkflowAppended = true;
+            await fs.appendFile(staticTimestampWorkflowSessionFile, `${JSON.stringify({
+              kind: 2,
+              k: ['requests'],
+              v: [{
+                requestId: 'request-static-timestamp-workflow',
+                timestamp: 1778251857321,
+                result: { details: 'GPT-5.4 • 1x' },
+                message: { text: request.prompt }
+              }]
+            })}\n`, 'utf8');
+          }
+
+          return {
+            ok: true,
+            session: {
+              id: 'session-static-target',
+              title: 'Fallback Target',
+              lastUpdated: '2026-05-07T10:07:00.000Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: staticTimestampWorkflowSessionFile
+            },
+            selection: {
+              mode: { status: 'verified', requested: undefined, observed: 'agent' },
+              model: { status: 'verified', requested: undefined, observed: 'copilot/gpt-5-mini' },
+              agent: { status: 'verified', requested: '#agent-architect', observed: 'agent-architect' },
+              dispatchedPrompt: request.prompt,
+              dispatchSurface: 'focused-chat-submit',
+              allRequestedVerified: true
+            },
+            revealLifecycle: {
+              closedMatchingVisibleTabs: 0,
+              closedTabLabels: [],
+              timingMs: {
+                focusedInputMs: 1,
+                prefillMs: 1,
+                submitMs: 1
+              }
+            }
+          };
+        },
+        async sendMessage() {
+          throw new Error('Session send workflow static-timestamp test should not call exact send when fallback reveal is available.');
+        }
+      }, {
+        sessionId: 'session-static-target',
+        prompt: 'hello',
+        agentName: 'agent-architect',
+        blockOnResponse: true,
+        requireSelectionEvidence: false
+      });
+
+      assert(staticTimestampWorkflowResult.ok === true, `Session send workflow did not accept a target session-file mutation when lastUpdated stayed unchanged. Got: ${staticTimestampWorkflowResult.reason}`);
+      assert(staticTimestampWorkflowResult.session?.id === 'session-static-target', 'Session send workflow static-timestamp test returned the wrong target session.');
+    } finally {
+      await fs.rm(staticTimestampWorkflowRoot, { recursive: true, force: true });
+    }
 
     let focusedFallbackModelAwareCalls = 0;
     let focusedFallbackModelAwareSelector;
     const fallbackModelAwareResult = await sendMessageToSession({
+      getPostCreateTimeoutMs() {
+        return 1_000;
+      },
       async getExactSessionInteropSupport() {
         return {
           canRevealExactSession: true,
@@ -3208,6 +3845,9 @@ async function runSessionSendWorkflowChecks() {
       let customModeRevealCalls = 0;
 
       const repairedCustomModeResult = await sendMessageToSession({
+        getPostCreateTimeoutMs() {
+          return 1_000;
+        },
         async getExactSessionInteropSupport() {
           return {
             canRevealExactSession: true,
@@ -3218,9 +3858,11 @@ async function runSessionSendWorkflowChecks() {
         },
         async listChats() {
           customModeListChatsCalls += 1;
-          const modeId = customModeListChatsCalls === 4
-            ? 'file:///tmp/anchor-senior.agent.md'
-            : 'file:///tmp/anchor.agent.md';
+          const modeId = customModeRevealCalls >= 2
+            ? 'file:///tmp/anchor.agent.md'
+            : customModeListChatsCalls >= 4
+              ? 'file:///tmp/anchor-senior.agent.md'
+              : 'file:///tmp/anchor.agent.md';
           return [{
             id: 'session-custom-mode',
             title: 'Fallback Target',
@@ -3258,6 +3900,28 @@ async function runSessionSendWorkflowChecks() {
           };
         },
         async sendFocusedMessage(request) {
+          await fs.appendFile(customModeSessionFile, `${[
+            JSON.stringify({
+              kind: 2,
+              k: ['requests'],
+              v: [{
+                requestId: 'request-custom-mode',
+                timestamp: 1778251857321,
+                message: { text: request.prompt }
+              }]
+            }),
+            JSON.stringify({
+              kind: 1,
+              k: ['requests', 0, 'response'],
+              v: [{ value: 'custom mode settled response' }]
+            }),
+            JSON.stringify({
+              kind: 1,
+              k: ['requests', 0, 'result'],
+              v: { metadata: {}, value: 'GPT-5.4 • 1x' }
+            })
+          ].join('\n')}\n`, 'utf8');
+
           return {
             ok: true,
             session: {
@@ -3325,6 +3989,9 @@ async function runSessionSendWorkflowChecks() {
 
   let unsupportedSendCalls = 0;
   const unsupportedResult = await sendMessageToSession({
+    getPostCreateTimeoutMs() {
+      return 1_000;
+    },
     async getExactSessionInteropSupport() {
       return {
         canRevealExactSession: false,
@@ -3347,12 +4014,12 @@ async function runSessionSendWorkflowChecks() {
   assert(unsupportedResult.ok === false, 'Session send workflow test incorrectly reported success when exact session send was unsupported.');
   assert(unsupportedSendCalls === 0, `Session send workflow test called sendMessage despite missing exact-session support. Got: ${unsupportedSendCalls}`);
   assert(
-    unsupportedResult.reason?.includes('Exact session-targeted Local send is unsupported on this build.') === true,
+    unsupportedResult.reason?.includes('Exact session reveal is unsupported on this build.') === true,
     `Session send workflow test did not preserve the unsupported-build diagnostic. Got: ${unsupportedResult.reason}`
   );
   assert(
-    unsupportedResult.reason?.includes('Fallback unavailable because exact Local reveal is also unsupported on this build.') === true,
-    `Session send workflow test did not explain that reveal support is required for the explicit send fallback. Got: ${unsupportedResult.reason}`
+    unsupportedResult.reason?.includes('Session-targeted Local follow-up send depends on exact reveal before focused submit on this build.') === true,
+    `Session send workflow test did not explain that canonical Local follow-up send requires exact reveal. Got: ${unsupportedResult.reason}`
   );
 
   assert(
@@ -3424,6 +4091,646 @@ async function runSessionSendWorkflowChecks() {
     }) === false,
     'Session send workflow test incorrectly trusted a generic active Chat tab whose resource did not match the requested target session.'
   );
+}
+
+async function runLiveChatQuiescenceChecks() {
+  const unsettledDiagnosticsModule = await import(pathToFileURL(distChatInteropUnsettledDiagnostics).href);
+  const { getSessionQuiescenceState } = unsettledDiagnosticsModule;
+
+  const settledRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-settled-'));
+  try {
+    const settledSessionFile = path.join(settledRoot, 'chatSessions', 'settled-session.jsonl');
+    const settledTranscriptFile = path.join(settledRoot, 'GitHub.copilot-chat', 'transcripts', 'settled-session.jsonl');
+    await fs.mkdir(path.dirname(settledSessionFile), { recursive: true });
+    await fs.mkdir(path.dirname(settledTranscriptFile), { recursive: true });
+    await fs.writeFile(settledSessionFile, `${[
+      JSON.stringify({
+        kind: 0,
+        v: {
+          version: 3,
+          creationDate: 1778251857000,
+          sessionId: 'settled-session',
+          responderUsername: 'GitHub Copilot',
+          requests: [{
+            requestId: 'request-settled',
+            timestamp: 1778251857321,
+            response: [{ value: 'SETTLED_OK' }],
+            result: { details: 'GPT-5 mini • 0x' },
+            message: { text: 'say settled' }
+          }]
+        }
+      })
+    ].join('\n')}\n`, 'utf8');
+    await fs.writeFile(settledTranscriptFile, `${[
+      JSON.stringify({ type: 'session.start', data: { sessionId: 'settled-session' }, timestamp: '2026-05-08T17:33:00.000Z' }),
+      JSON.stringify({ type: 'user.message', data: { content: 'say settled' }, timestamp: '2026-05-08T17:33:00.100Z' }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T17:33:00.200Z' })
+    ].join('\n')}\n`, 'utf8');
+
+    const settledState = await getSessionQuiescenceState({
+      id: 'settled-session',
+      title: 'Settled Session',
+      lastUpdated: '2026-05-08T17:33:01.000Z',
+      provider: 'workspaceStorage',
+      sessionFile: settledSessionFile,
+      archived: false,
+      pendingRequestCount: 1,
+      lastRequestCompleted: false,
+      hasPendingEdits: false
+    });
+
+    assert(settledState.settled === true, 'Live chat quiescence test did not recognize a session with persisted response and result as settled.');
+    assert(settledState.transcriptSettled === true, 'Live chat quiescence test did not allow the persisted session tail to override a lagging transcript.');
+    assert(settledState.transcriptReason === undefined, `Live chat quiescence test kept an unsettled transcript reason for a settled session. Got: ${settledState.transcriptReason}`);
+  } finally {
+    await fs.rm(settledRoot, { recursive: true, force: true });
+  }
+
+  const resultOnlySettledRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-result-only-'));
+  try {
+    const resultOnlySessionFile = path.join(resultOnlySettledRoot, 'chatSessions', 'result-only-settled-session.jsonl');
+    const resultOnlyTranscriptFile = path.join(resultOnlySettledRoot, 'GitHub.copilot-chat', 'transcripts', 'result-only-settled-session.jsonl');
+    await fs.mkdir(path.dirname(resultOnlySessionFile), { recursive: true });
+    await fs.mkdir(path.dirname(resultOnlyTranscriptFile), { recursive: true });
+    await fs.writeFile(resultOnlySessionFile, `${[
+      JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [{
+          requestId: 'request-result-only-settled',
+          timestamp: 1778251857321,
+          result: { details: 'GPT-5.4 • 1x' },
+          message: { text: 'say result only settled' }
+        }]
+      })
+    ].join('\n')}\n`, 'utf8');
+    await fs.writeFile(resultOnlyTranscriptFile, `${[
+      JSON.stringify({ type: 'session.start', data: { sessionId: 'result-only-settled-session' }, timestamp: '2026-05-08T17:33:00.000Z' }),
+      JSON.stringify({ type: 'user.message', data: { content: 'say result only settled' }, timestamp: '2026-05-08T17:33:00.100Z' }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T17:33:00.200Z' })
+    ].join('\n')}\n`, 'utf8');
+
+    const resultOnlySettledState = await getSessionQuiescenceState({
+      id: 'result-only-settled-session',
+      title: 'Result Only Settled Session',
+      lastUpdated: '2026-05-08T17:33:01.000Z',
+      provider: 'workspaceStorage',
+      sessionFile: resultOnlySessionFile,
+      archived: false,
+      pendingRequestCount: 1,
+      lastRequestCompleted: false,
+      hasPendingEdits: false
+    });
+
+    assert(resultOnlySettledState.settled === true, 'Live chat quiescence test did not recognize a session with a persisted final result but no separate response field as settled.');
+    assert(resultOnlySettledState.transcriptSettled === true, 'Live chat quiescence test did not allow a result-only persisted tail to override a lagging transcript.');
+    assert(resultOnlySettledState.transcriptReason === undefined, `Live chat quiescence test kept an unsettled transcript reason for a result-only settled session. Got: ${resultOnlySettledState.transcriptReason}`);
+  } finally {
+    await fs.rm(resultOnlySettledRoot, { recursive: true, force: true });
+  }
+
+  const missingTranscriptSettledRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-missing-transcript-settled-'));
+  try {
+    const missingTranscriptSettledSessionFile = path.join(missingTranscriptSettledRoot, 'chatSessions', 'missing-transcript-settled-session.jsonl');
+    await fs.mkdir(path.dirname(missingTranscriptSettledSessionFile), { recursive: true });
+    await fs.writeFile(missingTranscriptSettledSessionFile, `${[
+      JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [{
+          requestId: 'request-missing-transcript-settled',
+          timestamp: 1778251857321,
+          result: { details: 'GPT-5.4 • 1x' },
+          message: { text: 'say missing transcript settled' }
+        }]
+      })
+    ].join('\n')}\n`, 'utf8');
+    const missingTranscriptSettledStats = await fs.stat(missingTranscriptSettledSessionFile);
+
+    const missingTranscriptSettledState = await getSessionQuiescenceState({
+      id: 'missing-transcript-settled-session',
+      title: 'Missing Transcript Settled Session',
+      lastUpdated: '2026-05-08T17:34:01.000Z',
+      provider: 'workspaceStorage',
+      sessionFile: missingTranscriptSettledSessionFile,
+      archived: false,
+      pendingRequestCount: 1,
+      lastRequestCompleted: false,
+      hasPendingEdits: false
+    }, {
+      quietWindowMs: 1_000,
+      now: missingTranscriptSettledStats.mtimeMs + 2_000
+    });
+
+    assert(missingTranscriptSettledState.transcriptPresent === false, 'Live chat quiescence missing-transcript settled test unexpectedly found a transcript.');
+    assert(missingTranscriptSettledState.transcriptSettled === true, 'Live chat quiescence missing-transcript settled test did not allow the persisted final result to settle the session.');
+    assert(missingTranscriptSettledState.settled === true, 'Live chat quiescence missing-transcript settled test did not classify the session as settled.');
+    assert(missingTranscriptSettledState.transcriptReason === undefined, `Live chat quiescence missing-transcript settled test kept an unsettled reason after persisted settlement. Got: ${missingTranscriptSettledState.transcriptReason}`);
+  } finally {
+    await fs.rm(missingTranscriptSettledRoot, { recursive: true, force: true });
+  }
+
+  const bootstrapOnlyRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-bootstrap-only-'));
+  try {
+    const bootstrapOnlySessionFile = path.join(bootstrapOnlyRoot, 'chatSessions', 'bootstrap-only-session.jsonl');
+    await fs.mkdir(path.dirname(bootstrapOnlySessionFile), { recursive: true });
+    await fs.writeFile(bootstrapOnlySessionFile, `${[
+      JSON.stringify({
+        kind: 0,
+        v: {
+          version: 3,
+          creationDate: 1778251857000,
+          sessionId: 'bootstrap-only-session',
+          responderUsername: 'GitHub Copilot',
+          requests: []
+        }
+      })
+    ].join('\n')}\n`, 'utf8');
+    const bootstrapOnlyStats = await fs.stat(bootstrapOnlySessionFile);
+
+    const bootstrapOnlyState = await getSessionQuiescenceState({
+      id: 'bootstrap-only-session',
+      title: 'Bootstrap Only Session',
+      lastUpdated: '2026-05-08T17:20:00.000Z',
+      provider: 'workspaceStorage',
+      sessionFile: bootstrapOnlySessionFile,
+      archived: false,
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
+      hasPendingEdits: false
+    }, {
+      quietWindowMs: 1_000,
+      now: bootstrapOnlyStats.mtimeMs + 2_000
+    });
+
+    assert(bootstrapOnlyState.transcriptPresent === false, 'Live chat quiescence bootstrap-only test unexpectedly found a transcript.');
+    assert(bootstrapOnlyState.quietWindowSatisfied === true, 'Live chat quiescence bootstrap-only test unexpectedly violated the quiet window.');
+    assert(bootstrapOnlyState.settled === false, 'Live chat quiescence bootstrap-only test incorrectly treated a request-less bootstrap session as settled.');
+    assert(typeof bootstrapOnlyState.transcriptReason === 'string' && bootstrapOnlyState.transcriptReason.includes('has not recorded a request'), `Live chat quiescence bootstrap-only test did not preserve the expected bootstrap-only reason. Got: ${bootstrapOnlyState.transcriptReason}`);
+  } finally {
+    await fs.rm(bootstrapOnlyRoot, { recursive: true, force: true });
+  }
+
+  const responseOnlyRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-response-only-'));
+  try {
+    const responseOnlySessionFile = path.join(responseOnlyRoot, 'chatSessions', 'response-only-session.jsonl');
+    const responseOnlyTranscriptFile = path.join(responseOnlyRoot, 'GitHub.copilot-chat', 'transcripts', 'response-only-session.jsonl');
+    await fs.mkdir(path.dirname(responseOnlySessionFile), { recursive: true });
+    await fs.mkdir(path.dirname(responseOnlyTranscriptFile), { recursive: true });
+    await fs.writeFile(responseOnlySessionFile, `${[
+      JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [{
+          requestId: 'request-response-only',
+          timestamp: 1778251857321,
+          response: [{ value: 'PARTIAL_ONLY' }],
+          message: { text: 'say response only' }
+        }]
+      })
+    ].join('\n')}\n`, 'utf8');
+    await fs.writeFile(responseOnlyTranscriptFile, `${[
+      JSON.stringify({ type: 'session.start', data: { sessionId: 'response-only-session' }, timestamp: '2026-05-08T17:35:00.000Z' }),
+      JSON.stringify({ type: 'user.message', data: { content: 'say response only' }, timestamp: '2026-05-08T17:35:00.100Z' }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T17:35:00.200Z' })
+    ].join('\n')}\n`, 'utf8');
+
+    const responseOnlyState = await getSessionQuiescenceState({
+      id: 'response-only-session',
+      title: 'Response Only Session',
+      lastUpdated: '2026-05-08T17:35:01.000Z',
+      provider: 'workspaceStorage',
+      sessionFile: responseOnlySessionFile,
+      archived: false,
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
+      hasPendingEdits: false
+    });
+
+    assert(responseOnlyState.settled === false, 'Live chat quiescence test incorrectly treated a response-without-result session as settled.');
+    assert(responseOnlyState.transcriptSettled === false, 'Live chat quiescence test incorrectly treated a response-without-result transcript tail as settled.');
+    assert(typeof responseOnlyState.transcriptReason === 'string', 'Live chat quiescence test did not preserve any unsettled reason for a response-without-result session.');
+  } finally {
+    await fs.rm(responseOnlyRoot, { recursive: true, force: true });
+  }
+
+  const quietWindowRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-quiet-window-'));
+  try {
+    const quietWindowSessionFile = path.join(quietWindowRoot, 'chatSessions', 'quiet-window-session.jsonl');
+    const quietWindowTranscriptFile = path.join(quietWindowRoot, 'GitHub.copilot-chat', 'transcripts', 'quiet-window-session.jsonl');
+    await fs.mkdir(path.dirname(quietWindowSessionFile), { recursive: true });
+    await fs.mkdir(path.dirname(quietWindowTranscriptFile), { recursive: true });
+    await fs.writeFile(quietWindowSessionFile, `${[
+      JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [{
+          requestId: 'request-quiet-window',
+          timestamp: 1778251857321,
+          result: { details: 'GPT-5.4 • 1x' },
+          message: { text: 'say quiet window' }
+        }]
+      })
+    ].join('\n')}\n`, 'utf8');
+    await fs.writeFile(quietWindowTranscriptFile, `${[
+      JSON.stringify({ type: 'session.start', data: { sessionId: 'quiet-window-session' }, timestamp: '2026-05-08T17:36:00.000Z' }),
+      JSON.stringify({ type: 'user.message', data: { content: 'say quiet window' }, timestamp: '2026-05-08T17:36:00.100Z' }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T17:36:00.900Z' })
+    ].join('\n')}\n`, 'utf8');
+
+    const quietWindowState = await getSessionQuiescenceState({
+      id: 'quiet-window-session',
+      title: 'Quiet Window Session',
+      lastUpdated: '2026-05-08T17:36:00.950Z',
+      provider: 'workspaceStorage',
+      sessionFile: quietWindowSessionFile,
+      archived: false,
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
+      hasPendingEdits: false
+    }, {
+      quietWindowMs: 1_000,
+      now: Date.parse('2026-05-08T17:36:01.100Z')
+    });
+
+    assert(quietWindowState.summarySettled === true, 'Live chat quiescence quiet-window test unexpectedly lost summary-settled state.');
+    assert(quietWindowState.transcriptSettled === true, 'Live chat quiescence quiet-window test unexpectedly lost transcript-settled state.');
+    assert(quietWindowState.quietWindowSatisfied === false, 'Live chat quiescence quiet-window test did not detect the violated quiet window.');
+    assert(quietWindowState.settled === false, 'Live chat quiescence quiet-window test incorrectly ignored the quiet-window gate.');
+  } finally {
+    await fs.rm(quietWindowRoot, { recursive: true, force: true });
+  }
+
+  const missingTranscriptRecentActivityRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-missing-transcript-recent-'));
+  try {
+    const missingTranscriptRecentSessionFile = path.join(missingTranscriptRecentActivityRoot, 'chatSessions', 'missing-transcript-recent-session.jsonl');
+    await fs.mkdir(path.dirname(missingTranscriptRecentSessionFile), { recursive: true });
+    await fs.writeFile(missingTranscriptRecentSessionFile, '', 'utf8');
+
+    const missingTranscriptRecentState = await getSessionQuiescenceState({
+      id: 'missing-transcript-recent-session',
+      title: 'Missing Transcript Recent Session',
+      lastUpdated: '2026-05-08T17:37:00.950Z',
+      provider: 'workspaceStorage',
+      sessionFile: missingTranscriptRecentSessionFile,
+      archived: false,
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
+      hasPendingEdits: false
+    }, {
+      quietWindowMs: 1_000,
+      now: Date.parse('2026-05-08T17:37:01.100Z')
+    });
+
+    assert(missingTranscriptRecentState.transcriptPresent === false, 'Live chat quiescence missing-transcript recent-activity test unexpectedly found a transcript.');
+    assert(missingTranscriptRecentState.quietWindowSatisfied === false, 'Live chat quiescence missing-transcript recent-activity test did not detect recent activity.');
+    assert(missingTranscriptRecentState.settled === false, 'Live chat quiescence missing-transcript recent-activity test incorrectly treated the session as settled.');
+    assert(typeof missingTranscriptRecentState.transcriptReason === 'string' && missingTranscriptRecentState.transcriptReason.includes('still showing recent activity'), `Live chat quiescence missing-transcript recent-activity test did not preserve the expected reason. Got: ${missingTranscriptRecentState.transcriptReason}`);
+  } finally {
+    await fs.rm(missingTranscriptRecentActivityRoot, { recursive: true, force: true });
+  }
+
+  const ongoingRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-live-chat-quiescence-ongoing-'));
+  try {
+    const ongoingSessionFile = path.join(ongoingRoot, 'chatSessions', 'ongoing-session.jsonl');
+    const ongoingTranscriptFile = path.join(ongoingRoot, 'GitHub.copilot-chat', 'transcripts', 'ongoing-session.jsonl');
+    await fs.mkdir(path.dirname(ongoingSessionFile), { recursive: true });
+    await fs.mkdir(path.dirname(ongoingTranscriptFile), { recursive: true });
+    await fs.writeFile(ongoingSessionFile, `${[
+      JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [{
+          requestId: 'request-ongoing',
+          timestamp: 1778251857321,
+          message: { text: 'say ongoing' }
+        }]
+      })
+    ].join('\n')}\n`, 'utf8');
+    await fs.writeFile(ongoingTranscriptFile, `${[
+      JSON.stringify({ type: 'session.start', data: { sessionId: 'ongoing-session' }, timestamp: '2026-05-08T17:34:00.000Z' }),
+      JSON.stringify({ type: 'user.message', data: { content: 'say ongoing' }, timestamp: '2026-05-08T17:34:00.100Z' }),
+      JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-08T17:34:00.200Z' })
+    ].join('\n')}\n`, 'utf8');
+
+    const ongoingState = await getSessionQuiescenceState({
+      id: 'ongoing-session',
+      title: 'Ongoing Session',
+      lastUpdated: '2026-05-08T17:34:00.250Z',
+      provider: 'workspaceStorage',
+      sessionFile: ongoingSessionFile,
+      archived: false,
+      pendingRequestCount: 0,
+      lastRequestCompleted: true,
+      hasPendingEdits: false
+    }, {
+      quietWindowMs: 1_000,
+      now: Date.parse('2026-05-08T17:34:00.400Z')
+    });
+
+    assert(ongoingState.settled === false, 'Live chat quiescence test incorrectly marked an in-flight session as settled.');
+    assert(ongoingState.transcriptSettled === false, 'Live chat quiescence test incorrectly treated an in-flight transcript as settled.');
+    assert(typeof ongoingState.transcriptReason === 'string' && ongoingState.transcriptReason.includes('assistant turn'), `Live chat quiescence test did not preserve the expected in-flight transcript reason. Got: ${ongoingState.transcriptReason}`);
+  } finally {
+    await fs.rm(ongoingRoot, { recursive: true, force: true });
+  }
+}
+
+async function runLiveChatWorkspaceQuiescenceProbe() {
+  const unsettledDiagnosticsModule = await import(pathToFileURL(distChatInteropUnsettledDiagnostics).href);
+  const { getSessionQuiescenceState } = unsettledDiagnosticsModule;
+
+  const storageRoot = await findWorkspaceStorageRootForPackage(packageRoot);
+  assert(storageRoot, `Could not locate a VS Code workspaceStorage root for ${packageRoot}.`);
+
+  const sessionDir = path.join(storageRoot, 'chatSessions');
+  const sessionEntries = await fs.readdir(sessionDir, { withFileTypes: true });
+  const sessionFiles = await Promise.all(sessionEntries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
+    .map(async (entry) => {
+      const sessionFile = path.join(sessionDir, entry.name);
+      const stats = await fs.stat(sessionFile);
+      return {
+        sessionFile,
+        lastUpdatedMs: stats.mtimeMs
+      };
+    }));
+
+  sessionFiles.sort((left, right) => right.lastUpdatedMs - left.lastUpdatedMs);
+  assert(sessionFiles.length >= 2, 'Expected at least two persisted workspace chat sessions for the live quiescence probe.');
+
+  const allSessions = [];
+  for (const sessionFile of sessionFiles) {
+    const session = await loadWorkspaceProbeSession(sessionFile.sessionFile, sessionFile.lastUpdatedMs);
+    const quiescence = await getSessionQuiescenceState(session, {
+      quietWindowMs: 1_000
+    });
+    allSessions.push({ session, quiescence, lastUpdatedMs: sessionFile.lastUpdatedMs });
+  }
+  const recentSessions = allSessions.slice(0, 12);
+
+  const requestedCurrentSessionId = process.env.TIINEX_LIVE_CHAT_CURRENT_SESSION_ID?.trim();
+  const requestedSettledSessionId = process.env.TIINEX_LIVE_CHAT_SETTLED_SESSION_ID?.trim();
+  const requestedUnsettledSessionIds = parseSessionIdList(process.env.TIINEX_LIVE_CHAT_UNSETTLED_SESSION_IDS);
+  const requestedSettledSessionIds = parseSessionIdList(process.env.TIINEX_LIVE_CHAT_SETTLED_SESSION_IDS);
+
+  const currentSession = requestedCurrentSessionId
+    ? allSessions.find((candidate) => candidate.session.id === requestedCurrentSessionId || candidate.session.id.startsWith(requestedCurrentSessionId))
+    : allSessions[0];
+  assert(currentSession, `Could not resolve the requested current live chat session ${JSON.stringify(requestedCurrentSessionId)}.`);
+
+  for (const sessionId of requestedUnsettledSessionIds) {
+    const unsettledCandidate = allSessions.find((candidate) => candidate.session.id === sessionId || candidate.session.id.startsWith(sessionId));
+    assert(unsettledCandidate, `Could not resolve requested unsettled workspace chat ${JSON.stringify(sessionId)}.`);
+    assert(unsettledCandidate.quiescence.settled === false, `Expected workspace chat ${unsettledCandidate.session.id} to stay unsettled, but it classified as settled.`);
+  }
+
+  const settledCandidates = allSessions.filter((candidate) => candidate.session.id !== currentSession.session.id && candidate.quiescence.settled);
+  const settledSession = requestedSettledSessionId
+    ? allSessions.find((candidate) => candidate.session.id === requestedSettledSessionId || candidate.session.id.startsWith(requestedSettledSessionId))
+    : settledCandidates[0];
+  assert(
+    settledSession,
+    `Could not find a settled workspace chat${requestedSettledSessionId ? ` matching ${JSON.stringify(requestedSettledSessionId)}` : ' among the persisted sessions in this workspace'}. Settled candidate count: ${settledCandidates.length}. Recent sessions: ${recentSessions.map((candidate) => `${candidate.session.id}:${candidate.quiescence.settled ? 'settled' : 'ongoing'}`).join(', ')}`
+  );
+  assert(
+    settledSession.quiescence.settled === true,
+    `Expected the settled live chat ${settledSession.session.id} to classify as settled.`
+  );
+
+  for (const sessionId of requestedSettledSessionIds) {
+    const settledCandidate = allSessions.find((candidate) => candidate.session.id === sessionId || candidate.session.id.startsWith(sessionId));
+    assert(settledCandidate, `Could not resolve requested settled workspace chat ${JSON.stringify(sessionId)}.`);
+    assert(settledCandidate.quiescence.settled === true, `Expected workspace chat ${settledCandidate.session.id} to stay settled, but it classified as ongoing.`);
+  }
+
+  process.stdout.write([
+    'Live workspace quiescence probe:',
+    `- workspaceStorage root: ${storageRoot}`,
+    `- current chat report: ${currentSession.session.id} => settled=${currentSession.quiescence.settled} reason=${currentSession.quiescence.transcriptReason ?? 'none'}`,
+    `- settled chat: ${settledSession.session.id} => settled=${settledSession.quiescence.settled} reason=${settledSession.quiescence.transcriptReason ?? 'none'}`,
+    `- explicit unsettled controls: ${requestedUnsettledSessionIds.length > 0 ? requestedUnsettledSessionIds.join(', ') : 'none'}`,
+    `- explicit settled controls: ${requestedSettledSessionIds.length > 0 ? requestedSettledSessionIds.join(', ') : 'none'}`,
+    '- recent sessions:',
+    ...recentSessions.map((candidate) => `  - ${candidate.session.id} | settled=${candidate.quiescence.settled} | summary=${candidate.quiescence.summarySettled} | transcript=${candidate.quiescence.transcriptSettled} | quiet=${candidate.quiescence.quietWindowSatisfied} | reason=${candidate.quiescence.transcriptReason ?? 'none'}`)
+  ].join('\n') + '\n');
+}
+
+function parseSessionIdList(value) {
+  if (!value) {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+async function findWorkspaceStorageRootForPackage(targetPackageRoot) {
+  const workspaceStorageRoot = path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'Code', 'User', 'workspaceStorage');
+  const entries = await fs.readdir(workspaceStorageRoot, { withFileTypes: true });
+  const normalizedTargetPath = normalizeFsPath(targetPackageRoot);
+  const matchingRoots = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const storageRoot = path.join(workspaceStorageRoot, entry.name);
+    const workspaceJsonPath = path.join(storageRoot, 'workspace.json');
+    let workspaceDescriptor;
+    try {
+      workspaceDescriptor = JSON.parse(await fs.readFile(workspaceJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+
+    const workspaceRef = typeof workspaceDescriptor?.workspace === 'string'
+      ? workspaceDescriptor.workspace
+      : undefined;
+    if (!workspaceRef) {
+      continue;
+    }
+
+    const resolvedWorkspaceRef = await resolveWorkspaceReference(workspaceRef);
+    if (!resolvedWorkspaceRef) {
+      continue;
+    }
+
+    if (resolvedWorkspaceRef.kind === 'folder') {
+      if (normalizeFsPath(resolvedWorkspaceRef.path) === normalizedTargetPath) {
+        matchingRoots.push(storageRoot);
+      }
+      continue;
+    }
+
+    try {
+      const workspaceFile = JSON.parse(await fs.readFile(resolvedWorkspaceRef.path, 'utf8'));
+      const workspaceDir = path.dirname(resolvedWorkspaceRef.path);
+      const folders = Array.isArray(workspaceFile?.folders) ? workspaceFile.folders : [];
+      const matchesTargetFolder = folders.some((folder) => {
+        const folderPath = typeof folder?.path === 'string'
+          ? path.resolve(workspaceDir, folder.path)
+          : typeof folder?.uri === 'string' && folder.uri.startsWith('file://')
+            ? fileURLToPath(folder.uri)
+            : undefined;
+        return folderPath ? normalizeFsPath(folderPath) === normalizedTargetPath : false;
+      });
+
+      if (matchesTargetFolder) {
+        matchingRoots.push(storageRoot);
+      }
+    } catch {
+      // Ignore unreadable or deleted workspace file references.
+    }
+  }
+
+  if (matchingRoots.length === 0) {
+    return undefined;
+  }
+
+  if (matchingRoots.length === 1) {
+    return matchingRoots[0];
+  }
+
+  const rankedRoots = await Promise.all(matchingRoots.map(async (storageRoot) => ({
+    storageRoot,
+    lastChatSessionUpdateMs: await getLatestChatSessionUpdateMs(storageRoot)
+  })));
+  rankedRoots.sort((left, right) => right.lastChatSessionUpdateMs - left.lastChatSessionUpdateMs);
+  return rankedRoots[0]?.storageRoot;
+}
+
+async function resolveWorkspaceReference(workspaceRef) {
+  if (!workspaceRef.startsWith('file://')) {
+    return undefined;
+  }
+
+  try {
+    const resolvedPath = fileURLToPath(workspaceRef);
+    if (resolvedPath.toLowerCase().endsWith('.code-workspace')) {
+      return {
+        kind: 'workspace-file',
+        path: resolvedPath
+      };
+    }
+
+    return {
+      kind: 'folder',
+      path: resolvedPath
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadWorkspaceProbeSession(sessionFile, lastUpdatedMs) {
+  const tailState = await readWorkspaceProbeSessionTailState(sessionFile);
+  const latestRequestSettled = Boolean(tailState && tailState.requestCount > 0 && tailState.latestRequestHasResponse && tailState.latestRequestHasResult);
+  const hasLatestRequest = Boolean(tailState && tailState.requestCount > 0);
+
+  return {
+    id: path.basename(sessionFile, '.jsonl'),
+    title: path.basename(sessionFile, '.jsonl'),
+    lastUpdated: new Date(lastUpdatedMs).toISOString(),
+    archived: false,
+    provider: 'workspaceStorage',
+    sessionFile,
+    hasPendingEdits: false,
+    pendingRequestCount: hasLatestRequest && !latestRequestSettled ? 1 : 0,
+    lastRequestCompleted: hasLatestRequest ? latestRequestSettled : true
+  };
+}
+
+async function readWorkspaceProbeSessionTailState(sessionFile) {
+  try {
+    const raw = await fs.readFile(sessionFile, 'utf8');
+    const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-160);
+    if (lines.length === 0) {
+      return undefined;
+    }
+
+    let requestCount = 0;
+    let latestRequestHasResponse = false;
+    let latestRequestHasResult = false;
+
+    for (const line of lines) {
+      let row;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (row?.kind === 0 && Array.isArray(row?.v?.requests) && row.v.requests.length > 0) {
+        requestCount = Math.max(requestCount, row.v.requests.length);
+        const latestRequest = row.v.requests[row.v.requests.length - 1];
+        latestRequestHasResponse = latestRequest?.response !== undefined;
+        latestRequestHasResult = latestRequest?.result !== undefined;
+        continue;
+      }
+
+      const keyPath = Array.isArray(row?.k) ? row.k : [];
+      if (keyPath.length === 1 && keyPath[0] === 'requests' && Array.isArray(row?.v) && row.v.length > 0) {
+        requestCount += row.v.length;
+        const latestRequest = row.v[row.v.length - 1];
+        latestRequestHasResponse = latestRequest?.response !== undefined;
+        latestRequestHasResult = latestRequest?.result !== undefined;
+        continue;
+      }
+
+      if (keyPath[0] !== 'requests') {
+        continue;
+      }
+
+      if (typeof keyPath[1] === 'number') {
+        requestCount = Math.max(requestCount, keyPath[1] + 1);
+      }
+
+      if (keyPath[2] === 'response') {
+        latestRequestHasResponse = true;
+      }
+
+      if (keyPath[2] === 'result') {
+        latestRequestHasResult = true;
+      }
+    }
+
+    return {
+      requestCount,
+      latestRequestHasResponse,
+      latestRequestHasResult
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function getLatestChatSessionUpdateMs(storageRoot) {
+  try {
+    const sessionDir = path.join(storageRoot, 'chatSessions');
+    const entries = await fs.readdir(sessionDir, { withFileTypes: true });
+    let latestUpdateMs = -Infinity;
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+        continue;
+      }
+
+      const stats = await fs.stat(path.join(sessionDir, entry.name));
+      latestUpdateMs = Math.max(latestUpdateMs, stats.mtimeMs);
+    }
+
+    return latestUpdateMs;
+  } catch {
+    return -Infinity;
+  }
+}
+
+function normalizeFsPath(value) {
+  return String(value).replace(/\\/g, '/').toLowerCase();
 }
 
 async function runChatFocusTargetChecks() {
@@ -4140,7 +5447,7 @@ async function runLiveChatSupportMatrixChecks() {
   assert(matrix.localNewChatCustomAgent.status === "unsupported", "Live chat support matrix test did not keep Local custom-agent support blocked.");
   assert(matrix.localFocusedPromptSubmit.status === "best-effort", "Live chat support matrix test did not expose focused Local prompt submit as best-effort when focusInput and submit exist.");
   assert(matrix.localExactReveal.status === "supported", "Live chat support matrix test did not expose the supported exact Local reveal surface.");
-  assert(matrix.localExactSend.status === "unsupported", "Live chat support matrix test did not reflect missing Local exact-session send support.");
+  assert(matrix.localSessionFollowUpSend.status === "supported", "Live chat support matrix test did not reflect the supported Local session follow-up send surface.");
   assert(matrix.manifestParticipants[0]?.id === "github.copilot.editsAgent", "Live chat support matrix test did not expose manifest chat participants.");
   assert(matrix.manifestModelCommands[0]?.includes("Change Completions Model"), "Live chat support matrix test did not expose manifest model commands.");
   assert(matrix.switchAgentOptions.includes("Plan"), "Live chat support matrix test did not expose the manifest switch-agent options.");
@@ -4150,6 +5457,7 @@ async function runLiveChatSupportMatrixChecks() {
   assert(markdown.includes("Local new chat custom agent: unsupported"), "Live chat support matrix markdown did not include the Local custom-agent limitation.");
   assert(markdown.includes("Local focused prompt submit: best-effort"), "Live chat support matrix markdown did not include the focused Local prompt submit status.");
   assert(markdown.includes("Local exact reveal: supported"), "Live chat support matrix markdown did not include the supported Local exact reveal status.");
+  assert(markdown.includes("Local session follow-up send: supported"), "Live chat support matrix markdown did not include the Local session follow-up send status.");
   assert(markdown.includes("workbench.action.chat.openSessionInEditorGroup: yes"), "Live chat support matrix markdown did not include the editor-group Local reveal command evidence.");
   assert(markdown.includes("github.copilot.chat.openModelPicker => Change Completions Model"), "Live chat support matrix markdown did not include the manifest model command evidence.");
 
@@ -4269,7 +5577,7 @@ async function runLocalToCopilotCliHandoffChecks() {
 
   assert(markdown.includes("# Local To Copilot CLI Handoff"), "Local-to-CLI handoff markdown must render the handoff header.");
   assert(markdown.includes("- Canonical session or resource: copilotcli:/cli-session-456"), "Local-to-CLI handoff markdown must include the CLI canonical resource.");
-  assert(markdown.includes("Current Local exact-target limitation"), "Local-to-CLI handoff markdown must preserve the Local targeting limitation provenance.");
+  assert(markdown.includes("Current Local follow-up transport"), "Local-to-CLI handoff markdown must preserve the Local follow-up transport provenance.");
   assert(markdown.includes("## Exact Handoff Prompt"), "Local-to-CLI handoff markdown must include the exact handoff prompt section.");
   assert(markdown.includes("Latest logged Copilot CLI resource") === false, "Local-to-CLI handoff markdown should prefer the exact canonical resource over noisy logged-resource hints.");
 
@@ -5204,7 +6512,9 @@ async function runManifestChecks() {
 
 async function runRoutingGuardChecks() {
   const firstSliceModule = await import(pathToFileURL(distFirstSlice).href);
+  const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
   const readme = await fs.readFile(readmePath, "utf-8");
+  const extensionSource = await fs.readFile(extensionSourcePath, "utf-8");
   const toolsInstructions = await fs.readFile(toolsInstructionPath, "utf-8");
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
@@ -5227,6 +6537,14 @@ async function runRoutingGuardChecks() {
   assert(
     readme.includes("Bounded inspection surfaces should be preferred over opening raw session JSONL directly."),
     "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
+  );
+  assert(
+    extensionSource.includes('postCreateTimeoutMs", 900000'),
+    "Extension wiring must keep the intended 15-minute default timeout for live chat interop waits."
+  );
+  assert(
+    packageJson?.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.postCreateTimeoutMs"]?.default === 900000,
+    "Extension manifest settings must keep the intended 15-minute default timeout for live chat interop waits."
   );
   assert(
     !languageModelToolsSource.includes("create_disposable_local_delete_probe"),
@@ -5286,6 +6604,43 @@ async function runMcpChecks() {
 
   try {
     await client.connect(transport);
+
+    const listFixtureRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-mcp-list-sessions-"));
+    try {
+      const listFixtureSessionFile = path.join(listFixtureRoot, "chatSessions", "session-listed.jsonl");
+      await fs.mkdir(path.dirname(listFixtureSessionFile), { recursive: true });
+      await fs.writeFile(listFixtureSessionFile, '{"kind":0}\n', 'utf8');
+      await writeWorkspaceStateValue(path.join(listFixtureRoot, "state.vscdb"), 'chat.ChatSessionStore.index', JSON.stringify({
+        version: 1,
+        entries: {
+          'session-listed': {
+            sessionId: 'session-listed',
+            title: 'Listed Session',
+            lastMessageDate: 1775930005000,
+            isEmpty: false,
+            isExternal: false
+          }
+        }
+      }));
+
+      const listResult = await client.callTool({
+        name: "listSessions",
+        arguments: {
+          storageRoots: [listFixtureRoot],
+          limit: 5,
+          maxOutputChars: 4000
+        }
+      });
+      const listText = listResult.content
+        .filter((item) => item.type === "text")
+        .map((item) => item.text)
+        .join("\n");
+      assert(listResult.isError !== true, "MCP listSessions success test unexpectedly returned an error.");
+      assert(listText.includes("session-listed"), "MCP listSessions success test did not include the indexed session id.");
+      assert(listText.includes("Listed Session"), "MCP listSessions success test did not include the indexed session title.");
+    } finally {
+      await fs.rm(listFixtureRoot, { recursive: true, force: true });
+    }
 
     const toolList = await client.listTools();
     const advertisedToolNames = toolList.tools.map((tool) => tool.name);
@@ -5547,6 +6902,8 @@ const namedChecks = [
   ["chat-session-storage-delta", runChatSessionStorageDeltaChecks],
   ["offline-local-chat-cleanup", runOfflineLocalChatCleanupChecks],
   ["session-send-workflow", runSessionSendWorkflowChecks],
+  ["live-chat-quiescence", runLiveChatQuiescenceChecks],
+  ["live-chat-quiescence-workspace", runLiveChatWorkspaceQuiescenceProbe],
   ["live-chat-support-matrix", runLiveChatSupportMatrixChecks],
   ["local-to-copilot-cli-handoff", runLocalToCopilotCliHandoffChecks],
   ["pending-request-heuristics", runPendingRequestHeuristicChecks],

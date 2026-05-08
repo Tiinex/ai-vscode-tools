@@ -693,7 +693,6 @@ async function syncLiveChatInteropContext(chatInterop: ChatInteropApi): Promise<
   ]);
   await Promise.all([
     vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTools.exactLiveChatRevealSupported", support.canRevealExactSession),
-    vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTools.exactLiveChatSendSupported", support.canSendExactSessionMessage),
     vscode.commands.executeCommand("setContext", "tiinex.aiVscodeTools.focusedLiveChatSendSupported", focusedSupport.canSubmitFocusedChatMessage)
   ]);
 }
@@ -723,7 +722,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const config = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
     const chatInteropOptions = {
       workspaceStorageRoots: currentWorkspaceStorageRoots(context),
-      postCreateTimeoutMs: config.get<number>("postCreateTimeoutMs", 90000),
+      postCreateTimeoutMs: config.get<number>("postCreateTimeoutMs", 900000),
       waitForPersistedDefault: config.get<boolean>("waitForPersistedDefault", true)
     };
 

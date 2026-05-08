@@ -43,7 +43,7 @@ export interface LiveChatSupportMatrix {
   localNewChatCustomAgent: SupportCell;
   localFocusedPromptSubmit: SupportCell;
   localExactReveal: SupportCell;
-  localExactSend: SupportCell;
+  localSessionFollowUpSend: SupportCell;
   localExactModeModelOverride: SupportCell;
   localExactCustomAgent: SupportCell;
   runtimeCommands: {
@@ -151,22 +151,24 @@ export function buildLiveChatSupportMatrix(options: {
           status: "unsupported",
           reason: options.exactSessionInterop.revealUnsupportedReason ?? "No supported Local exact-session reveal command was found."
         },
-    localExactSend: options.exactSessionInterop.canSendExactSessionMessage
+    localSessionFollowUpSend: options.exactSessionInterop.canRevealExactSession && focusedChatInterop.canSubmitFocusedChatMessage
       ? {
           status: "supported",
-          reason: `A generic Local exact-session send command is present: ${GENERIC_SESSION_OPEN_WITH_PROMPT_COMMAND}.`
+          reason: `Verified Local follow-up send uses exact reveal through ${commandSet.has(GENERIC_SESSION_OPEN_COMMAND) ? GENERIC_SESSION_OPEN_COMMAND : EDITOR_GROUP_SESSION_OPEN_COMMAND} and then submits through focused chat input via ${FOCUSED_CHAT_INPUT_COMMAND} and ${FOCUSED_CHAT_SUBMIT_COMMAND}.`
         }
       : {
           status: "unsupported",
-          reason: options.exactSessionInterop.sendUnsupportedReason ?? "No generic Local exact-session send command was found."
+        reason: !options.exactSessionInterop.canRevealExactSession
+          ? options.exactSessionInterop.revealUnsupportedReason ?? "No supported Local exact-session reveal command was found."
+          : focusedChatInterop.unsupportedReason ?? "Focused Local prompt submit commands were not available."
         },
     localExactModeModelOverride: {
       status: "unsupported",
-      reason: "Exact-session Local send does not provide a trustworthy way to enforce or prove mode/model override on this build, so the interop layer blocks those requests."
+      reason: "Session-targeted Local follow-up send uses focused submit on this build, so mode/model override cannot be enforced or proven independently during the follow-up transport."
     },
     localExactCustomAgent: {
       status: "unsupported",
-      reason: "Exact-session Local send cannot independently verify a custom agent prompt selector on this build, and Local createChat cannot select a real custom agent either."
+      reason: "Session-targeted Local follow-up send cannot independently verify a custom agent prompt selector on this build, and Local createChat cannot select a real custom agent either."
     },
     runtimeCommands,
     manifestParticipants,
@@ -191,7 +193,7 @@ export function renderLiveChatSupportMatrixMarkdown(
     renderSupportLine("Local new chat custom agent", matrix.localNewChatCustomAgent),
     renderSupportLine("Local focused prompt submit", matrix.localFocusedPromptSubmit),
     renderSupportLine("Local exact reveal", matrix.localExactReveal),
-    renderSupportLine("Local exact send", matrix.localExactSend),
+    renderSupportLine("Local session follow-up send", matrix.localSessionFollowUpSend),
     renderSupportLine("Local exact mode/model override", matrix.localExactModeModelOverride),
     renderSupportLine("Local exact custom agent", matrix.localExactCustomAgent)
   ];
@@ -201,7 +203,7 @@ export function renderLiveChatSupportMatrixMarkdown(
       "",
       "## Additional Signals",
       `- Exact-session reveal commands present: ${yesNo(matrix.runtimeCommands.genericOpenSession || matrix.runtimeCommands.editorGroupOpenSession)}`,
-      `- Exact-session send command present: ${yesNo(matrix.runtimeCommands.genericOpenSessionWithPrompt)}`,
+      `- Focused submit command pair present: ${yesNo(matrix.runtimeCommands.focusInput && matrix.runtimeCommands.chatSubmit)}`,
       `- Manifest participants discovered: ${matrix.manifestParticipants.length}`,
       `- Manifest model commands discovered: ${matrix.manifestModelCommands.length}`,
       `- Switch-agent options discovered: ${matrix.switchAgentOptions.length}`,
@@ -209,7 +211,7 @@ export function renderLiveChatSupportMatrixMarkdown(
       "## Interpretation",
       "- This compact view is intended for agent-facing triage when you mainly need capability status rather than raw command or manifest listings.",
       "- Request detailLevel=full when you need exact runtime command evidence, full manifest participant rows, or the switch-agent option list.",
-      "- Local exact reveal and Local exact send remain separate questions on this build; the command-presence counts above do not collapse that distinction."
+      "- Verified Local follow-up send on this build means exact reveal plus focused submit; no separate ordinary exact-send product path is assumed."
     );
     return `${lines.join("\n")}\n`;
   }
@@ -260,10 +262,10 @@ export function renderLiveChatSupportMatrixMarkdown(
     "",
     "## Interpretation",
     "- Local createChat is a viable transport for opening a new Copilot Chat thread and requesting mode/model.",
-    "- Focused Local prompt submit is a separate best-effort transport that depends on the currently visible chat rather than an exact session id.",
+    "- Verified Local follow-up send on this build uses exact reveal to steer the target session and then focused prompt submit to dispatch the follow-up.",
     "- Local createChat can still dispatch a custom role prompt for the first turn, but that role should be interpreted as request-artifact guidance rather than a verified participant switch.",
     "- Local custom-agent participant selection is not a viable transport on this build because persisted sessions still keep the built-in agent.",
-    "- Exact Local reveal is now possible when a supported Local session-reveal command is present, but exact Local follow-up send remains blocked without a trustworthy exact-session prompt path."
+    "- Exact Local reveal remains a real building block, but ordinary Local direct exact-send is not carried as a separate product path in this repo."
   );
 
   return `${lines.join("\n")}\n`;

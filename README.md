@@ -64,7 +64,7 @@ Core settings:
 
 - `tiinex.aiVscodeTools.showSessionsView`
 - `tiinex.aiVscodeTools.sessionDiscoveryScope`
-- `tiinex.aiVscodeTools.postCreateTimeoutMs`
+- `tiinex.aiVscodeTools.postCreateTimeoutMs` default `900000` (15 minutes)
 - `tiinex.aiVscodeTools.waitForPersistedDefault`
 
 ## Release Flow

@@ -37,9 +37,9 @@ export function renderLocalToCopilotCliHandoffMarkdown(options: LocalToCopilotCl
     "## Surface Boundaries",
     "- Treat the Local incident and the Copilot CLI worker lane as separate surfaces.",
     "- Do not claim session continuity or identity continuity between them.",
-    support.sendUnsupportedReason
-      ? `- Current Local exact-target limitation: ${support.sendUnsupportedReason}`
-      : "- Current Local exact-target limitation: none reported by the host build.",
+    support.canRevealExactSession
+      ? "- Current Local follow-up transport: exact reveal is available, then submit proceeds through focused Local chat input; no separate direct exact-send surface is assumed."
+      : `- Current Local follow-up transport limitation: ${support.revealUnsupportedReason ?? "Exact Local reveal is unavailable on this build."}`,
     "- Use this package as evidence transport and mode selector, not as proof that the worker is the original Local target.",
     "",
     "## Issue Summary",

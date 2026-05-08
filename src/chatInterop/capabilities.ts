@@ -3,16 +3,8 @@ const GENERIC_SESSION_OPEN_COMMAND_CANDIDATES = [
   "workbench.action.chat.openSession"
 ] as const;
 
-const GENERIC_SESSION_OPEN_WITH_PROMPT_COMMAND_CANDIDATES = [
-  "workbench.action.chat.openSessionWithPrompt"
-] as const;
-
 const CLI_SESSION_OPEN_COMMAND_CANDIDATES = [
   "workbench.action.chat.openSession.copilotcli"
-] as const;
-
-const CLI_SESSION_OPEN_WITH_PROMPT_COMMAND_CANDIDATES = [
-  "workbench.action.chat.openSessionWithPrompt.copilotcli"
 ] as const;
 
 const FOCUSED_CHAT_INPUT_COMMAND_CANDIDATES = [
@@ -27,9 +19,7 @@ const DIRECT_AGENT_OPEN_COMMAND_PREFIX = "workbench.action.chat.open";
 
 export interface ExactSessionInteropSupport {
   canRevealExactSession: boolean;
-  canSendExactSessionMessage: boolean;
   revealUnsupportedReason?: string;
-  sendUnsupportedReason?: string;
 }
 
 export interface FocusedChatInteropSupport {
@@ -41,10 +31,6 @@ export interface FocusedChatInteropSupport {
 
 export function findExactSessionOpenCommand(commands: Iterable<string>): string | undefined {
   return findRegisteredCommand(commands, GENERIC_SESSION_OPEN_COMMAND_CANDIDATES);
-}
-
-export function findExactSessionSendCommand(commands: Iterable<string>): string | undefined {
-  return findRegisteredCommand(commands, GENERIC_SESSION_OPEN_WITH_PROMPT_COMMAND_CANDIDATES);
 }
 
 export function findFocusedChatInputCommand(commands: Iterable<string>): string | undefined {
@@ -90,24 +76,13 @@ export function buildUnsupportedRevealReason(commands: Iterable<string>): string
   return "Exact session reveal is not supported in this VS Code/Copilot build. No supported Local session-reveal command was found for ordinary local chat sessions.";
 }
 
-export function buildUnsupportedSendReason(commands: Iterable<string>): string {
-  const registeredCommands = new Set(commands);
-  if (CLI_SESSION_OPEN_WITH_PROMPT_COMMAND_CANDIDATES.some((command) => registeredCommands.has(command))) {
-    return "Exact session-targeted send for ordinary local chats is not supported in this VS Code/Copilot build. Only a Copilot CLI-specific openSessionWithPrompt command is present, and it rejects normal local chat session resources.";
-  }
-  return "Exact session-targeted send is not supported in this VS Code/Copilot build. No generic internal openSessionWithPrompt chat command was found for ordinary local chat sessions.";
-}
-
 export function getExactSessionInteropSupport(commands: Iterable<string>): ExactSessionInteropSupport {
   const commandList = [...commands];
   const canRevealExactSession = Boolean(findExactSessionOpenCommand(commandList));
-  const canSendExactSessionMessage = Boolean(findExactSessionSendCommand(commandList));
 
   return {
     canRevealExactSession,
-    canSendExactSessionMessage,
-    revealUnsupportedReason: canRevealExactSession ? undefined : buildUnsupportedRevealReason(commandList),
-    sendUnsupportedReason: canSendExactSessionMessage ? undefined : buildUnsupportedSendReason(commandList)
+    revealUnsupportedReason: canRevealExactSession ? undefined : buildUnsupportedRevealReason(commandList)
   };
 }
 

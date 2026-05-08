@@ -30,6 +30,7 @@
     "onLanguageModelTool:get_agent_session_profile",
     "onLanguageModelTool:survey_agent_sessions",
     "onLanguageModelTool:list_live_agent_chats",
+    "onLanguageModelTool:inspect_live_agent_chat_quiescence",
     "onLanguageModelTool:create_live_agent_chat",
     "onLanguageModelTool:close_visible_live_chat_tabs",
     "onLanguageModelTool:delete_live_agent_chat_artifacts",
@@ -158,8 +159,8 @@
         },
         "tiinex.aiVscodeTools.postCreateTimeoutMs": {
           "type": "number",
-          "default": 90000,
-          "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows). Default: 90 seconds."
+          "default": 900000,
+          "description": "Timeout in milliseconds to wait for a persisted session mutation after dispatch (used by focused-send and createChat workflows). Default: 15 minutes."
         },
         "tiinex.aiVscodeTools.waitForPersistedDefault": {
           "type": "boolean",
@@ -745,6 +746,26 @@
               "description": "Maximum number of live chats to include."
             }
           }
+        }
+      },
+      {
+        "name": "inspect_live_agent_chat_quiescence",
+        "displayName": "Inspect Live Agent Chat Quiescence",
+        "userDescription": "Inspect whether one live agent chat currently looks ongoing or settled from persisted evidence.",
+        "modelDescription": "Inspect whether one exact live agent chat currently looks ongoing or settled from persisted evidence using the same quiescence logic that the Local create/send wait path uses. This is a read-only diagnostic surface: it checks the persisted summary, companion transcript, quiet-window gate, and session-tail override, then reports whether the chat currently looks settled enough to return or still in-flight.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "inspect-live-agent-chat-quiescence",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string",
+              "description": "Exact or prefix session identifier for the live agent chat to inspect."
+            }
+          },
+          "required": [
+            "sessionId"
+          ]
         }
       },
       {

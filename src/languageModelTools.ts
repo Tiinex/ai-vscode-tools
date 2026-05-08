@@ -13,6 +13,7 @@ import {
   renderLiveChatSupportMatrixMarkdown,
   renderRuntimeChatCommandInventoryMarkdown
 } from "./chatInterop/supportMatrix";
+import { getSessionQuiescenceState } from "./chatInterop/unsettledDiagnostics";
 import type { SessionTarget, SessionToolsAdapter } from "./coreAdapter";
 import {
   describeCopilotCliSessionStateRoot,
@@ -156,6 +157,10 @@ interface LiveChatSelectionInput {
   sessionId: string;
 }
 
+interface InspectLiveChatQuiescenceInput {
+  sessionId: string;
+}
+
 interface CloseVisibleLiveChatTabsInput {
   sessionId: string;
 }
@@ -189,7 +194,6 @@ interface FocusedEditorChatMutationInput extends LiveChatMutationInput {
 
 interface SendLiveChatMessageInput extends LiveChatMutationInput {
   sessionId: string;
-  allowTransportWorkaround?: boolean;
 }
 
 const DEFAULT_MAX_OUTPUT_CHARS = 12_000;
@@ -572,6 +576,23 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: "inspect_live_agent_chat_quiescence",
+    displayName: "Inspect Live Agent Chat Quiescence",
+    userDescription: "Inspect whether one live agent chat currently looks ongoing or settled from persisted evidence.",
+    modelDescription: "Inspect whether one exact live agent chat currently looks ongoing or settled from persisted evidence using the same quiescence logic that the Local create/send wait path uses. This is a read-only diagnostic surface: it checks the persisted summary, companion transcript, quiet-window gate, and session-tail override, then reports whether the chat currently looks settled enough to return or still in-flight.",
+    toolReferenceName: "inspect-live-agent-chat-quiescence",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "Exact or prefix session identifier for the live agent chat to inspect."
+        }
+      },
+      required: ["sessionId"]
+    }
+  },
+  {
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route when the first visible message should carry the requested agent.",
@@ -661,8 +682,8 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
   {
     name: "send_message_to_live_agent_chat",
     displayName: "Send Message To Live Agent Chat",
-    userDescription: "Advanced exact-session continuation for an existing live chat.",
-    modelDescription: "Advanced exact-session continuation by session id. Use this when you already have the target session and want to continue the same chat. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused fallback surfaces may then use temporary prompt-file slash dispatch. On builds where ordinary Local exact send is unsupported, this tool may still fall back to reveal plus focused submit and therefore remains subject to host limits.",
+    userDescription: "Continue an existing live chat by session id.",
+    modelDescription: "Continue an existing live chat by session id. On this build the verified follow-up transport is: reveal the exact Local session, focus the resulting editor-hosted chat, then submit through the focused chat input. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused send surfaces may then use temporary prompt-file slash dispatch.",
     toolReferenceName: "send-message-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -702,10 +723,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         requireSelectionEvidence: {
           type: "boolean",
           description: "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
-        },
-        allowTransportWorkaround: {
-          type: "boolean",
-          description: "If true, and this build lacks ordinary Local exact send, allow a decoy-session workaround when the latest-session self-targeting guard would otherwise block the send. This is transport-workaround evidence, not strict exact-session proof."
         }
       },
       required: ["sessionId", "prompt"]
@@ -842,6 +859,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
 
 const LOCAL_CHAT_CONTROL_TOOL_NAMES = new Set([
   "list_live_agent_chats",
+  "inspect_live_agent_chat_quiescence",
   "close_visible_live_chat_tabs",
   "reveal_live_agent_chat"
 ]);
@@ -918,6 +936,38 @@ function renderLiveChatList(chats: ChatSessionSummary[], limit: number): string 
   return `${lines.join("\n")}\n`;
 }
 
+async function renderLiveChatQuiescence(chatInterop: ChatInteropApi, sessionId: string): Promise<string> {
+  const session = (await chatInterop.listChats()).find((item) => item.id === sessionId || item.id.startsWith(sessionId));
+  if (!session) {
+    throw new Error(`No live agent chat matched ${JSON.stringify(sessionId)}.`);
+  }
+
+  const quiescence = await getSessionQuiescenceState(session);
+  const lines = [
+    "# Live Agent Chat Quiescence",
+    "",
+    "## Session",
+    `- Session ID: ${session.id}`,
+    `- Title: ${session.title}`,
+    `- Last Updated: ${session.lastUpdated}`,
+    `- Session File: ${session.sessionFile}`,
+    "",
+    "## Current State",
+    `- Classification: ${quiescence.settled ? "settled" : "ongoing"}`,
+    `- Settled: ${quiescence.settled ? "yes" : "no"}`,
+    `- Summary Settled: ${quiescence.summarySettled ? "yes" : "no"}`,
+    `- Transcript Present: ${quiescence.transcriptPresent ? "yes" : "no"}`,
+    `- Transcript Settled: ${quiescence.transcriptSettled ? "yes" : "no"}`,
+    `- Quiet Window Satisfied: ${quiescence.quietWindowSatisfied ? "yes" : "no"}`,
+    `- Pending Request Count: ${session.pendingRequestCount ?? 0}`,
+    `- Last Request Completed: ${session.lastRequestCompleted === undefined ? "-" : session.lastRequestCompleted ? "yes" : "no"}`,
+    `- Pending Edits: ${session.hasPendingEdits === undefined ? "-" : session.hasPendingEdits ? "yes" : "no"}`,
+    `- Reason: ${quiescence.transcriptReason ?? (quiescence.settled ? "Persisted evidence currently looks settled enough to return." : "No specific unsettled reason was available.")}`
+  ];
+
+  return `${lines.join("\n")}\n`;
+}
+
 async function resolveCopilotCliSessionTarget(input: SendCopilotCliPromptInput): Promise<Awaited<ReturnType<typeof listCopilotCliSessions>>[number]> {
   const sessions = await listCopilotCliSessions({
     limit: 20
@@ -970,7 +1020,6 @@ function toCreateChatRequest(input: LiveChatMutationInput): CreateChatRequest {
 function toSendChatMessageRequest(input: SendLiveChatMessageInput): SendChatMessageRequest {
   return {
     sessionId: input.sessionId,
-    allowTransportWorkaround: input.allowTransportWorkaround,
     ...toCreateChatRequest(input)
   };
 }
@@ -1004,7 +1053,7 @@ function formatChatMutationResult(
 
     if (revealLifecycle.timingMs) {
       lines.push(
-        `- Fallback Total Duration Ms: ${revealLifecycle.timingMs.totalFallbackMs ?? "-"}`,
+        `- Canonical Send Total Duration Ms: ${revealLifecycle.timingMs.totalCanonicalSendMs ?? "-"}`,
         `- Reveal Duration Ms: ${revealLifecycle.timingMs.revealMs ?? "-"}`,
         `- Focus Duration Ms: ${revealLifecycle.timingMs.focusMs ?? "-"}`,
         `- Focused Send Call Duration Ms: ${revealLifecycle.timingMs.focusedSendCallMs ?? "-"}`,
@@ -1013,7 +1062,15 @@ function formatChatMutationResult(
         `- Focused Submit Duration Ms: ${revealLifecycle.timingMs.submitMs ?? "-"}`,
         `- Focused Mutation Wait Duration Ms: ${revealLifecycle.timingMs.focusedMutationWaitMs ?? "-"}`,
         `- Focused Mutation Poll Count: ${revealLifecycle.timingMs.focusedMutationPollCount ?? "-"}`,
-        `- Focused Mutation Storage Scan Ms: ${revealLifecycle.timingMs.focusedMutationScanMs ?? "-"}`
+        `- Focused Mutation Poll Interval Ms: ${revealLifecycle.timingMs.focusedMutationPollIntervalMs ?? "-"}`,
+        `- Focused Mutation Storage Scan Ms: ${revealLifecycle.timingMs.focusedMutationScanMs ?? "-"}`,
+        `- Focused Mutation First Observed After Wait Ms: ${revealLifecycle.timingMs.focusedMutationFirstObservedAfterWaitMs ?? "-"}`,
+        `- Focused Mutation First Settled After Wait Ms: ${revealLifecycle.timingMs.focusedMutationFirstSettledAfterWaitMs ?? "-"}`,
+        `- Focused Mutation Persisted Request After Dispatch Ms: ${revealLifecycle.timingMs.focusedMutationPersistedRequestAfterDispatchMs ?? "-"}`,
+        `- Focused Mutation Persisted Completion After Request Ms: ${revealLifecycle.timingMs.focusedMutationPersistedCompletionAfterRequestMs ?? "-"}`,
+        `- Focused Mutation Post-Settled Wait Ms: ${revealLifecycle.timingMs.focusedMutationPostSettledWaitMs ?? "-"}`,
+        `- Focused Mutation Post-Completion Wait Ms: ${revealLifecycle.timingMs.focusedMutationPostCompletionWaitMs ?? "-"}`,
+        `- Focused Mutation Reaction Lag Ms: ${revealLifecycle.timingMs.focusedMutationReactionLagMs ?? "-"}`
       );
     }
   }
@@ -1211,6 +1268,25 @@ class LiveChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 }
 
+class LocalChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
+  constructor(
+    private readonly invocationMessage: (input: TInput) => string,
+    private readonly invokeImpl: (input: TInput, budget: number) => Promise<string>
+  ) {}
+
+  prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<TInput>): vscode.PreparedToolInvocation {
+    return {
+      invocationMessage: this.invocationMessage(options.input)
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<TInput>): Promise<vscode.LanguageModelToolResult> {
+    const budget = outputBudget(options.tokenizationOptions?.tokenBudget);
+    const content = await this.invokeImpl(options.input, budget);
+    return textResult(content);
+  }
+}
+
 export function registerLanguageModelTools(context: vscode.ExtensionContext, adapter: SessionToolsAdapter, chatInterop?: ChatInteropApi): void {
   const currentWorkspaceStorageRoots = (() => {
     if (!context.storageUri) {
@@ -1348,14 +1424,21 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
       liveToolRegistrations.push(
         vscode.lm.registerTool(
           "list_live_agent_chats",
-          new LiveChatTool<ListLiveChatsInput>(
+          new LocalChatTool<ListLiveChatsInput>(
             () => "Listing live agent chat sessions",
             async (input) => renderLiveChatList(await chatInterop.listChats(), input.limit ?? 20)
           )
         ),
         vscode.lm.registerTool(
+          "inspect_live_agent_chat_quiescence",
+          new LocalChatTool<InspectLiveChatQuiescenceInput>(
+            (input) => `Inspecting live agent chat quiescence for ${JSON.stringify(input.sessionId)}`,
+            async (input) => renderLiveChatQuiescence(chatInterop, input.sessionId)
+          )
+        ),
+        vscode.lm.registerTool(
           "close_visible_live_chat_tabs",
-          new LiveChatTool<CloseVisibleLiveChatTabsInput>(
+          new LocalChatTool<CloseVisibleLiveChatTabsInput>(
             (input) => `Closing visible live chat tabs for ${JSON.stringify(input.sessionId)}`,
             async (input) => {
               await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "close-visible-tabs");
@@ -1369,7 +1452,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         ),
         vscode.lm.registerTool(
           "delete_live_agent_chat_artifacts",
-          new LiveChatTool<DeleteLiveChatArtifactsInput>(
+          new LocalChatTool<DeleteLiveChatArtifactsInput>(
             (input) => `${input.dryRun ? "Dry-running" : input.scheduleExactSelfDelete ? "Scheduling offline delete for" : "Deleting"} live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
             async (input) => {
               if (input.dryRun && input.scheduleExactSelfDelete) {
@@ -1464,7 +1547,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         ),
         vscode.lm.registerTool(
           "reveal_live_agent_chat",
-          new LiveChatTool<LiveChatSelectionInput>(
+          new LocalChatTool<LiveChatSelectionInput>(
             (input) => `Revealing live agent chat ${JSON.stringify(input.sessionId)}`,
             async (input) => {
               await assertNotSelfTargetingLiveChat(chatInterop, input.sessionId, "reveal");
@@ -1483,7 +1566,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
       liveToolRegistrations.push(
         vscode.lm.registerTool(
           "create_live_agent_chat",
-          new LiveChatTool<LiveChatMutationInput>(
+          new LocalChatTool<LiveChatMutationInput>(
             () => "Creating a new live agent chat",
             async (input) => {
               const result = await chatInterop.createChat(toCreateChatRequest(input));
@@ -1501,7 +1584,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         ),
         vscode.lm.registerTool(
           "send_message_to_live_agent_chat",
-          new LiveChatTool<SendLiveChatMessageInput>(
+          new LocalChatTool<SendLiveChatMessageInput>(
             (input) => `Sending a message to live agent chat ${JSON.stringify(input.sessionId)}`,
             async (input) => {
               const request = toSendChatMessageRequest(input);
@@ -1520,7 +1603,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         ),
         vscode.lm.registerTool(
           "send_message_to_focused_live_chat",
-          new LiveChatTool<FocusedLiveChatMutationInput>(
+          new LocalChatTool<FocusedLiveChatMutationInput>(
             () => "Sending a message to the currently focused live chat",
             async (input) => {
               await assertFocusedLiveChatNotSelfTargeting(chatInterop, "focused-send");

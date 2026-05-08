@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import initSqlJs from "sql.js";
 import { toLocalChatSessionResourceString } from "./chatInterop/sessionResource";
@@ -47,10 +47,19 @@ let sqlPromise: Promise<Awaited<ReturnType<typeof initSqlJs>>> | undefined;
 
 type SqlDatabaseLike = any;
 
+function resolveSqlJsRuntimeFile(file: string): string {
+  const candidates = [
+    path.resolve(__dirname, "vendor", "sql.js", file),
+    path.resolve(__dirname, "..", "vendor", "sql.js", file)
+  ];
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+}
+
 async function getSqlJs(): Promise<Awaited<ReturnType<typeof initSqlJs>>> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
-      locateFile: (file) => path.resolve(__dirname, "vendor", "sql.js", file)
+      locateFile: resolveSqlJsRuntimeFile
     });
   }
   return sqlPromise;

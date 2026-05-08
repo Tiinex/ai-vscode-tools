@@ -69,7 +69,7 @@ const SESSION_ACTIONS: SessionActionDefinition[] = [
   {
     label: "Send Message To Local Chat",
     command: "tiinex.aiVscodeTools.sendMessageToLiveChat",
-    tooltip: "Send a follow-up message to this Local chat session, using exact send when available or reveal plus focused-send fallback when needed.",
+    tooltip: "Send a follow-up message to this Local chat session through the canonical reveal-plus-focused-submit transport.",
     icon: new vscode.ThemeIcon("send")
   }
 ];

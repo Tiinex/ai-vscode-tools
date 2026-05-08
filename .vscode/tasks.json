@@ -239,6 +239,143 @@
 				"routing-guard"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "probe focused/session wait heuristics",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe focused/session wait heuristics",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe focused/session wait heuristics",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe focused wait heuristic only",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe focused wait heuristic only",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe focused wait heuristic only",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe session-send wait heuristic only",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "probe session-send wait heuristic only",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"session-send-workflow"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "wait logic regression suite",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"focused-send",
+				"session-send-workflow",
+				"create-chat-direct-agent-command",
+				"live-chat-quiescence"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "workspace quiescence control probe",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/c",
+				"set TIINEX_LIVE_CHAT_CURRENT_SESSION_ID=b084ad26-4716-4935-b1b2-c01e36ecbe1c&& set TIINEX_LIVE_CHAT_UNSETTLED_SESSION_IDS=64eb3f5d-5d4e-454d-a815-3ce242e4d1e7,b084ad26-4716-4935-b1b2-c01e36ecbe1c&& set TIINEX_LIVE_CHAT_SETTLED_SESSION_ID=d992973c-4f6e-4607-9d5d-58788784bb14&& set TIINEX_LIVE_CHAT_SETTLED_SESSION_IDS=d992973c-4f6e-4607-9d5d-58788784bb14,e76b4139-98bd-460b-94b7-bba1634a6893&& \"C:\\Program Files\\nodejs\\node.exe\" tests/test.mjs live-chat-quiescence-workspace"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "focused-send regression probe",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"focused-send"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "focused-send regression probe",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"focused-send"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "focused-send regression probe",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"tests/test.mjs",
+				"focused-send"
+			],
+			"isBackground": false
 		}
 	]
 }
