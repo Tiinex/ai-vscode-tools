@@ -17,11 +17,13 @@ user-invocable: false
 - If target classification is unclear, stop and resolve the target through exact persisted inspection or a separate approved test plan instead of improvising a new create-like tool.
 - Prefer the exact delete surface for disposable targets that can be safely targeted now. That delete path already closes visible tabs, deletes persisted artifacts, and queues exact offline cleanup for the same target.
 - If delete reports title-only tab matches, stop and keep targeting exact session resources. Do not widen the target set.
+- Do not run live delete, live chat listing, reveal, or visible-tab cleanup in parallel with each other. Treat Local delete operations as serial single-flight work against shared host state.
 
 ## Preferred Order
 1. Confirm the exact target session id through `list_live_agent_chats` or bounded persisted inspection before destructive cleanup.
 2. Delete the exact disposable target through `delete_live_agent_chat_artifacts` when the live path is safely available.
 3. Use `close_visible_live_chat_tabs` for non-destructive tab cleanup when the goal is only to clear visible editor state.
+4. If more than one candidate remains, repeat the same flow one session at a time instead of batching delete-adjacent live tool calls.
 
 ## Exact Live Delete Procedure
 1. Run `list_live_agent_chats` and identify the exact disposable target session id.

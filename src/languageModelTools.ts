@@ -4,6 +4,7 @@ import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, t
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
 import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
+import { RejectingMutex } from "./chatInterop/mutex";
 import { probeLocalReopenCandidates, renderLocalReopenProbeMarkdown } from "./chatInterop/reopenProbe";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
 import { getExactDeleteSelfTargetingReason, getExactDeleteTerminalBoundSessionId, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
@@ -36,6 +37,8 @@ import {
 type JsonSchema = Record<string, unknown>;
 type DetailLevel = "summary" | "full";
 type AnchorOccurrence = "first" | "last";
+
+const liveChatToolMutex = new RejectingMutex();
 
 interface ToolContribution {
   name: string;
@@ -1189,9 +1192,22 @@ class LiveChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 
   async invoke(options: vscode.LanguageModelToolInvocationOptions<TInput>): Promise<vscode.LanguageModelToolResult> {
+    let lease: { release(): void } | undefined;
+    try {
+      lease = liveChatToolMutex.tryAcquire("live chat tool invocation");
+    } catch (error) {
+      throw new Error(
+        `Another live chat or host-bound tool invocation is already running. Run these tools serially instead of in parallel. ${errorMessage(error)}`
+      );
+    }
+
     const budget = outputBudget(options.tokenizationOptions?.tokenBudget);
-    const content = await this.invokeImpl(options.input, budget);
-    return textResult(content);
+    try {
+      const content = await this.invokeImpl(options.input, budget);
+      return textResult(content);
+    } finally {
+      lease.release();
+    }
   }
 }
 
