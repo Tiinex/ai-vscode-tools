@@ -1258,46 +1258,8 @@ async function runFocusedSendBehaviorChecks() {
 
     const serviceModule = await import(pathToFileURL(distChatInteropService).href);
     const unsettledDiagnosticsModule = await import(pathToFileURL(distChatInteropUnsettledDiagnostics).href);
-    const { ChatInteropService, readLatestPersistedRequestTiming } = serviceModule;
+    const { ChatInteropService } = serviceModule;
     const { getSessionQuiescenceState } = unsettledDiagnosticsModule;
-
-    const persistedTimingRoot = await fs.mkdtemp(path.join(workspaceRoot, '.tmp-persisted-request-timing-'));
-    try {
-      const persistedTimingSessionFile = path.join(persistedTimingRoot, 'chatSessions', 'timing.jsonl');
-      await fs.mkdir(path.dirname(persistedTimingSessionFile), { recursive: true });
-      await fs.writeFile(persistedTimingSessionFile, `${[
-        JSON.stringify({
-          kind: 2,
-          k: ['requests'],
-          v: [{
-            requestId: 'request-timing',
-            timestamp: 1_000,
-            message: { text: 'timing probe' }
-          }]
-        }),
-        JSON.stringify({
-          kind: 1,
-          k: ['requests', 0, 'modelState'],
-          v: {
-            value: 1,
-            completedAt: 4_500
-          }
-        }),
-        JSON.stringify({
-          kind: 1,
-          k: ['requests', 0, 'elapsedMs'],
-          v: 3_600
-        })
-      ].join('\n')}\n`, 'utf8');
-
-      const persistedTiming = await readLatestPersistedRequestTiming(persistedTimingSessionFile);
-      assert(
-        persistedTiming.completionAfterRequestMs === 3_500,
-        `Persisted request timing did not fold later request patches. Got: ${JSON.stringify(persistedTiming)}`
-      );
-    } finally {
-      await fs.rm(persistedTimingRoot, { recursive: true, force: true });
-    }
 
     // Non-blocking scenario: immediate persisted touch observed
     MockChatSessionStorage.setBehaviors([
@@ -1557,6 +1519,186 @@ async function runFocusedSendBehaviorChecks() {
     const competingTouchResult = await competingTouchService.sendFocusedMessage({ prompt: 'hello', agentName: 'agent-architect', requireSelectionEvidence: false, blockOnResponse: true });
     assert(competingTouchResult.ok === true, 'Blocking focused-send did not succeed when the first observed target settled before a later unrelated touched session.');
     assert(competingTouchResult.session?.id === 's3-target', `Blocking focused-send drifted to a later unrelated touched session instead of preserving the first observed target. Got: ${JSON.stringify(competingTouchResult.session)}`);
+
+    MockChatSessionStorage.setBehaviors([
+      [
+        {
+          id: 's3-parent',
+          title: 'session-3-parent',
+          lastUpdated: '2026-04-11T02:40:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-parent.jsonl'
+        },
+        {
+          id: 's3-child',
+          title: 'session-3-child',
+          lastUpdated: '2026-04-11T02:40:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-child.jsonl'
+        }
+      ],
+      [
+        {
+          id: 's3-parent',
+          title: 'session-3-parent',
+          lastUpdated: '2026-04-11T02:40:01.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-parent.jsonl'
+        },
+        {
+          id: 's3-child',
+          title: 'session-3-child',
+          lastUpdated: '2026-04-11T02:40:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-child.jsonl'
+        }
+      ],
+      [
+        {
+          id: 's3-parent',
+          title: 'session-3-parent',
+          lastUpdated: '2026-04-11T02:40:02.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-parent.jsonl'
+        },
+        {
+          id: 's3-child',
+          title: 'session-3-child',
+          lastUpdated: '2026-04-11T02:40:01.500Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-child.jsonl'
+        }
+      ]
+    ]);
+
+    const exactTargetFocusedService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 1000, waitForPersistedDefault: true });
+    exactTargetFocusedService.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+    exactTargetFocusedService.traceCreateDebug = async () => {};
+
+    const exactTargetFocusedResult = await exactTargetFocusedService.sendFocusedMessage({
+      prompt: 'hello',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: false,
+      blockOnResponse: true,
+      expectedFocusedSessionId: 's3-child'
+    });
+    assert(exactTargetFocusedResult.ok === true, 'Blocking focused-send did not succeed when an exact focused target lagged behind an unrelated parent mutation.');
+    assert(exactTargetFocusedResult.session?.id === 's3-child', `Blocking focused-send ignored the exact focused target hint and pinned to an unrelated touched session. Got: ${JSON.stringify(exactTargetFocusedResult.session)}`);
+
+    MockChatSessionStorage.setBehaviors([
+      [
+        {
+          id: 's3-stale-list',
+          title: 'session-3-stale-list',
+          lastUpdated: '2026-04-11T02:45:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-stale-list.jsonl'
+        }
+      ]
+    ]);
+
+    const exactFreshGetByIdService = new ChatInteropService({}, { postCreateDelayMs: 10, postCreateTimeoutMs: 200, waitForPersistedDefault: true });
+    exactFreshGetByIdService.getFocusedChatInteropSupport = service.getFocusedChatInteropSupport;
+    exactFreshGetByIdService.traceCreateDebug = async () => {};
+    let staleExactGetByIdCalls = 0;
+    exactFreshGetByIdService.storage.getSessionById = async (sessionId) => {
+      staleExactGetByIdCalls += 1;
+      if (sessionId !== 's3-stale-list') {
+        return undefined;
+      }
+
+      if (staleExactGetByIdCalls === 1) {
+        return {
+          id: 's3-stale-list',
+          title: 'session-3-stale-list',
+          lastUpdated: '2026-04-11T02:45:00.000Z',
+          mode: undefined,
+          agent: 'agent-architect',
+          model: undefined,
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true,
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/s3-stale-list.jsonl'
+        };
+      }
+
+      return {
+        id: 's3-stale-list',
+        title: 'session-3-stale-list',
+        lastUpdated: '2026-04-11T02:45:03.000Z',
+        mode: undefined,
+        agent: 'agent-architect',
+        model: undefined,
+        hasPendingEdits: false,
+        pendingRequestCount: 0,
+        lastRequestCompleted: true,
+        archived: false,
+        provider: 'workspaceStorage',
+        sessionFile: '/tmp/s3-stale-list.jsonl'
+      };
+    };
+
+    const exactFreshGetByIdResult = await exactFreshGetByIdService.sendFocusedMessage({
+      prompt: 'hello',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: false,
+      blockOnResponse: true,
+      expectedFocusedSessionId: 's3-stale-list'
+    });
+    assert(exactFreshGetByIdResult.ok === true, `Blocking focused-send did not use exact-session polling when listSessions stayed stale but getSessionById was fresh. Got: ${exactFreshGetByIdResult.reason}`);
+    assert(exactFreshGetByIdResult.session?.id === 's3-stale-list', `Blocking focused-send exact-session polling regression returned the wrong session. Got: ${JSON.stringify(exactFreshGetByIdResult.session)}`);
+    assert(staleExactGetByIdCalls >= 2, `Blocking focused-send exact-session polling regression did not poll getSessionById as expected. Got calls: ${staleExactGetByIdCalls}`);
 
     MockChatSessionStorage.setBehaviors([
       [
@@ -3836,6 +3978,195 @@ async function runSessionSendWorkflowChecks() {
     assert(focusedFallbackModelAwareCalls === 1, `Session send workflow model-aware fallback test did not call focused send exactly once. Got: ${focusedFallbackModelAwareCalls}`);
     assert(focusedFallbackModelAwareSelector?.id === 'gpt-5-mini', `Session send workflow model-aware fallback test did not preserve the requested model id. Got: ${focusedFallbackModelAwareSelector?.id}`);
     assert(focusedFallbackModelAwareSelector?.vendor === 'copilot', `Session send workflow model-aware fallback test did not preserve the requested model vendor. Got: ${focusedFallbackModelAwareSelector?.vendor}`);
+
+    const settledFocusedShortCircuitRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-send-focused-short-circuit-'));
+    try {
+      Object.defineProperty(vscodeModule.window, 'tabGroups', {
+        configurable: true,
+        value: {
+          all: [
+            {
+              isActive: true,
+              viewColumn: 1,
+              tabs: [
+                {
+                  label: 'Settled Target',
+                  isActive: true,
+                  isDirty: false,
+                  isPinned: false,
+                  isPreview: false,
+                  input: { viewType: 'chat-editor' }
+                }
+              ]
+            }
+          ]
+        }
+      });
+
+      const settledFocusedStorageRoot = path.join(settledFocusedShortCircuitRoot, 'workspace-storage');
+      const settledFocusedSessionFile = path.join(settledFocusedStorageRoot, 'chatSessions', 'session-settled-target.jsonl');
+      const settledFocusedTranscriptFile = path.join(settledFocusedStorageRoot, 'transcripts', 'session-settled-target.jsonl');
+      const settledFocusedSettledAt = new Date('2026-05-09T07:20:20.809Z');
+      await fs.mkdir(path.dirname(settledFocusedSessionFile), { recursive: true });
+      await fs.mkdir(path.dirname(settledFocusedTranscriptFile), { recursive: true });
+      await fs.writeFile(settledFocusedSessionFile, `${JSON.stringify({
+        kind: 2,
+        k: ['requests'],
+        v: [{
+          requestId: 'request-settled-short-circuit',
+          timestamp: 1778251857321,
+          result: { details: 'GPT-5.4 • 1x' },
+          message: { text: 'hello' },
+          response: [{ value: 'Steg 3 bekräftat.' }],
+          modelState: { value: 1, completedAt: 1778251887421 }
+        }]
+      })}\n`, 'utf8');
+      await fs.writeFile(settledFocusedTranscriptFile, `${[
+        JSON.stringify({ type: 'session.start', data: { sessionId: 'session-settled-target' }, timestamp: '2026-05-09T07:19:50.716Z' }),
+        JSON.stringify({ type: 'user.message', data: { content: 'hello' }, timestamp: '2026-05-09T07:19:50.716Z' }),
+        JSON.stringify({ type: 'assistant.turn_start', data: { turnId: '0' }, timestamp: '2026-05-09T07:19:50.717Z' }),
+        JSON.stringify({ type: 'assistant.message', data: { content: 'Steg 3 bekräftat.', toolRequests: [] }, timestamp: '2026-05-09T07:20:20.784Z' }),
+        JSON.stringify({ type: 'assistant.turn_end', data: { turnId: '0' }, timestamp: '2026-05-09T07:20:20.809Z' })
+      ].join('\n')}\n`, 'utf8');
+      await fs.utimes(settledFocusedSessionFile, settledFocusedSettledAt, settledFocusedSettledAt);
+      await fs.utimes(settledFocusedTranscriptFile, settledFocusedSettledAt, settledFocusedSettledAt);
+
+      let settledFocusedListChatsCalls = 0;
+  let settledFocusedSendFocusedCalled = false;
+      const settledFocusedShortCircuitResult = await sendMessageToSession({
+        getPostCreateTimeoutMs() {
+          return 1_000;
+        },
+        async getExactSessionInteropSupport() {
+          return {
+            canRevealExactSession: true,
+            canSendExactSessionMessage: false,
+            revealUnsupportedReason: undefined,
+            sendUnsupportedReason: 'Exact session-targeted Local send is unsupported on this build.'
+          };
+        },
+        async listChats() {
+          settledFocusedListChatsCalls += 1;
+          if (settledFocusedSendFocusedCalled) {
+            throw new Error('Session send workflow should not poll listChats after focused fallback already returned the exact settled target.');
+          }
+
+          return [{
+            id: 'session-settled-target',
+            title: 'Settled Target',
+            lastUpdated: '2026-05-09T07:20:20.809Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true,
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: settledFocusedSessionFile
+          }];
+        },
+        async revealChat(sessionId) {
+          return {
+            ok: true,
+            session: {
+              id: sessionId,
+              title: 'Settled Target',
+              lastUpdated: '2026-05-09T07:19:50.716Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: settledFocusedSessionFile
+            },
+            revealLifecycle: {
+              closedMatchingVisibleTabs: 0,
+              closedTabLabels: []
+            }
+          };
+        },
+        async sendFocusedMessage(request) {
+          settledFocusedSendFocusedCalled = true;
+          return {
+            ok: true,
+            session: {
+              id: 'session-settled-target',
+              title: 'Settled Target',
+              lastUpdated: '2026-05-09T07:20:20.809Z',
+              mode: 'agent',
+              agent: 'github.copilot.editsAgent',
+              model: 'copilot/gpt-5-mini',
+              hasPendingEdits: false,
+              pendingRequestCount: 0,
+              lastRequestCompleted: true,
+              archived: false,
+              provider: 'workspaceStorage',
+              sessionFile: settledFocusedSessionFile
+            },
+            selection: {
+              mode: { status: 'verified', requested: undefined, observed: 'agent' },
+              model: { status: 'verified', requested: undefined, observed: 'copilot/gpt-5-mini' },
+              agent: { status: 'verified', requested: undefined, observed: 'agent-architect' },
+              dispatchedPrompt: request.prompt,
+              dispatchSurface: 'focused-chat-submit',
+              allRequestedVerified: true
+            },
+            revealLifecycle: {
+              closedMatchingVisibleTabs: 0,
+              closedTabLabels: [],
+              timingMs: {
+                focusedInputMs: 1,
+                prefillMs: 1,
+                submitMs: 1,
+                focusedMutationWaitMs: 30107,
+                focusedMutationPollCount: 1,
+                focusedMutationPollIntervalMs: 250,
+                focusedMutationScanMs: 1
+              }
+            }
+          };
+        },
+        async sendMessage() {
+          throw new Error('Session send workflow settled-short-circuit test should not call exact send when fallback reveal is available.');
+        }
+      }, {
+        sessionId: 'session-settled-target',
+        prompt: 'hello',
+        blockOnResponse: true,
+        requireSelectionEvidence: false
+      });
+
+      assert(
+        settledFocusedShortCircuitResult.ok === true,
+        `Session send workflow did not return immediately from an already settled exact target returned by focused fallback. Got: ${JSON.stringify(settledFocusedShortCircuitResult)}`
+      );
+      assert(settledFocusedShortCircuitResult.session?.id === 'session-settled-target', 'Session send workflow settled-short-circuit test returned the wrong target session.');
+      assert(settledFocusedListChatsCalls >= 1, `Session send workflow settled-short-circuit test expected at least one pre-send target lookup. Got: ${settledFocusedListChatsCalls}`);
+    } finally {
+      Object.defineProperty(vscodeModule.window, 'tabGroups', {
+        configurable: true,
+        value: {
+          all: [
+            {
+              isActive: true,
+              viewColumn: 1,
+              tabs: [
+                {
+                  label: 'Fallback Target',
+                  isActive: true,
+                  isDirty: false,
+                  isPinned: false,
+                  isPreview: false,
+                  input: { viewType: 'chat-editor' }
+                }
+              ]
+            }
+          ]
+        }
+      });
+      await fs.rm(settledFocusedShortCircuitRoot, { recursive: true, force: true });
+    }
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'session-send-workflow-'));
     try {

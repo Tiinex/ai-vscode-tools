@@ -1063,14 +1063,7 @@ function formatChatMutationResult(
         `- Focused Mutation Wait Duration Ms: ${revealLifecycle.timingMs.focusedMutationWaitMs ?? "-"}`,
         `- Focused Mutation Poll Count: ${revealLifecycle.timingMs.focusedMutationPollCount ?? "-"}`,
         `- Focused Mutation Poll Interval Ms: ${revealLifecycle.timingMs.focusedMutationPollIntervalMs ?? "-"}`,
-        `- Focused Mutation Storage Scan Ms: ${revealLifecycle.timingMs.focusedMutationScanMs ?? "-"}`,
-        `- Focused Mutation First Observed After Wait Ms: ${revealLifecycle.timingMs.focusedMutationFirstObservedAfterWaitMs ?? "-"}`,
-        `- Focused Mutation First Settled After Wait Ms: ${revealLifecycle.timingMs.focusedMutationFirstSettledAfterWaitMs ?? "-"}`,
-        `- Focused Mutation Persisted Request After Dispatch Ms: ${revealLifecycle.timingMs.focusedMutationPersistedRequestAfterDispatchMs ?? "-"}`,
-        `- Focused Mutation Persisted Completion After Request Ms: ${revealLifecycle.timingMs.focusedMutationPersistedCompletionAfterRequestMs ?? "-"}`,
-        `- Focused Mutation Post-Settled Wait Ms: ${revealLifecycle.timingMs.focusedMutationPostSettledWaitMs ?? "-"}`,
-        `- Focused Mutation Post-Completion Wait Ms: ${revealLifecycle.timingMs.focusedMutationPostCompletionWaitMs ?? "-"}`,
-        `- Focused Mutation Reaction Lag Ms: ${revealLifecycle.timingMs.focusedMutationReactionLagMs ?? "-"}`
+        `- Focused Mutation Storage Scan Ms: ${revealLifecycle.timingMs.focusedMutationScanMs ?? "-"}`
       );
     }
   }

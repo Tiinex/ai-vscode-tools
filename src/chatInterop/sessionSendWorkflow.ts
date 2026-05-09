@@ -92,6 +92,7 @@ export async function sendMessageToSession(
     partialQuery: request.partialQuery,
     blockOnResponse: request.blockOnResponse,
     requireSelectionEvidence: request.requireSelectionEvidence,
+    expectedFocusedSessionId: request.sessionId,
     waitForPersisted: request.blockOnResponse === true
       ? true
       : request.requireSelectionEvidence === true
@@ -113,14 +114,7 @@ export async function sendMessageToSession(
       focusedMutationWaitMs: focusedSendTiming?.focusedMutationWaitMs,
       focusedMutationPollCount: focusedSendTiming?.focusedMutationPollCount,
       focusedMutationPollIntervalMs: focusedSendTiming?.focusedMutationPollIntervalMs,
-      focusedMutationScanMs: focusedSendTiming?.focusedMutationScanMs,
-      focusedMutationFirstObservedAfterWaitMs: focusedSendTiming?.focusedMutationFirstObservedAfterWaitMs,
-      focusedMutationFirstSettledAfterWaitMs: focusedSendTiming?.focusedMutationFirstSettledAfterWaitMs,
-      focusedMutationPersistedRequestAfterDispatchMs: focusedSendTiming?.focusedMutationPersistedRequestAfterDispatchMs,
-      focusedMutationPersistedCompletionAfterRequestMs: focusedSendTiming?.focusedMutationPersistedCompletionAfterRequestMs,
-      focusedMutationPostSettledWaitMs: focusedSendTiming?.focusedMutationPostSettledWaitMs,
-      focusedMutationPostCompletionWaitMs: focusedSendTiming?.focusedMutationPostCompletionWaitMs,
-      focusedMutationReactionLagMs: focusedSendTiming?.focusedMutationReactionLagMs
+      focusedMutationScanMs: focusedSendTiming?.focusedMutationScanMs
     }
   );
 
@@ -134,7 +128,6 @@ export async function sendMessageToSession(
 
   if (
     focusedResult.session?.id === request.sessionId
-    && request.blockOnResponse !== true
     && await isSessionSettled(focusedResult.session)
   ) {
     return {

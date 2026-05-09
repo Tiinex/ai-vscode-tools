@@ -224,14 +224,6 @@ export class ChatInteropService implements ChatInteropApi {
       let focusedMutationPollCount = 0;
       let focusedMutationPollIntervalMs = this.postCreateDelayMs;
       let focusedMutationScanMs = 0;
-      let focusedMutationFirstObservedAfterWaitMs: number | undefined;
-      let focusedMutationFirstSettledAfterWaitMs: number | undefined;
-      let focusedMutationPersistedRequestAfterDispatchMs: number | undefined;
-      let focusedMutationPersistedCompletionAfterRequestMs: number | undefined;
-      let focusedMutationPostSettledWaitMs: number | undefined;
-      let focusedMutationPostCompletionWaitMs: number | undefined;
-      let focusedMutationReactionLagMs: number | undefined;
-      let dispatchCompletedAt: number | undefined;
 
       const buildFocusedSendTimingLifecycle = (): NonNullable<ChatCommandResult["revealLifecycle"]> => ({
         closedMatchingVisibleTabs: 0,
@@ -243,14 +235,7 @@ export class ChatInteropService implements ChatInteropApi {
           focusedMutationWaitMs,
           focusedMutationPollCount,
           focusedMutationPollIntervalMs,
-          focusedMutationScanMs,
-          focusedMutationFirstObservedAfterWaitMs,
-          focusedMutationFirstSettledAfterWaitMs,
-          focusedMutationPersistedRequestAfterDispatchMs,
-          focusedMutationPersistedCompletionAfterRequestMs,
-          focusedMutationPostSettledWaitMs,
-          focusedMutationPostCompletionWaitMs,
-          focusedMutationReactionLagMs
+          focusedMutationScanMs
         }
       });
 
@@ -261,7 +246,6 @@ export class ChatInteropService implements ChatInteropApi {
           const promptFileDispatch = await this.dispatchViaPromptFile(request);
           cleanup = promptFileDispatch.cleanup;
           dispatch = promptFileDispatch.dispatch;
-          dispatchCompletedAt = Date.now();
         } else {
           const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
           dispatch = {
@@ -282,7 +266,6 @@ export class ChatInteropService implements ChatInteropApi {
           const submitStartedAt = Date.now();
           await vscode.commands.executeCommand(commandSupport.submitCommand);
           submitMs = Date.now() - submitStartedAt;
-          dispatchCompletedAt = Date.now();
         }
 
         lease?.release();
@@ -293,7 +276,9 @@ export class ChatInteropService implements ChatInteropApi {
         if (!waitForPersisted) {
           // Non-blocking/one-shot path: check once for an immediate persisted touch and return.
           const after = await this.storage.listSessions();
-          const candidate = await pickTouchedSession(beforeBaselines, after);
+          const candidate = request.expectedFocusedSessionId
+            ? after.find((item) => item.id === request.expectedFocusedSessionId)
+            : await pickTouchedSession(beforeBaselines, after);
           const selection = buildSelectionVerification(request, candidate, dispatch);
 
           if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
@@ -317,35 +302,35 @@ export class ChatInteropService implements ChatInteropApi {
         }
 
         const focusedMutationWaitStartedAt = Date.now();
-        const {
-          session,
-          selection,
-          observedMutation,
-          settled,
-          pollCount,
-          scanMs,
-          firstObservedAfterWaitMs,
-          firstSettledAfterWaitMs
-        } = await this.waitForFocusedSessionMutation(beforeBaselines, request, dispatch);
-        focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
-        focusedMutationPollCount = pollCount;
-        focusedMutationScanMs = scanMs;
-        focusedMutationFirstObservedAfterWaitMs = firstObservedAfterWaitMs;
-        focusedMutationFirstSettledAfterWaitMs = firstSettledAfterWaitMs;
-        focusedMutationPostSettledWaitMs = firstSettledAfterWaitMs === undefined
-          ? undefined
-          : Math.max(0, focusedMutationWaitMs - firstSettledAfterWaitMs);
-        if (session) {
-          const persistedTiming = await readLatestPersistedRequestTiming(session.sessionFile);
-          focusedMutationPersistedRequestAfterDispatchMs = persistedTiming.requestTimestamp !== undefined && dispatchCompletedAt !== undefined
-            ? Math.max(0, persistedTiming.requestTimestamp - dispatchCompletedAt)
-            : undefined;
-          focusedMutationPersistedCompletionAfterRequestMs = persistedTiming.completionAfterRequestMs;
-          focusedMutationPostCompletionWaitMs = focusedMutationPersistedRequestAfterDispatchMs === undefined || persistedTiming.completionAfterRequestMs === undefined
-            ? undefined
-            : Math.max(0, focusedMutationWaitMs - focusedMutationPersistedRequestAfterDispatchMs - persistedTiming.completionAfterRequestMs);
-          focusedMutationReactionLagMs = focusedMutationPostCompletionWaitMs;
+        let session: ChatSessionSummary | undefined;
+        let selection: ReturnType<typeof buildSelectionVerification>;
+        let observedMutation = false;
+        let settled = false;
+
+        if (request.expectedFocusedSessionId?.trim()) {
+          const exactWait = await this.waitForExactSessionMutation(
+            request.expectedFocusedSessionId,
+            beforeBaselines.get(request.expectedFocusedSessionId),
+            request.blockOnResponse === true
+          );
+          focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
+          focusedMutationPollCount = 0;
+          focusedMutationScanMs = 0;
+          session = exactWait.session;
+          observedMutation = exactWait.observedMutation;
+          settled = exactWait.settled;
+          selection = buildSelectionVerification(request, session, dispatch);
+        } else {
+          const focusedWait = await this.waitForFocusedSessionMutation(beforeBaselines, request, dispatch);
+          focusedMutationWaitMs = Date.now() - focusedMutationWaitStartedAt;
+          focusedMutationPollCount = focusedWait.pollCount;
+          focusedMutationScanMs = focusedWait.scanMs;
+          session = focusedWait.session;
+          selection = focusedWait.selection;
+          observedMutation = focusedWait.observedMutation;
+          settled = focusedWait.settled;
         }
+
         if (!session || !observedMutation) {
           return {
             ok: false,
@@ -911,18 +896,14 @@ export class ChatInteropService implements ChatInteropApi {
     settled: boolean;
     pollCount: number;
     scanMs: number;
-    firstObservedAfterWaitMs?: number;
-    firstSettledAfterWaitMs?: number;
   }> {
     const deadline = Date.now() + this.postCreateTimeoutMs;
-    const waitStartedAt = Date.now();
     let candidate: ChatSessionSummary | undefined;
     let observedMutation = false;
     let pollCount = 0;
     let scanMs = 0;
-    let firstObservedAfterWaitMs: number | undefined;
-    let firstSettledAfterWaitMs: number | undefined;
     const requireSettled = request.blockOnResponse === true;
+    const expectedFocusedSessionId = request.expectedFocusedSessionId?.trim();
 
     while (Date.now() <= deadline) {
       await delay(this.postCreateDelayMs);
@@ -931,12 +912,20 @@ export class ChatInteropService implements ChatInteropApi {
       const after = await this.storage.listSessions();
       scanMs += Date.now() - scanStartedAt;
 
-      if (!candidate) {
+      if (expectedFocusedSessionId) {
+        const targeted = after.find((item) => item.id === expectedFocusedSessionId);
+        if (targeted) {
+          candidate = targeted;
+          observedMutation = observedMutation || await hasSessionMutationSinceBaseline(
+            targeted,
+            beforeBaselines.get(expectedFocusedSessionId)
+          );
+        }
+      } else if (!candidate) {
         const touched = await pickTouchedSession(beforeBaselines, after);
         if (touched) {
           candidate = touched;
           observedMutation = true;
-          firstObservedAfterWaitMs ??= Math.max(0, Date.now() - waitStartedAt);
         }
       } else {
         const candidateId = candidate.id;
@@ -944,20 +933,17 @@ export class ChatInteropService implements ChatInteropApi {
       }
       const selection = buildSelectionVerification(request, candidate, dispatch);
       const settled = observedMutation && (!requireSettled || await this.isSessionSettled(candidate));
-      if (settled) {
-        firstSettledAfterWaitMs ??= Math.max(0, Date.now() - waitStartedAt);
-      }
       const clean = isSessionCleanForCreateSelection(candidate);
 
       if (!request.requireSelectionEvidence) {
         if (settled && clean) {
-          return { session: candidate, selection, observedMutation, settled, pollCount, scanMs, firstObservedAfterWaitMs, firstSettledAfterWaitMs };
+          return { session: candidate, selection, observedMutation, settled, pollCount, scanMs };
         }
         continue;
       }
 
       if (candidate && selection.allRequestedVerified && settled && clean) {
-        return { session: candidate, selection, observedMutation, settled, pollCount, scanMs, firstObservedAfterWaitMs, firstSettledAfterWaitMs };
+        return { session: candidate, selection, observedMutation, settled, pollCount, scanMs };
       }
     }
 
@@ -967,9 +953,7 @@ export class ChatInteropService implements ChatInteropApi {
       observedMutation,
       settled: observedMutation && (!requireSettled || await this.isSessionSettled(candidate)),
       pollCount,
-      scanMs,
-      firstObservedAfterWaitMs,
-      firstSettledAfterWaitMs
+      scanMs
     };
   }
 
@@ -1020,131 +1004,6 @@ function pickTouchedSession(
   after: ChatSessionSummary[]
 ): Promise<ChatSessionSummary | undefined> {
   return pickTouchedSessionAsync(beforeBaselines, after);
-}
-
-export async function readLatestPersistedRequestTiming(sessionFile: string): Promise<{
-  requestTimestamp?: number;
-  completionAfterRequestMs?: number;
-}> {
-  try {
-    const raw = await fs.readFile(sessionFile, "utf8");
-    const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const requestCandidates: any[] = [];
-
-    for (const line of lines) {
-      let row: any;
-      try {
-        row = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      if (row?.kind === 0 && Array.isArray(row?.v?.requests)) {
-        requestCandidates.push(...row.v.requests);
-        continue;
-      }
-
-      const keyPath = Array.isArray(row?.k) ? row.k : [];
-      if (row?.kind === 2 && keyPath.length === 1 && keyPath[0] === "requests" && Array.isArray(row?.v)) {
-        requestCandidates.push(...row.v);
-        continue;
-      }
-
-      if (row?.kind === 1 && keyPath[0] === "requests") {
-        applyRequestPatch(requestCandidates, keyPath, row.v);
-      }
-    }
-
-    const latestRequest = requestCandidates
-      .filter((request) => request && typeof request === "object")
-      .sort((left, right) => {
-        const leftTs = typeof left?.timestamp === "number" ? left.timestamp : -Infinity;
-        const rightTs = typeof right?.timestamp === "number" ? right.timestamp : -Infinity;
-        return rightTs - leftTs;
-      })[0];
-
-    if (!latestRequest) {
-      return {};
-    }
-
-    const requestTimestamp = typeof latestRequest.timestamp === "number" ? latestRequest.timestamp : undefined;
-    const modelState = latestRequest?.response?.modelState
-      ?? latestRequest?.result?.response?.modelState
-      ?? latestRequest?.result?.modelState
-      ?? latestRequest?.modelState;
-    const completedAtRaw = modelState?.completedAt;
-    const completedAt = typeof completedAtRaw === "number"
-      ? completedAtRaw
-      : typeof completedAtRaw === "string"
-        ? Date.parse(completedAtRaw)
-        : undefined;
-
-    if (requestTimestamp !== undefined && completedAt !== undefined && Number.isFinite(completedAt) && completedAt >= requestTimestamp) {
-      return {
-        requestTimestamp,
-        completionAfterRequestMs: completedAt - requestTimestamp
-      };
-    }
-
-    const elapsedMs = firstFiniteNumber(
-      latestRequest?.elapsedMs,
-      latestRequest?.result?.elapsedMs,
-      latestRequest?.result?.timings?.totalElapsed
-    );
-    return {
-      requestTimestamp,
-      completionAfterRequestMs: elapsedMs
-    };
-  } catch {
-    return {};
-  }
-}
-
-function applyRequestPatch(requests: any[], keyPath: unknown[], value: unknown): void {
-  const requestIndex = typeof keyPath[1] === "number" ? keyPath[1] : -1;
-  if (requestIndex < 0) {
-    return;
-  }
-
-  if (keyPath.length === 2) {
-    requests[requestIndex] = value;
-    return;
-  }
-
-  if (!requests[requestIndex] || typeof requests[requestIndex] !== "object") {
-    requests[requestIndex] = {};
-  }
-
-  setNestedRequestValue(requests[requestIndex], keyPath.slice(2), value);
-}
-
-function setNestedRequestValue(target: any, keyPath: unknown[], value: unknown): void {
-  if (keyPath.length === 0) {
-    return;
-  }
-
-  let cursor = target;
-  for (let index = 0; index < keyPath.length - 1; index += 1) {
-    const segment = keyPath[index];
-    const nextSegment = keyPath[index + 1];
-    const currentValue = cursor?.[segment as any];
-    if (!currentValue || typeof currentValue !== "object") {
-      cursor[segment as any] = typeof nextSegment === "number" ? [] : {};
-    }
-    cursor = cursor[segment as any];
-  }
-
-  cursor[keyPath[keyPath.length - 1] as any] = value;
-}
-
-function firstFiniteNumber(...values: unknown[]): number | undefined {
-  for (const value of values) {
-    if (typeof value === "number" && Number.isFinite(value)) {
-      return value;
-    }
-  }
-
-  return undefined;
 }
 
 async function pickTouchedSessionAsync(

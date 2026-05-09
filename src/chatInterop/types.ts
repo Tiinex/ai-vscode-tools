@@ -54,13 +54,6 @@ export interface ChatRevealLifecycle {
     focusedMutationPollCount?: number;
     focusedMutationPollIntervalMs?: number;
     focusedMutationScanMs?: number;
-    focusedMutationFirstObservedAfterWaitMs?: number;
-    focusedMutationFirstSettledAfterWaitMs?: number;
-    focusedMutationPersistedRequestAfterDispatchMs?: number;
-    focusedMutationPersistedCompletionAfterRequestMs?: number;
-    focusedMutationPostSettledWaitMs?: number;
-    focusedMutationPostCompletionWaitMs?: number;
-    focusedMutationReactionLagMs?: number;
   };
 }
 
@@ -105,6 +98,9 @@ export interface CreateChatRequest {
   // If false, the focused-send call will return immediately after dispatch
   // without waiting for a persisted session mutation. Default: true (wait).
   waitForPersisted?: boolean;
+  // Internal-only exact target hint for focused-send waits used by canonical
+  // exact-session send after reveal.
+  expectedFocusedSessionId?: string;
 }
 
 export interface SendChatMessageRequest extends CreateChatRequest {
