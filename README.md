@@ -11,6 +11,10 @@ For everyday users, that means fast inspection and safer cleanup. For VS Code Co
 
 In practice, these tools are primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use them independently for Local chat inspection and recovery work, but if you want the broader project context, start there as well.
 
+## Current Status
+
+As of May 2026, the persisted inspection and cleanup lanes are in active use and the focused repo checks pass, but the live Local chat tooling is not yet fully end-to-end validated on the current runtime surface. Treat the live tooling as in progress rather than fully release-proven until that final runtime validation is complete.
+
 ## Why Install It
 
 - It makes stored Local chat state inspectable instead of opaque.
