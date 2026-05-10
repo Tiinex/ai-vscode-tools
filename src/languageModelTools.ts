@@ -597,7 +597,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route when the first visible message should carry the requested agent.",
-    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the first visible user request is dispatched through a temporary prompt-file slash command so the chat starts cleanly with the requested role. Prefer this for normal agent-chat creation. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it falls back to a temporary prompt-file slash command to anchor the requested role. Prefer this for normal agent-chat creation. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
     toolReferenceName: "create-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -608,7 +608,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         agentName: {
           type: "string",
-          description: "Optional custom agent name for the first message in a new chat. When supplied, the first visible request is currently dispatched through a temporary prompt-file slash command. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
+          description: "Optional custom agent name for the first message in a new chat. When supplied, the host will prefer a direct agent-open route when available and otherwise use temporary prompt-file slash dispatch. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
         },
         mode: {
           type: "string",

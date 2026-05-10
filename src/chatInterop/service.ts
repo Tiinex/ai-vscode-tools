@@ -6,6 +6,7 @@ import {
   buildUnsupportedSendReason,
   buildUnsupportedFocusedSendReason,
   buildUnsupportedRevealReason,
+  findDirectAgentOpenCommand as resolveDirectAgentOpenCommand,
   findFocusedChatInputCommand,
   findFocusedChatSubmitCommand,
   findExactSessionOpenCommand,
@@ -92,6 +93,10 @@ export class ChatInteropService implements ChatInteropApi {
     return this.storage.listSessions();
   }
 
+  async getSessionById(sessionId: string): Promise<ChatSessionSummary | undefined> {
+    return this.storage.getSessionById(sessionId);
+  }
+
   getPostCreateTimeoutMs(): number {
     return this.postCreateTimeoutMs;
   }
@@ -109,7 +114,9 @@ export class ChatInteropService implements ChatInteropApi {
       return { ok: false, reason: "prompt is required" };
     }
 
-    const selectionBlocker = buildCreateChatSelectionBlocker(request);
+    const selectionBlocker = buildCreateChatSelectionBlocker(request, {
+      directAgentOpenAvailable: Boolean(await this.findDirectAgentOpenCommand(request.agentName))
+    });
     if (selectionBlocker) {
       return { ok: false, reason: selectionBlocker };
     }
@@ -705,6 +712,10 @@ export class ChatInteropService implements ChatInteropApi {
     return findExactSessionOpenCommand(await vscode.commands.getCommands(true));
   }
 
+  private async findDirectAgentOpenCommand(agentName: string | undefined): Promise<string | undefined> {
+    return resolveDirectAgentOpenCommand(await vscode.commands.getCommands(true), agentName);
+  }
+
   private async findExactSessionSendCommand(): Promise<string | undefined> {
     return findExactSessionSendCommand(await vscode.commands.getCommands(true));
   }
@@ -788,6 +799,33 @@ export class ChatInteropService implements ChatInteropApi {
   private async dispatchCreateRequest(
     request: CreateChatRequest
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup?: () => Promise<void> }> {
+    const directAgentOpenCommand = await this.findDirectAgentOpenCommand(request.agentName);
+    await this.traceCreateDebug("direct-agent-open.lookup", {
+      agentName: request.agentName,
+      foundCommand: directAgentOpenCommand ?? null
+    });
+    if (directAgentOpenCommand) {
+      await this.traceCreateDebug("direct-agent-open.before-dispatch", {
+        agentName: request.agentName,
+        command: directAgentOpenCommand
+      });
+      await vscode.commands.executeCommand(directAgentOpenCommand);
+      await delay(this.openDelayMs);
+      await this.dispatchToActiveChat(
+        {
+          ...request,
+          agentName: undefined
+        },
+        request.prompt
+      );
+      return {
+        dispatch: {
+          surface: "direct-agent-open",
+          dispatchedPrompt: request.prompt.trim()
+        }
+      };
+    }
+
     if (!shouldUsePromptFileDispatch(request)) {
       const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
       await this.dispatchToActiveChat(request, dispatchedPrompt);

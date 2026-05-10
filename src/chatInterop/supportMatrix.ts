@@ -122,7 +122,7 @@ export function buildLiveChatSupportMatrix(options: {
     localNewChatCustomRolePrompt: createPathAvailable
       ? {
           status: "best-effort",
-          reason: "Local createChat can dispatch a custom role through a temporary prompt-file slash command, and that prompt-artifact start is the safest current create-time way to avoid passive UI inheritance. The actual persisted participant can still remain the built-in Copilot agent on this build."
+          reason: "Local createChat can prefer a direct agent-open command when the host exposes one, and otherwise fall back to temporary prompt-file slash dispatch to anchor a requested custom role. The actual persisted participant can still remain the built-in Copilot agent on this build."
         }
       : {
           status: "unsupported",

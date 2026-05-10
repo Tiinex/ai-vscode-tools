@@ -2155,15 +2155,13 @@ async function runCreateChatDirectAgentCommandChecks() {
     assert(result.ok === true, 'Agent-bound createChat test did not succeed when a session was created and settled.');
     assert(executedCommands[0]?.command === 'workbench.action.openChat', 'Agent-bound createChat test did not open a new chat editor first.');
     assert(executedCommands[1]?.command === 'workbench.action.focusActiveEditorGroup', 'Agent-bound createChat test did not refocus the new editor chat group after opening it.');
-    assert(executedCommands[2]?.command === 'workbench.action.chat.focusInput', 'Agent-bound createChat test did not focus the chat input before slash-command prefill.');
-    assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Agent-bound createChat test did not dispatch the generated slash command through chat-open.');
-    assert(String(executedCommands[3]?.args?.query).startsWith('/aa-live-chat-agent-architect-') === true, `Agent-bound createChat test did not dispatch the generated slash command. Got: ${executedCommands[3]?.args?.query}`);
+    assert(executedCommands[2]?.command === 'workbench.action.chat.openagent-architect', 'Agent-bound createChat test did not use the direct agent-open command when the host exposed one.');
+    assert(executedCommands[3]?.command === 'workbench.action.chat.open', 'Agent-bound createChat test did not dispatch the real prompt through chat-open after direct agent selection.');
+    assert(executedCommands[3]?.args?.query === 'Create a local recovery tools helper named artifact-list-item-checker using the provided build input.', `Agent-bound createChat test did not dispatch the original prompt after direct agent-open. Got: ${executedCommands[3]?.args?.query}`);
     assert(executedCommands[3]?.args?.isPartialQuery === false, 'Agent-bound createChat test did not dispatch the generated slash command as a real query.');
-    assert(executedCommands[4]?.command === 'workbench.action.chat.focusInput', 'Agent-bound createChat test did not refocus the chat input after slash-command prefill.');
-    assert(executedCommands[5]?.command === 'workbench.action.chat.submit', 'Agent-bound createChat test did not explicitly submit the slash-command dispatch.');
-    assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Agent-bound createChat test did not write the temporary prompt artifact.');
-    assert(fsOps.some((entry) => entry.op === 'writeFile' && String(entry.args?.[1]).includes('agent: "agent-architect"')) === true, 'Agent-bound createChat test did not encode the requested agent in the temporary prompt artifact.');
-    assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Agent-bound createChat test did not clean up the temporary prompt artifact.');
+    assert(executedCommands[3]?.args?.blockOnResponse === true, 'Agent-bound createChat test did not preserve awaited dispatch on the direct agent-open path.');
+    assert(executedCommands.length === 4, `Agent-bound createChat test executed unexpected extra commands on the direct agent-open path. Got: ${JSON.stringify(executedCommands)}`);
+    assert(fsOps.length === 0, 'Agent-bound createChat test should not create prompt artifacts when a direct agent-open command is available.');
 
     executedCommands.length = 0;
     fsOps.length = 0;

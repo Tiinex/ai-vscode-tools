@@ -8,7 +8,7 @@ export type ChatModelSelector = {
 
 export type ChatSelectionStatus = "not-requested" | "verified" | "mismatch" | "unverified" | "dispatched-via-artifact";
 
-export type ChatDispatchSurface = "chat-open" | "prompt-file-slash-command" | "focused-chat-submit";
+export type ChatDispatchSurface = "chat-open" | "direct-agent-open" | "prompt-file-slash-command" | "focused-chat-submit";
 
 export interface ChatSelectionCheck {
   status: ChatSelectionStatus;
@@ -149,6 +149,7 @@ export interface MutexLease {
 
 export interface ChatInteropApi {
   listChats(): Promise<ChatSessionSummary[]>;
+  getSessionById?(sessionId: string): Promise<ChatSessionSummary | undefined>;
   getPostCreateTimeoutMs?(): number;
   getExactSessionInteropSupport(): Promise<ExactSessionInteropSupport>;
   getFocusedChatInteropSupport(): Promise<FocusedChatInteropSupport>;

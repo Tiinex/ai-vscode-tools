@@ -185,6 +185,10 @@ async function getSessionSummary(
   chatInterop: ChatInteropApi,
   sessionId: string
 ): Promise<ChatCommandResult["session"] | undefined> {
+  if (typeof chatInterop.getSessionById === "function") {
+    return chatInterop.getSessionById(sessionId);
+  }
+
   return (await chatInterop.listChats()).find((session) => session.id === sessionId);
 }
 

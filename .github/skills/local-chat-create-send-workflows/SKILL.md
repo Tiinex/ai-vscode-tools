@@ -9,7 +9,7 @@ user-invocable: false
 ## When to Use
 - Use this skill when a task involves `create_live_agent_chat` or `send_message_to_live_agent_chat`.
 - Use it when the goal is to preserve exact target continuity for a Local chat instead of relying on loose UI focus.
-- Use it when the task depends on safe same-chat follow-ups, bounded use of `/aa` prompt-file dispatch, or explicit failure instead of ambiguous retargeting.
+- Use it when the task depends on safe same-chat follow-ups, bounded create-time role dispatch, or explicit failure instead of ambiguous retargeting.
 
 ## Default Posture
 - Prefer exact create and exact session-targeted send surfaces over focused surfaces.
@@ -17,10 +17,10 @@ user-invocable: false
 - Treat focused-send as an internal fallback transport, not as a competing public LM tool route.
 
 ## Core Rules
-- For a new Local chat with a custom agent, prefer `create_live_agent_chat` and expect the first visible user request to land through `/aa` prompt-file dispatch.
+- For a new Local chat with a custom agent, prefer `create_live_agent_chat` and expect the host to use a direct agent-open route when available, with `/aa` prompt-file dispatch only as bounded fallback.
 - After the new chat is created correctly, send ordinary follow-ups into the same exact session with `send_message_to_live_agent_chat` and omit `agentName` unless an intentional rebind is required.
-- Do not repeat `agentName` on normal same-chat follow-ups just because the first message used `/aa` transport.
-- Treat `prompt-file-slash-command` as expected transport evidence for first-message custom-agent create, not as a reason to reopen `#agent`-prefix theories for ordinary follow-ups.
+- Do not repeat `agentName` on normal same-chat follow-ups just because the first message used create-time role transport.
+- Treat `direct-agent-open` or `prompt-file-slash-command` as create-time transport evidence for first-message custom-agent startup, not as a reason to reopen `#agent`-prefix theories for ordinary follow-ups.
 - Prefer exact session-targeted send whenever the target session id is known.
 - Let `send_message_to_live_agent_chat` own same-chat continuation even when its current host transport internally falls back through reveal plus focused submit.
 - If the host cannot verify the requested target or selection state, prefer explicit failure over continuing with ambiguous routing.
@@ -29,12 +29,12 @@ user-invocable: false
 1. Create a new custom-agent Local chat with `create_live_agent_chat` when a fresh dedicated chat is needed.
 2. Verify the created session id and requested agent outcome from the create result.
 3. Continue the same thread with `send_message_to_live_agent_chat` against that exact session id.
-4. Omit `agentName` on ordinary follow-ups so the same conversation continues without repeated `/aa` transport artifacts.
+4. Omit `agentName` on ordinary follow-ups so the same conversation continues without repeated create-time role transport artifacts.
 5. Treat any focused-submit behavior on the current host as transport hidden behind `send_message_to_live_agent_chat`, not as a second public route to choose manually.
 
 ## Exact Create Procedure
 1. Use `create_live_agent_chat` for new-chat startup, especially when a custom agent should own the first message.
-2. Treat a first visible `/aa` dispatch as the current expected transport for custom-agent create on this Local surface.
+2. Treat a direct agent-open command as the preferred create-time route when the host exposes one; otherwise treat `/aa` prompt-file dispatch as bounded fallback.
 3. Confirm the returned session id and requested agent outcome before treating the chat as a valid target.
 4. If selection evidence is reported as unverified or mismatched, treat the probe as failed rather than silently reusing the created chat.
 
