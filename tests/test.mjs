@@ -101,8 +101,7 @@ const expectedExtensionCommandNames = [
   "tiinex.aiVscodeTools.closeVisibleLiveChatTabs",
   "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
   "tiinex.aiVscodeTools.createLiveChat",
-  "tiinex.aiVscodeTools.sendMessageToLiveChat",
-  "tiinex.aiVscodeTools.sendMessageToFocusedLiveChat"
+  "tiinex.aiVscodeTools.sendMessageToLiveChat"
 ];
 
 const liveToolManifestParityNames = new Set([
@@ -5628,6 +5627,11 @@ async function runSelfTargetGuardChecks() {
   );
 
   assert(
+    getExactSelfTargetingReason(chats, "recent-session", "reveal", now) === undefined,
+    "Self-target guard test incorrectly blocked exact reveal for the likely invoking chat heuristic case."
+  );
+
+  assert(
     getExactSelfTargetingReason(chats, "recent-session", "send", now) === undefined,
     "Self-target guard test incorrectly blocked an exact send to the likely invoking chat."
   );
@@ -6794,6 +6798,7 @@ async function runManifestChecks() {
   const extensionCommands = packageJson.contributes?.commands;
   const viewTitleMenu = packageJson.contributes?.menus?.["view/title"] ?? [];
   const viewItemContextMenu = packageJson.contributes?.menus?.["view/item/context"] ?? [];
+  const commandPaletteMenu = packageJson.contributes?.menus?.["commandPalette"] ?? [];
   const sourceToolContributions = Array.isArray(languageModelToolsModule.EXTENSION_TOOL_CONTRIBUTIONS)
     ? languageModelToolsModule.EXTENSION_TOOL_CONTRIBUTIONS
     : [];
@@ -6881,6 +6886,7 @@ async function runManifestChecks() {
 
   const viewTitleCommands = viewTitleMenu.map((item) => item.command);
   const viewItemCommands = viewItemContextMenu.map((item) => item.command);
+  const hiddenCommandPaletteCommands = new Map(commandPaletteMenu.map((item) => [item.command, item.when]));
   assert(!viewTitleCommands.includes("tiinex.aiVscodeTools.createDisposableLocalDeleteProbe"), "package.json view/title menu must not expose Create Disposable Local Delete Probe.");
   assert(viewTitleCommands.includes("tiinex.aiVscodeTools.createLiveChat"), "package.json view/title menu must expose Create Local Chat.");
   assert(viewTitleCommands.includes("tiinex.aiVscodeTools.listLiveChats"), "package.json view/title menu must expose List Local Chats.");
@@ -6888,6 +6894,19 @@ async function runManifestChecks() {
   assert(viewItemCommands.includes("tiinex.aiVscodeTools.closeVisibleLiveChatTabs"), "package.json session context menu must expose Close Visible Local Chat Tabs.");
   assert(viewItemCommands.includes("tiinex.aiVscodeTools.deleteLiveChatArtifacts"), "package.json session context menu must expose Delete Local Chat Artifacts.");
   assert(viewItemCommands.includes("tiinex.aiVscodeTools.sendMessageToLiveChat"), "package.json session context menu must expose Send Message To Local Chat.");
+  for (const commandName of [
+    "tiinex.aiVscodeTools.listLiveChats",
+    "tiinex.aiVscodeTools.revealLiveChat",
+    "tiinex.aiVscodeTools.closeVisibleLiveChatTabs",
+    "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
+    "tiinex.aiVscodeTools.createLiveChat",
+    "tiinex.aiVscodeTools.sendMessageToLiveChat"
+  ]) {
+    assert(
+      hiddenCommandPaletteCommands.get(commandName) === "false",
+      `package.json command palette must hide the mirrored live-chat command ${commandName}.`
+    );
+  }
 }
 
 async function runRoutingGuardChecks() {
@@ -6895,6 +6914,7 @@ async function runRoutingGuardChecks() {
   const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
   const readme = await fs.readFile(readmePath, "utf-8");
   const extensionSource = await fs.readFile(extensionSourcePath, "utf-8");
+  const sessionSendWorkflowSource = await fs.readFile(path.join(packageRoot, "src", "chatInterop", "sessionSendWorkflow.ts"), "utf-8");
   const toolsInstructions = await fs.readFile(toolsInstructionPath, "utf-8");
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
@@ -6962,8 +6982,12 @@ async function runRoutingGuardChecks() {
     "Focused-send fallback must not remain exposed as a competing language-model tool surface."
   );
   assert(
-    extensionSource.includes('focusLikelyEditorChat(chatInterop)'),
-    "Focused-send fallback command surface must steer to an editor-hosted Local chat before dispatch."
+    !extensionSource.includes('registerCommand("tiinex.aiVscodeTools.sendMessageToFocusedLiveChat"'),
+    "Focused-send fallback command surface must not survive as a separate extension command."
+  );
+  assert(
+    sessionSendWorkflowSource.includes("focusLikelyEditorChat(chatInterop"),
+    "Canonical session send must keep the editor-hosted focused fallback available behind the canonical path when direct exact send is unavailable."
   );
 }
 

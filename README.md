@@ -56,13 +56,17 @@ Some commands are intentionally hidden from the Command Palette and are instead 
 - `Tiinex: Open Session Context Estimate`
 - `Tiinex: Open Session Profile`
 - `Tiinex: Open Raw Session File (Last Resort)`
+
+Scoped VS Code session-view actions for manual operator use include:
+
 - `Tiinex: List Local Chats`
 - `Tiinex: Reveal Local Chat`
 - `Tiinex: Close Visible Local Chat Tabs`
 - `Tiinex: Delete Local Chat Artifacts`
 - `Tiinex: Create Local Chat`
 - `Tiinex: Send Message To Local Chat`
-- `Tiinex: Send Message To Focused Local Chat`
+
+For agent-facing same-session live-chat workflows, prefer the language-model tools rather than these mirrored extension commands.
 
 Core settings:
 

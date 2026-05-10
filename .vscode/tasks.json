@@ -241,7 +241,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "probe focused/session wait heuristics",
+			"label": "probe focused/session fallback wait heuristics",
 			"type": "shell",
 			"command": "C:\\Program Files\\nodejs\\node.exe",
 			"args": [
@@ -252,7 +252,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "probe focused/session wait heuristics",
+			"label": "probe focused/session fallback wait heuristics",
 			"type": "shell",
 			"command": "C:\\Program Files\\nodejs\\node.exe",
 			"args": [
@@ -263,7 +263,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "probe focused/session wait heuristics",
+			"label": "probe focused/session fallback wait heuristics",
 			"type": "shell",
 			"command": "C:\\Program Files\\nodejs\\node.exe",
 			"args": [
@@ -274,7 +274,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "probe focused wait heuristic only",
+			"label": "probe focused fallback wait heuristic only",
 			"type": "shell",
 			"command": "C:\\Program Files\\nodejs\\node.exe",
 			"args": [
@@ -284,7 +284,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "probe focused wait heuristic only",
+			"label": "probe focused fallback wait heuristic only",
 			"type": "shell",
 			"command": "C:\\Program Files\\nodejs\\node.exe",
 			"args": [
@@ -294,7 +294,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "probe focused wait heuristic only",
+			"label": "probe focused fallback wait heuristic only",
 			"type": "shell",
 			"command": "C:\\Program Files\\nodejs\\node.exe",
 			"args": [
@@ -348,7 +348,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "focused-send regression probe",
+			"label": "focused-send fallback regression probe",
 			"type": "shell",
 			"command": "node",
 			"args": [
@@ -358,7 +358,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "focused-send regression probe",
+			"label": "focused-send fallback regression probe",
 			"type": "shell",
 			"command": "node",
 			"args": [
@@ -368,7 +368,7 @@
 			"isBackground": false
 		},
 		{
-			"label": "focused-send regression probe",
+			"label": "focused-send fallback regression probe",
 			"type": "shell",
 			"command": "node",
 			"args": [

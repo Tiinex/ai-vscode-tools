@@ -18,6 +18,8 @@ user-invocable: false
 
 ## Core Rules
 - For a new Local chat with a custom agent, prefer `create_live_agent_chat` and expect the host to use a direct agent-open route when available, with `/aa` prompt-file dispatch only as bounded fallback.
+- When the target role comes from a maintained workspace agent file, use that file's frontmatter `name` value as `agentName`; do not guess from the filename stem, a slug, or a temporary `/aa-live-chat-...` transport name.
+- If the authoritative agent name has not been read yet, inspect the maintained agent file or other maintained source first and only then call `create_live_agent_chat`.
 - After the new chat is created correctly, send ordinary follow-ups into the same exact session with `send_message_to_live_agent_chat` and omit `agentName` unless an intentional rebind is required.
 - Do not repeat `agentName` on normal same-chat follow-ups just because the first message used create-time role transport.
 - Treat `direct-agent-open` or `prompt-file-slash-command` as create-time transport evidence for first-message custom-agent startup, not as a reason to reopen `#agent`-prefix theories for ordinary follow-ups.
@@ -34,9 +36,11 @@ user-invocable: false
 
 ## Exact Create Procedure
 1. Use `create_live_agent_chat` for new-chat startup, especially when a custom agent should own the first message.
-2. Treat a direct agent-open command as the preferred create-time route when the host exposes one; otherwise treat `/aa` prompt-file dispatch as bounded fallback.
-3. Confirm the returned session id and requested agent outcome before treating the chat as a valid target.
-4. If selection evidence is reported as unverified or mismatched, treat the probe as failed rather than silently reusing the created chat.
+2. Resolve the requested `agentName` from the authoritative maintained source before dispatch. When a workspace agent file exists, that means reading its frontmatter `name` rather than inferring the agent from the filename.
+3. Treat a direct agent-open command as the preferred create-time route when the host exposes one; otherwise treat `/aa` prompt-file dispatch as bounded fallback.
+4. Do not infer the requested agent from the temporary `/aa-live-chat-...` slash-command filename; that filename is transport scaffolding, not the authoritative agent identifier.
+5. Confirm the returned session id and requested agent outcome before treating the chat as a valid target.
+6. If selection evidence is reported as unverified or mismatched, treat the probe as failed rather than silently reusing the created chat.
 
 ## Same-Chat Follow-Up Procedure
 1. Use `send_message_to_live_agent_chat` with the exact session id for same-chat continuation.

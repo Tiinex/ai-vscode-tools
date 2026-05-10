@@ -31,8 +31,7 @@ const LOCAL_CHAT_CONTROL_COMMANDS = new Set([
 const LOCAL_CHAT_MUTATION_COMMANDS = new Set([
   "tiinex.aiVscodeTools.createLiveChat",
   "tiinex.aiVscodeTools.deleteLiveChatArtifacts",
-  "tiinex.aiVscodeTools.sendMessageToLiveChat",
-  "tiinex.aiVscodeTools.sendMessageToFocusedLiveChat"
+  "tiinex.aiVscodeTools.sendMessageToLiveChat"
 ]);
 
 export const FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED = false;

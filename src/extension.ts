@@ -5,9 +5,8 @@ import readline from "node:readline";
 import * as vscode from "vscode";
 import { registerChatInterop } from "./chatInterop";
 import type { ChatCommandResult, ChatInteropApi, ChatSessionSummary, CreateChatRequest } from "./chatInterop";
-import { focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
-import { getExactDeleteSelfTargetingReason, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
+import { getExactDeleteSelfTargetingReason, getExactSelfTargetingReason } from "./chatInterop/selfTargetGuard";
 import { SessionToolsAdapter, type SessionDescriptor } from "./coreAdapter";
 import {
   FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED,
@@ -662,30 +661,6 @@ function registerCommands(
             )
           );
         }, resolved);
-      }),
-      vscode.commands.registerCommand("tiinex.aiVscodeTools.sendMessageToFocusedLiveChat", async () => {
-        const prompt = await promptForChatPrompt("Send Message To Focused Editor Local Chat");
-        if (!prompt) {
-          return;
-        }
-        await runCommand(async () => {
-          const selfTargetReason = getFocusedSelfTargetingReason(await chatInterop.listChats(), "focused-send");
-          if (selfTargetReason) {
-            throw new Error(selfTargetReason);
-          }
-          const focusResult = await runWithProgress("Focusing editor-hosted Local chat", () => focusLikelyEditorChat(chatInterop));
-          if (!focusResult.ok) {
-            throw new Error(focusResult.reason ?? "Unable to focus an editor-hosted Local chat.");
-          }
-          const result = await runWithProgress("Sending message to focused editor Local chat", () => chatInterop.sendFocusedMessage({
-            prompt,
-            blockOnResponse: false
-          }));
-          if (!result.ok) {
-            throw new Error(commandResultMessage(result, "Unable to send message to focused editor Local chat"));
-          }
-          void vscode.window.showInformationMessage(commandResultMessage(result, "Sent message to focused editor Local chat"));
-        });
       })
     );
   }
