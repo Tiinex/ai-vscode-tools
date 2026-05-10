@@ -2,7 +2,7 @@
   "name": "ai-vscode-tools",
   "displayName": "Tiinex AI — VS Code Tools",
   "description": "Tools for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging in VS Code.",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
