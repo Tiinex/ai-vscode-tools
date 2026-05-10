@@ -76,3 +76,4 @@ user-invocable: false
 - Focused send remains an internal fallback transport and command-side mechanic, not a competing LM tool surface for same-chat continuity.
 - `close_visible_live_chat_tabs` is for non-destructive tab cleanup.
 - `delete_live_agent_chat_artifacts` is for exact destructive cleanup of disposable Local chats.
+- When validating this workflow against repo DoD or live-pass discipline, use `../instructions/tooling-validation.instructions.md` as the maintained protocol home.

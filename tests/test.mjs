@@ -46,7 +46,7 @@ const distLanguageModelTools = path.join(packageRoot, "dist", "languageModelTool
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
 const extensionSourcePath = path.join(packageRoot, "src", "extension.ts");
-const toolsInstructionPath = path.join(packageRoot, ".github", "instructions", "fix-and-improve-tools.temporary.instructions.md");
+const toolingValidationInstructionPath = path.join(packageRoot, ".github", "instructions", "tooling-validation.instructions.md");
 const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
 const vscodeStubModulePath = path.join(packageRoot, "node_modules", "vscode", "index.js");
 const disposableProbeFallbackScriptPath = path.join(packageRoot, "tools", "create-disposable-local-chat-probe.ps1");
@@ -6916,7 +6916,7 @@ async function runRoutingGuardChecks() {
   const readme = await fs.readFile(readmePath, "utf-8");
   const extensionSource = await fs.readFile(extensionSourcePath, "utf-8");
   const sessionSendWorkflowSource = await fs.readFile(path.join(packageRoot, "src", "chatInterop", "sessionSendWorkflow.ts"), "utf-8");
-  const toolsInstructions = await fs.readFile(toolsInstructionPath, "utf-8");
+  const toolingValidationInstructions = await fs.readFile(toolingValidationInstructionPath, "utf-8");
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
   assert(
@@ -6960,8 +6960,8 @@ async function runRoutingGuardChecks() {
     "Disposable local delete probe PowerShell fallback must stay removed after the public probe tooling was removed."
   );
   assert(
-    !toolsInstructions.includes("create-disposable-local-chat-probe.ps1"),
-    "Restart instructions must not point back to the removed disposable probe PowerShell fallback."
+    !toolingValidationInstructions.includes("create-disposable-local-chat-probe.ps1"),
+    "Maintained validation instructions must not point back to the removed disposable probe PowerShell fallback."
   );
 
   for (const toolName of [

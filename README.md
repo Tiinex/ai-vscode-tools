@@ -336,6 +336,11 @@ Each platform lane below is tracked as a checklist.
 		- [x] Skill: create/send workflow guidance marks focused live-chat send as internal fallback transport rather than a second public route.
 		- [x] Skill Test: focused live-chat fallback guidance has been checked against current behavior.
 
+## Validation Protocol
+
+- Maintained tooling validation protocol lives in `.github/instructions/tooling-validation.instructions.md`.
+- Use that file for Phase 1 and Phase 2 structure, live-pass criteria, and tooling definition-of-done expectations.
+
 ## Known Limits
 
 - Cross-platform parity is not claimed yet.
