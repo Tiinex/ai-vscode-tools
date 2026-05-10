@@ -327,14 +327,14 @@ Each platform lane below is tracked as a checklist.
 		- [x] Skill: role-facing guidance exists for exact live-chat create and send.
 		- [x] Skill Test: exact live-chat create and send guidance has been checked against current behavior.
 
-- Focused live-chat send
+- Focused live-chat fallback transport
 	- Windows
-		- [x] Use Case: focused send waits for persisted mutation and settled target state instead of reporting success on optimistic dispatch alone.
-		- [x] Use Case: focused send reports unverified or blocked targeting state instead of implying stronger targeting than the host can prove.
-		- [x] Unit Test: `focused-send` passes as an approved reliability gate rather than only existing and being exercised.
-		- [x] Manual Test: host validation confirmed focused-send blocked ambiguous targeting instead of implying stronger targeting than the host could prove.
-		- [x] Skill: create/send workflow guidance covers focused live-chat send.
-		- [x] Skill Test: focused live-chat send guidance has been checked against current behavior.
+		- [x] Transport Coverage: focused-send waits for persisted mutation and settled target state instead of reporting success on optimistic dispatch alone.
+		- [x] Transport Coverage: focused-send reports unverified or blocked targeting state instead of implying stronger targeting than the host can prove.
+		- [x] Unit Test: `focused-send` passes as fallback-transport coverage rather than as a peer public workflow gate.
+		- [x] Manual Test: host validation confirmed focused-send blocked ambiguous targeting when fallback transport coverage was exercised.
+		- [x] Skill: create/send workflow guidance marks focused live-chat send as internal fallback transport rather than a second public route.
+		- [x] Skill Test: focused live-chat fallback guidance has been checked against current behavior.
 
 ## Known Limits
 

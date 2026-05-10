@@ -48,6 +48,7 @@ const readmePath = path.join(packageRoot, "README.md");
 const extensionSourcePath = path.join(packageRoot, "src", "extension.ts");
 const toolsInstructionPath = path.join(packageRoot, ".github", "instructions", "fix-and-improve-tools.temporary.instructions.md");
 const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
+const vscodeStubModulePath = path.join(packageRoot, "node_modules", "vscode", "index.js");
 const disposableProbeFallbackScriptPath = path.join(packageRoot, "tools", "create-disposable-local-chat-probe.ps1");
 const sqlJsDistRoot = path.join(packageRoot, "node_modules", "sql.js", "dist");
 const expectedToolNames = [
@@ -7299,6 +7300,176 @@ async function cleanupWorkspaceTempArtifacts() {
   await Promise.all(tempDirs.map((tempDir) => fs.rm(tempDir, { recursive: true, force: true })));
 }
 
+async function runLiveToolMutexChecks() {
+  const vscodeModule = await import(`${pathToFileURL(vscodeStubModulePath).href}?live-tool-mutex=${Date.now()}`);
+  const vscode = vscodeModule.default ?? vscodeModule;
+  const originalLm = vscode.lm;
+  const originalLanguageModelToolResult = vscode.LanguageModelToolResult;
+  const originalLanguageModelTextPart = vscode.LanguageModelTextPart;
+  const registeredTools = new Map();
+
+  const successResult = {
+    ok: true,
+    session: {
+      id: "tool-mutex-session",
+      title: "Tool Mutex Session",
+      lastUpdated: "2026-05-10T18:30:00.000Z",
+      mode: "file:///tmp/agent-architect.agent.md",
+      agent: "agent-architect",
+      requestAgentId: "github.copilot.editsAgent",
+      requestAgentName: "GitHub Copilot",
+      model: "copilot/gpt-5-mini",
+      archived: false,
+      provider: "workspaceStorage",
+      sessionFile: "/tmp/tool-mutex-session.jsonl"
+    },
+    selection: {
+      mode: { status: "not-requested" },
+      model: { status: "not-requested" },
+      agent: {
+        status: "verified",
+        requested: "#agent-architect",
+        observed: "file:///tmp/agent-architect.agent.md"
+      },
+      dispatchedPrompt: "hello from mutex test",
+      dispatchSurface: "direct-agent-open",
+      allRequestedVerified: true
+    }
+  };
+
+  let releaseFirstCreate;
+  const createResponses = [
+    () => new Promise((resolve) => {
+      releaseFirstCreate = () => resolve(successResult);
+    }),
+    () => Promise.resolve(successResult),
+    () => Promise.reject(new Error("Synthetic create failure.")),
+    () => Promise.resolve(successResult)
+  ];
+  let createCallCount = 0;
+
+  vscode.lm = {
+    registerTool(name, tool) {
+      registeredTools.set(name, tool);
+      return { dispose() {} };
+    }
+  };
+  vscode.LanguageModelTextPart = class LanguageModelTextPart {
+    constructor(value) {
+      this.value = value;
+    }
+  };
+  vscode.LanguageModelToolResult = class LanguageModelToolResult {
+    constructor(content) {
+      this.content = content;
+    }
+  };
+
+  try {
+    const languageModelToolsModule = await import(pathToFileURL(distLanguageModelTools).href);
+    const contextRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-live-tool-mutex-"));
+    const fakeContext = {
+      subscriptions: [],
+      storageUri: {
+        fsPath: path.join(contextRoot, "workspaceStorage", "test-workspace")
+      },
+      globalStorageUri: {
+        fsPath: path.join(contextRoot, "globalStorage")
+      }
+    };
+    const fakeAdapter = new Proxy({}, { get: () => async () => "" });
+    const fakeChatInterop = {
+      async createChat() {
+        createCallCount += 1;
+        const nextResponseFactory = createResponses.shift();
+        assert(nextResponseFactory, "Live tool mutex test exhausted the queued create responses unexpectedly.");
+        return await nextResponseFactory();
+      }
+    };
+
+    languageModelToolsModule.registerLanguageModelTools(fakeContext, fakeAdapter, fakeChatInterop);
+
+    const createTool = registeredTools.get("create_live_agent_chat");
+    assert(createTool && typeof createTool.invoke === "function", "Live tool mutex test could not capture the create_live_agent_chat tool registration.");
+
+    const invocationOptions = {
+      input: {
+        prompt: "hello from mutex test",
+        agentName: "agent-architect",
+        requireSelectionEvidence: false
+      },
+      tokenizationOptions: {
+        tokenBudget: 4000
+      }
+    };
+
+    const firstInvoke = createTool.invoke(invocationOptions);
+
+    let parallelError;
+    try {
+      await createTool.invoke(invocationOptions);
+    } catch (error) {
+      parallelError = error instanceof Error ? error.message : String(error);
+    }
+
+    assert(
+      typeof parallelError === "string" && parallelError.includes("Run these tools serially instead of in parallel."),
+      `Live tool mutex test did not reject the parallel invocation immediately. Got: ${parallelError}`
+    );
+    assert(createCallCount === 1, `Live tool mutex test let a parallel invocation reach chatInterop.createChat. Got calls: ${createCallCount}`);
+
+    releaseFirstCreate();
+    const firstResult = await firstInvoke;
+    assert(
+      Array.isArray(firstResult.content) && String(firstResult.content[0]?.value ?? "").includes("Live Agent Chat Created"),
+      "Live tool mutex test did not return the expected success result after the first invocation was released."
+    );
+
+    const secondSuccessResult = await createTool.invoke(invocationOptions);
+    assert(
+      Array.isArray(secondSuccessResult.content) && String(secondSuccessResult.content[0]?.value ?? "").includes("Live Agent Chat Created"),
+      "Live tool mutex test did not allow a fresh invocation after the first success released the mutex."
+    );
+
+    let failureMessage;
+    try {
+      await createTool.invoke(invocationOptions);
+    } catch (error) {
+      failureMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    assert(
+      typeof failureMessage === "string" && failureMessage.includes("Synthetic create failure."),
+      `Live tool mutex test did not surface the underlying create failure. Got: ${failureMessage}`
+    );
+
+    const recoveryResult = await createTool.invoke(invocationOptions);
+    assert(
+      Array.isArray(recoveryResult.content) && String(recoveryResult.content[0]?.value ?? "").includes("Live Agent Chat Created"),
+      "Live tool mutex test did not release the mutex after a failing invocation."
+    );
+    assert(createCallCount === 4, `Live tool mutex test observed an unexpected number of createChat calls. Got: ${createCallCount}`);
+  } finally {
+    if (originalLm === undefined) {
+      delete vscode.lm;
+    } else {
+      vscode.lm = originalLm;
+    }
+
+    if (originalLanguageModelToolResult === undefined) {
+      delete vscode.LanguageModelToolResult;
+    } else {
+      vscode.LanguageModelToolResult = originalLanguageModelToolResult;
+    }
+
+    if (originalLanguageModelTextPart === undefined) {
+      delete vscode.LanguageModelTextPart;
+    } else {
+      vscode.LanguageModelTextPart = originalLanguageModelTextPart;
+    }
+  }
+}
+
 const namedChecks = [
   ["cli", runCliChecks],
   ["mcp", runMcpChecks],
@@ -7315,6 +7486,7 @@ const namedChecks = [
   ["offline-local-chat-cleanup", runOfflineLocalChatCleanupChecks],
   ["session-send-workflow", runSessionSendWorkflowChecks],
   ["live-chat-quiescence", runLiveChatQuiescenceChecks],
+  ["live-tool-mutex", runLiveToolMutexChecks],
   ["live-chat-quiescence-workspace", runLiveChatWorkspaceQuiescenceProbe],
   ["live-chat-support-matrix", runLiveChatSupportMatrixChecks],
   ["local-to-copilot-cli-handoff", runLocalToCopilotCliHandoffChecks],

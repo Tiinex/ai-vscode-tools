@@ -1165,9 +1165,22 @@ class LocalChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 
   async invoke(options: vscode.LanguageModelToolInvocationOptions<TInput>): Promise<vscode.LanguageModelToolResult> {
+    let lease: { release(): void } | undefined;
+    try {
+      lease = liveChatToolMutex.tryAcquire("live chat tool invocation");
+    } catch (error) {
+      throw new Error(
+        `Another live chat or host-bound tool invocation is already running. Run these tools serially instead of in parallel. ${errorMessage(error)}`
+      );
+    }
+
     const budget = outputBudget(options.tokenizationOptions?.tokenBudget);
-    const content = await this.invokeImpl(options.input, budget);
-    return textResult(content);
+    try {
+      const content = await this.invokeImpl(options.input, budget);
+      return textResult(content);
+    } finally {
+      lease.release();
+    }
   }
 }
 

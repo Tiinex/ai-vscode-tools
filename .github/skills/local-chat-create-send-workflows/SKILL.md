@@ -1,6 +1,6 @@
 ---
 name: local-chat-create-send-workflows
-description: 'Guidance for exact Local chat create/send workflows in VS Code. Use when creating a new Local chat with a custom agent, continuing the same Local chat, or deciding between exact send and focused-send surfaces.'
+description: 'Guidance for exact Local chat create/send workflows in VS Code. Use when creating a new Local chat with a custom agent, continuing the same Local chat, or interpreting exact send versus internal focused-fallback transport on hosts that still need fallback.'
 user-invocable: false
 ---
 
@@ -15,11 +15,16 @@ user-invocable: false
 - Prefer exact create and exact session-targeted send surfaces over focused surfaces.
 - Treat the first custom-agent message in a new Local chat as a transport bootstrap, not as proof that every later follow-up should repeat agent selection.
 - Treat focused-send as an internal fallback transport, not as a competing public LM tool route.
+- On the current host, treat matching mode-backed custom-agent evidence as stronger than the generic persisted request-agent field when validating a custom-agent create result.
+- Treat Local-chat LM tools as serial single-flight work against shared host state; do not intentionally overlap create, list, inspect, reveal, send, close, or delete operations.
 
 ## Core Rules
 - For a new Local chat with a custom agent, prefer `create_live_agent_chat` and expect the host to use a direct agent-open route when available, with `/aa` prompt-file dispatch only as bounded fallback.
 - When the target role comes from a maintained workspace agent file, use that file's frontmatter `name` value as `agentName`; do not guess from the filename stem, a slug, or a temporary `/aa-live-chat-...` transport name.
 - If the authoritative agent name has not been read yet, inspect the maintained agent file or other maintained source first and only then call `create_live_agent_chat`.
+- When reading the create result, prefer `selection.agent`, session `mode`, session `agent`, and session `model` over `Persisted Request Agent`; on this host that request-agent field can remain `github.copilot.editsAgent` even when the custom agent landed correctly.
+- If a second Local-chat LM tool call is attempted while another one is still active, the intended behavior is immediate fail-fast rejection rather than queueing, background overlap, or an endless wait loop.
+- If a live surface still allows overlapping Local-chat LM tool calls after the mutex fix is present in repo code, treat that as stale runtime pickup or unresolved runtime drift, not as permission to rely on parallel operation.
 - After the new chat is created correctly, send ordinary follow-ups into the same exact session with `send_message_to_live_agent_chat` and omit `agentName` unless an intentional rebind is required.
 - Do not repeat `agentName` on normal same-chat follow-ups just because the first message used create-time role transport.
 - Treat `direct-agent-open` or `prompt-file-slash-command` as create-time transport evidence for first-message custom-agent startup, not as a reason to reopen `#agent`-prefix theories for ordinary follow-ups.
@@ -40,7 +45,8 @@ user-invocable: false
 3. Treat a direct agent-open command as the preferred create-time route when the host exposes one; otherwise treat `/aa` prompt-file dispatch as bounded fallback.
 4. Do not infer the requested agent from the temporary `/aa-live-chat-...` slash-command filename; that filename is transport scaffolding, not the authoritative agent identifier.
 5. Confirm the returned session id and requested agent outcome before treating the chat as a valid target.
-6. If selection evidence is reported as unverified or mismatched, treat the probe as failed rather than silently reusing the created chat.
+6. When the returned session `mode` or `selection.agent` clearly matches the requested workspace agent, treat that as the primary routing evidence even if `Persisted Request Agent` still shows the host-generic Copilot value.
+7. If selection evidence is reported as unverified or mismatched, treat the probe as failed rather than silently reusing the created chat.
 
 ## Same-Chat Follow-Up Procedure
 1. Use `send_message_to_live_agent_chat` with the exact session id for same-chat continuation.
