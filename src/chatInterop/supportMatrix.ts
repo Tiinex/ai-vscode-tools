@@ -43,6 +43,7 @@ export interface LiveChatSupportMatrix {
   localNewChatCustomAgent: SupportCell;
   localFocusedPromptSubmit: SupportCell;
   localExactReveal: SupportCell;
+  localExactSend: SupportCell;
   localSessionFollowUpSend: SupportCell;
   localExactModeModelOverride: SupportCell;
   localExactCustomAgent: SupportCell;
@@ -151,6 +152,15 @@ export function buildLiveChatSupportMatrix(options: {
           status: "unsupported",
           reason: options.exactSessionInterop.revealUnsupportedReason ?? "No supported Local exact-session reveal command was found."
         },
+    localExactSend: options.exactSessionInterop.canSendExactSessionMessage
+      ? {
+          status: "supported",
+          reason: `A generic Local exact-session send command is present: ${GENERIC_SESSION_OPEN_WITH_PROMPT_COMMAND}.`
+        }
+      : {
+          status: "unsupported",
+          reason: options.exactSessionInterop.sendUnsupportedReason ?? "No generic Local exact-session send command was found."
+        },
     localSessionFollowUpSend: options.exactSessionInterop.canRevealExactSession && focusedChatInterop.canSubmitFocusedChatMessage
       ? {
           status: "supported",
@@ -193,6 +203,7 @@ export function renderLiveChatSupportMatrixMarkdown(
     renderSupportLine("Local new chat custom agent", matrix.localNewChatCustomAgent),
     renderSupportLine("Local focused prompt submit", matrix.localFocusedPromptSubmit),
     renderSupportLine("Local exact reveal", matrix.localExactReveal),
+    renderSupportLine("Local exact send", matrix.localExactSend),
     renderSupportLine("Local session follow-up send", matrix.localSessionFollowUpSend),
     renderSupportLine("Local exact mode/model override", matrix.localExactModeModelOverride),
     renderSupportLine("Local exact custom agent", matrix.localExactCustomAgent)
@@ -211,7 +222,7 @@ export function renderLiveChatSupportMatrixMarkdown(
       "## Interpretation",
       "- This compact view is intended for agent-facing triage when you mainly need capability status rather than raw command or manifest listings.",
       "- Request detailLevel=full when you need exact runtime command evidence, full manifest participant rows, or the switch-agent option list.",
-      "- Verified Local follow-up send on this build means exact reveal plus focused submit; no separate ordinary exact-send product path is assumed."
+      "- Verified Local follow-up send on this build means exact reveal plus focused submit when a direct exact-send command is unavailable."
     );
     return `${lines.join("\n")}\n`;
   }

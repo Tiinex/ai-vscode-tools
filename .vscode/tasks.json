@@ -128,7 +128,7 @@
 			"command": "node",
 			"args": [
 				"tests/test.mjs",
-				"disposable-delete-probe",
+				"delete-chat-safety",
 				"manifest",
 				"routing-guard"
 			],

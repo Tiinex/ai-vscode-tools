@@ -1,8 +1,6 @@
 import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import { focusLikelyEditorChat } from "./editorFocus";
-import { getLocalChatEditorTabMatchKind } from "./editorTabMatcher";
-import type { ChatFocusReport } from "./focusTargets";
 import type { ChatCommandResult, ChatInteropApi, SendChatMessageRequest } from "./types";
 import { appendUnsettledSessionDiagnostic, getSessionQuiescenceState } from "./unsettledDiagnostics";
 
@@ -21,10 +19,14 @@ export async function sendMessageToSession(
   request: SendChatMessageRequest
 ): Promise<ChatCommandResult> {
   const exactSupport = await chatInterop.getExactSessionInteropSupport();
+  if (exactSupport.canSendExactSessionMessage) {
+    return chatInterop.sendMessage(request);
+  }
+
   if (!exactSupport.canRevealExactSession) {
     return {
       ok: false,
-      reason: `${exactSupport.revealUnsupportedReason ?? "Exact Local reveal is unsupported on this build."} Session-targeted Local follow-up send depends on exact reveal before focused submit on this build.`
+      reason: `${exactSupport.revealUnsupportedReason ?? "Exact Local reveal is unsupported on this build."} Session-targeted Local follow-up send depends on either exact send or exact reveal before focused submit on this build.`
     };
   }
 
@@ -51,11 +53,7 @@ export async function sendMessageToSession(
     sessionId: request.sessionId
   });
   totalFocusMs += Date.now() - focusStartedAt;
-  let genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report, {
-    sessionId: request.sessionId,
-    sessionTitle: revealResult.session?.title ?? beforeTarget?.title
-  });
-  if (!focusResult.ok && !genericActiveChatFallback) {
+  if (!focusResult.ok) {
     const retriedRevealStartedAt = Date.now();
     const retriedRevealResult = await chatInterop.revealChat(request.sessionId);
     totalRevealMs += Date.now() - retriedRevealStartedAt;
@@ -67,14 +65,10 @@ export async function sendMessageToSession(
         sessionId: request.sessionId
       });
       totalFocusMs += Date.now() - retriedFocusStartedAt;
-      genericActiveChatFallback = canTrustGenericActiveChatAfterReveal(focusResult.report, {
-        sessionId: request.sessionId,
-        sessionTitle: retriedRevealResult.session?.title ?? beforeTarget?.title
-      });
     }
   }
 
-  if (!focusResult.ok && !genericActiveChatFallback) {
+  if (!focusResult.ok) {
     return {
       ok: false,
       reason: `Canonical Local session send failed while focusing the revealed editor-hosted chat: ${focusResult.reason ?? "Unable to focus the revealed editor-hosted chat."}`,
@@ -233,41 +227,10 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function canTrustGenericActiveChatAfterReveal(
-  report: ChatFocusReport | undefined,
-  target?: { sessionId: string; sessionTitle?: string }
-): boolean {
-  const activeGroup = report?.groups[report.activeGroupIndex];
-  const activeTab = activeGroup?.tabs.find((tab) => tab.isActive);
-  if (activeTab?.isLikelyChatEditor !== true || normalize(activeTab.label) !== "chat") {
-    return false;
-  }
-
-  if (!target?.sessionTitle) {
-    return false;
-  }
-
-  return getLocalChatEditorTabMatchKind(
-    {
-      label: activeTab.label,
-      input: activeTab.input
-    },
-    {
-      sessionId: target.sessionId,
-      sessionTitle: target.sessionTitle,
-      matchMode: "resource-only"
-    }
-  ) === "resource";
-}
-
 async function isSessionSettled(session: ChatCommandResult["session"] | undefined): Promise<boolean> {
   return (await getSessionQuiescenceState(session, {
     quietWindowMs: TARGET_TRANSCRIPT_QUIET_WINDOW_MS
   })).settled;
-}
-
-function normalize(value: string | undefined): string {
-  return value?.trim().replace(/\s+/g, " ").toLowerCase() ?? "";
 }
 
 async function captureSessionMutationBaseline(

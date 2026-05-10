@@ -35,7 +35,6 @@
     "onLanguageModelTool:close_visible_live_chat_tabs",
     "onLanguageModelTool:delete_live_agent_chat_artifacts",
     "onLanguageModelTool:send_message_to_live_agent_chat",
-    "onLanguageModelTool:send_message_to_focused_live_chat",
     "onLanguageModelTool:reveal_live_agent_chat"
   ],
   "categories": [
@@ -820,7 +819,7 @@
         "name": "close_visible_live_chat_tabs",
         "displayName": "Close Visible Live Chat Tabs",
         "userDescription": "Close visible editor-hosted live chat tabs for one exact session.",
-        "modelDescription": "Close visible editor-hosted live chat tabs for an exact or prefix session identifier without deleting the persisted session itself. Use this for safe Local cleanup after probes or tests when the target chat may still be open in editor tabs. This tool affects the VS Code UI and uses the same exact-session self-targeting guard as other live-chat mutation routes.",
+        "modelDescription": "Close visible editor-hosted live chat tabs for an exact or prefix session identifier without deleting the persisted session itself. Use this for safe Local cleanup after probes or tests when the target chat may still be open in editor tabs. This tool affects the VS Code UI and relies on exact tab-matching checks in the close path rather than the heuristic exact-session self-targeting guard.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "close-visible-live-chat-tabs",
         "inputSchema": {
@@ -867,8 +866,8 @@
       {
         "name": "send_message_to_live_agent_chat",
         "displayName": "Send Message To Live Agent Chat",
-        "userDescription": "Advanced exact-session continuation for an existing live chat.",
-        "modelDescription": "Advanced exact-session continuation by session id. Use this when you already have the target session and want to continue the same chat. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused fallback surfaces may then use temporary prompt-file slash dispatch. On builds where ordinary Local exact send is unsupported, this tool may still fall back to reveal plus focused submit and therefore remains subject to host limits.",
+        "userDescription": "Continue an existing live chat by session id.",
+        "modelDescription": "Continue an existing live chat by session id. On this build the verified follow-up transport is: reveal the exact Local session, focus the resulting editor-hosted chat, then submit through the focused chat input. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused send surfaces may then use temporary prompt-file slash dispatch.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "send-message-live-agent-chat",
         "inputSchema": {
@@ -909,10 +908,6 @@
             "requireSelectionEvidence": {
               "type": "boolean",
               "description": "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
-            },
-            "allowTransportWorkaround": {
-              "type": "boolean",
-              "description": "If true, and this build lacks ordinary Local exact send, allow a decoy-session workaround when the latest-session self-targeting guard would otherwise block the send. This is transport-workaround evidence, not strict exact-session proof."
             }
           },
           "required": [
@@ -922,110 +917,10 @@
         }
       },
       {
-        "name": "send_message_to_focused_live_chat",
-        "displayName": "Send Message To Focused Live Chat",
-        "userDescription": "Send a prompt through the currently focused live chat input.",
-        "modelDescription": "Send a prompt through the currently focused live chat input using focusInput plus chat.submit when this build exposes those commands. Use this only when the intended Local chat is already visible and focused, because it is a best-effort focused-thread transport rather than an exact session-targeted API. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays visually clean. Supply agentName only for deliberate role rebinding, which may use temporary prompt-file slash dispatch on this surface. This tool affects the VS Code UI and rejects concurrent live-chat operations. A heuristic self-targeting guard blocks use when the current invoking conversation appears to be the focused thread.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "send-message-focused-live-chat",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "prompt": {
-              "type": "string",
-              "description": "The prompt to send through the currently focused live chat input."
-            },
-            "agentName": {
-              "type": "string",
-              "description": "Optional custom agent name for a deliberate role rebind on this focused-send surface. Omit it for ordinary follow-ups in an already-correct chat. When supplied, custom-agent dispatch currently uses a temporary prompt-file slash command rather than a literal #agentName prefix."
-            },
-            "mode": {
-              "type": "string",
-              "description": "Optional chat mode override. Focused live send cannot reliably apply or prove this on the current build."
-            },
-            "modelId": {
-              "type": "string",
-              "description": "Optional model identifier. Focused live send cannot reliably apply or prove this on the current build."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Optional model vendor for the requested model selector."
-            },
-            "partialQuery": {
-              "type": "boolean",
-              "description": "Reserved for compatibility; focused live send uses a partial prefill before submit on this build."
-            },
-            "blockOnResponse": {
-              "type": "boolean",
-              "description": "Reserved for compatibility with other live chat mutation tools."
-            },
-            "requireSelectionEvidence": {
-              "type": "boolean",
-              "description": "Fail if the requested agent selection cannot be explicitly evidenced after dispatch."
-            }
-          },
-          "required": [
-            "prompt"
-          ]
-        }
-      },
-      {
-        "name": "send_message_to_focused_editor_chat",
-        "displayName": "Send Message To Focused Editor Chat",
-        "userDescription": "Steer focus to the active editor chat and send a prompt there.",
-        "modelDescription": "Steer focus to the active editor group, or to a visible editor-hosted chat tab matching an optional live session id, verify that the resulting active tab still looks like an editor-hosted Local chat, and then dispatch a prompt through the focused chat input. Use this when a side-panel chat currently has focus but the intended Local target is already open in an editor tab. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays visually clean. Supply agentName only for deliberate role rebinding, which may use temporary prompt-file slash dispatch on this surface. This tool affects the VS Code UI and remains best-effort until the touched session is verified from persisted artifacts. A heuristic self-targeting guard blocks ambiguous sends and prefers an explicit sessionId.",
-        "canBeReferencedInPrompt": true,
-        "toolReferenceName": "send-message-focused-editor-chat",
-        "inputSchema": {
-          "type": "object",
-          "properties": {
-            "sessionId": {
-              "type": "string",
-              "description": "Optional exact or prefix session identifier for the visible editor-hosted live chat to focus before submit. When omitted, the active editor-group candidate is used."
-            },
-            "prompt": {
-              "type": "string",
-              "description": "The prompt to send through the focused editor-hosted live chat."
-            },
-            "agentName": {
-              "type": "string",
-              "description": "Optional custom agent name for a deliberate role rebind on this focused editor-send surface. Omit it for ordinary follow-ups in an already-correct chat. When supplied, custom-agent dispatch currently uses a temporary prompt-file slash command rather than a literal #agentName prefix."
-            },
-            "mode": {
-              "type": "string",
-              "description": "Optional chat mode override. Focused editor send cannot reliably apply or prove this on the current build."
-            },
-            "modelId": {
-              "type": "string",
-              "description": "Optional model identifier. Focused editor send cannot reliably apply or prove this on the current build."
-            },
-            "modelVendor": {
-              "type": "string",
-              "description": "Optional model vendor for the requested model selector."
-            },
-            "partialQuery": {
-              "type": "boolean",
-              "description": "Reserved for compatibility; focused editor send uses a partial prefill before submit on this build."
-            },
-            "blockOnResponse": {
-              "type": "boolean",
-              "description": "Reserved for compatibility with other live chat mutation tools."
-            },
-            "requireSelectionEvidence": {
-              "type": "boolean",
-              "description": "Fail if the requested agent selection cannot be explicitly evidenced after dispatch."
-            }
-          },
-          "required": [
-            "prompt"
-          ]
-        }
-      },
-      {
         "name": "reveal_live_agent_chat",
         "displayName": "Reveal Live Agent Chat",
         "userDescription": "Re-open an existing live chat so the visible thread reloads current persisted state.",
-        "modelDescription": "Re-open an existing live chat session in the side panel when the current build supports internal session-targeted chat commands. When a matching editor-hosted Local chat tab is already open, this path closes that tab first so the reopened session reloads current persisted state. Use this before inspection or best-effort follow-up when the visible thread must match persisted state.",
+        "modelDescription": "Re-open an existing live chat session in an editor group when the current build supports internal session-targeted chat commands. When a matching editor-hosted Local chat tab is already open, this path closes that tab first so the reopened session reloads current persisted state. Use this before inspection or best-effort follow-up when the visible thread must match persisted state.",
         "canBeReferencedInPrompt": true,
         "toolReferenceName": "reveal-live-agent-chat",
         "inputSchema": {

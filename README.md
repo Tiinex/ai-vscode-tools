@@ -221,7 +221,6 @@ interface CreateChatRequest {
 
 interface SendChatMessageRequest extends CreateChatRequest {
 	sessionId: string;
-	allowTransportWorkaround?: boolean;
 }
 
 interface ChatSessionSummary {

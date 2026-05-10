@@ -3,11 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import {
+  buildUnsupportedSendReason,
   buildUnsupportedFocusedSendReason,
   buildUnsupportedRevealReason,
   findFocusedChatInputCommand,
   findFocusedChatSubmitCommand,
   findExactSessionOpenCommand,
+  findExactSessionSendCommand,
   getFocusedChatInteropSupport,
   getExactSessionInteropSupport,
   type ExactSessionInteropSupport,
@@ -25,6 +27,7 @@ import {
   buildCreateChatSelectionBlocker,
   buildFocusedChatSelectionBlocker,
   buildPromptWithAgentSelector,
+  buildSendChatSelectionBlocker,
   buildSelectionVerification,
   ChatDispatchInfo,
   ChatCommandResult,
@@ -33,6 +36,7 @@ import {
   ChatSessionSummary,
   CreateChatRequest,
   InternalChatOpenOptions,
+  SendChatMessageRequest,
   toModelSelector
 } from "./types";
 import { appendUnsettledSessionDiagnostic, getSessionQuiescenceState } from "./unsettledDiagnostics";
@@ -175,6 +179,91 @@ export class ChatInteropService implements ChatInteropApi {
       return {
         ok: true,
         session: created,
+        selection,
+        dispatch
+      };
+    } catch (error) {
+      return toErrorResult(error);
+    } finally {
+      lease?.release();
+    }
+  }
+
+  async sendMessage(request: SendChatMessageRequest): Promise<ChatCommandResult> {
+    if (!request.prompt?.trim()) {
+      return { ok: false, reason: "prompt is required" };
+    }
+
+    let lease: { release(): void } | undefined;
+    try {
+      lease = this.acquireLease();
+    } catch (error) {
+      return toErrorResult(error);
+    }
+
+    try {
+      const target = await this.storage.getSessionById(request.sessionId);
+      if (!target) {
+        return { ok: false, reason: `session not found: ${request.sessionId}` };
+      }
+
+      const selectionBlocker = buildSendChatSelectionBlocker(request);
+      if (selectionBlocker) {
+        return {
+          ok: false,
+          reason: selectionBlocker
+        };
+      }
+
+      const command = await this.findExactSessionSendCommand();
+      if (!command) {
+        return {
+          ok: false,
+          reason: await this.buildUnsupportedSendReason()
+        };
+      }
+
+      const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
+      await this.openExactSessionWithPrompt(command, target.id, dispatchedPrompt, request.blockOnResponse ?? false);
+
+      let session = await this.storage.getSessionById(target.id);
+      if (request.blockOnResponse) {
+        const waitResult = await this.waitForExactSessionMutation(target.id, undefined, true);
+        session = waitResult.session;
+        if (!waitResult.observedMutation) {
+          return {
+            ok: false,
+            reason: "Exact session send dispatched but no persisted session mutation was observed within the expected timeout."
+          };
+        }
+        if (!waitResult.settled) {
+          return {
+            ok: false,
+            reason: "Exact session send dispatched and a persisted mutation was observed, but the target session did not reach a settled state within the expected timeout.",
+            session
+          };
+        }
+      }
+
+      const dispatch: ChatDispatchInfo = {
+        surface: "chat-open",
+        dispatchedPrompt
+      };
+      const selection = buildSelectionVerification(request, session, dispatch);
+
+      if (request.requireSelectionEvidence && !selection.allRequestedVerified) {
+        return {
+          ok: false,
+          reason: buildSelectionEvidenceFailure(selection, false),
+          session,
+          selection,
+          dispatch
+        };
+      }
+
+      return {
+        ok: true,
+        session,
         selection,
         dispatch
       };
@@ -616,8 +705,16 @@ export class ChatInteropService implements ChatInteropApi {
     return findExactSessionOpenCommand(await vscode.commands.getCommands(true));
   }
 
+  private async findExactSessionSendCommand(): Promise<string | undefined> {
+    return findExactSessionSendCommand(await vscode.commands.getCommands(true));
+  }
+
   private async buildUnsupportedRevealReason(): Promise<string> {
     return buildUnsupportedRevealReason(await vscode.commands.getCommands(true));
+  }
+
+  private async buildUnsupportedSendReason(): Promise<string> {
+    return buildUnsupportedSendReason(await vscode.commands.getCommands(true));
   }
 
   private async findFocusedChatInputCommand(): Promise<string | undefined> {
@@ -635,6 +732,15 @@ export class ChatInteropService implements ChatInteropApi {
   private async openExactSession(command: string, sessionId: string): Promise<void> {
     await vscode.commands.executeCommand(command, {
       resource: toLocalChatSessionUri(sessionId)
+    });
+  }
+
+  private async openExactSessionWithPrompt(command: string, sessionId: string, prompt: string, blockOnResponse: boolean): Promise<void> {
+    await vscode.commands.executeCommand(command, {
+      resource: toLocalChatSessionUri(sessionId),
+      prompt,
+      attachedContext: [],
+      blockOnResponse
     });
   }
 

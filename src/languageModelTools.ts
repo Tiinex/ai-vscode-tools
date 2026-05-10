@@ -1,4 +1,5 @@
 import path from "node:path";
+import { appendFileSync, mkdirSync } from "node:fs";
 import * as vscode from "vscode";
 import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, type CreateChatRequest, type SendChatMessageRequest } from "./chatInterop";
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
@@ -729,120 +730,10 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
-    name: "send_message_to_focused_live_chat",
-    displayName: "Send Message To Focused Live Chat",
-    userDescription: "Send a prompt through the currently focused live chat input.",
-    modelDescription: "Send a prompt through the currently focused live chat input using focusInput plus chat.submit when this build exposes those commands. Use this only when the intended Local chat is already visible and focused, because it is a best-effort focused-thread transport rather than an exact session-targeted API. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays visually clean. Supply agentName only for deliberate role rebinding, which may use temporary prompt-file slash dispatch on this surface. This tool affects the VS Code UI and rejects concurrent live-chat operations. A heuristic self-targeting guard blocks use when the current invoking conversation appears to be the focused thread.",
-    toolReferenceName: "send-message-focused-live-chat",
-    inputSchema: {
-      type: "object",
-      properties: {
-        prompt: {
-          type: "string",
-          description: "The prompt to send through the currently focused live chat input."
-        },
-        agentName: {
-          type: "string",
-          description: "Optional custom agent name for a deliberate role rebind on this focused-send surface. Omit it for ordinary follow-ups in an already-correct chat. When supplied, custom-agent dispatch currently uses a temporary prompt-file slash command rather than a literal #agentName prefix."
-        },
-        mode: {
-          type: "string",
-          description: "Optional chat mode override. Focused live send cannot reliably apply or prove this on the current build."
-        },
-        modelId: {
-          type: "string",
-          description: "Optional model identifier. Focused live send cannot reliably apply or prove this on the current build."
-        },
-        modelVendor: {
-          type: "string",
-          description: "Optional model vendor for the requested model selector."
-        },
-        partialQuery: {
-          type: "boolean",
-          description: "Reserved for compatibility; focused live send uses a partial prefill before submit on this build."
-        },
-        blockOnResponse: {
-          type: "boolean",
-          description: "Reserved for compatibility with other live chat mutation tools."
-        },
-        requireSelectionEvidence: {
-          type: "boolean",
-          description: "Fail if the requested agent selection cannot be explicitly evidenced after dispatch."
-        }
-      },
-      required: ["prompt"]
-    }
-  },
-  {
-    name: "focus_visible_editor_live_chat",
-    displayName: "Focus Visible Editor Live Chat",
-    userDescription: "Steer focus to a visible editor-hosted live chat without sending a prompt.",
-    modelDescription: "Steer focus to the active editor group, or to a visible editor-hosted chat tab matching an optional live session id, and verify that the resulting active tab still looks like an editor-hosted Local chat. Use this to satisfy the target-confirmation gate before any focused editor-chat prompt send. This tool affects the VS Code UI but does not dispatch a prompt.",
-    toolReferenceName: "focus-visible-editor-live-chat",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: {
-          type: "string",
-          description: "Optional exact or prefix session identifier for the visible editor-hosted live chat to focus. When omitted, the active editor-group candidate is used."
-        }
-      }
-    }
-  },
-  {
-    name: "send_message_to_focused_editor_chat",
-    displayName: "Send Message To Focused Editor Chat",
-    userDescription: "Steer focus to the active editor chat and send a prompt there.",
-    modelDescription: "Steer focus to the active editor group, or to a visible editor-hosted chat tab matching an optional live session id, verify that the resulting active tab still looks like an editor-hosted Local chat, and then dispatch a prompt through the focused chat input. Use this when a side-panel chat currently has focus but the intended Local target is already open in an editor tab. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays visually clean. Supply agentName only for deliberate role rebinding, which may use temporary prompt-file slash dispatch on this surface. This tool affects the VS Code UI and remains best-effort until the touched session is verified from persisted artifacts. A heuristic self-targeting guard blocks ambiguous sends and prefers an explicit sessionId.",
-    toolReferenceName: "send-message-focused-editor-chat",
-    inputSchema: {
-      type: "object",
-      properties: {
-        sessionId: {
-          type: "string",
-          description: "Optional exact or prefix session identifier for the visible editor-hosted live chat to focus before submit. When omitted, the active editor-group candidate is used."
-        },
-        prompt: {
-          type: "string",
-          description: "The prompt to send through the focused editor-hosted live chat."
-        },
-        agentName: {
-          type: "string",
-          description: "Optional custom agent name for a deliberate role rebind on this focused editor-send surface. Omit it for ordinary follow-ups in an already-correct chat. When supplied, custom-agent dispatch currently uses a temporary prompt-file slash command rather than a literal #agentName prefix."
-        },
-        mode: {
-          type: "string",
-          description: "Optional chat mode override. Focused editor send cannot reliably apply or prove this on the current build."
-        },
-        modelId: {
-          type: "string",
-          description: "Optional model identifier. Focused editor send cannot reliably apply or prove this on the current build."
-        },
-        modelVendor: {
-          type: "string",
-          description: "Optional model vendor for the requested model selector."
-        },
-        partialQuery: {
-          type: "boolean",
-          description: "Reserved for compatibility; focused editor send uses a partial prefill before submit on this build."
-        },
-        blockOnResponse: {
-          type: "boolean",
-          description: "Reserved for compatibility with other live chat mutation tools."
-        },
-        requireSelectionEvidence: {
-          type: "boolean",
-          description: "Fail if the requested agent selection cannot be explicitly evidenced after dispatch."
-        }
-      },
-      required: ["prompt"]
-    }
-  },
-  {
     name: "reveal_live_agent_chat",
     displayName: "Reveal Live Agent Chat",
     userDescription: "Re-open an existing live chat so the visible thread reloads current persisted state.",
-    modelDescription: "Re-open an existing live chat session in the side panel when the current build supports internal session-targeted chat commands. When a matching editor-hosted Local chat tab is already open, this path closes that tab first so the reopened session reloads current persisted state. Use this before inspection or best-effort follow-up when the visible thread must match persisted state.",
+    modelDescription: "Re-open an existing live chat session in an editor group when the current build supports internal session-targeted chat commands. When a matching editor-hosted Local chat tab is already open, this path closes that tab first so the reopened session reloads current persisted state. Use this before inspection or best-effort follow-up when the visible thread must match persisted state.",
     toolReferenceName: "reveal-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -866,8 +757,8 @@ const LOCAL_CHAT_CONTROL_TOOL_NAMES = new Set([
 
 const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
   "create_live_agent_chat",
-  "send_message_to_live_agent_chat",
-  "send_message_to_focused_live_chat"
+  "delete_live_agent_chat_artifacts",
+  "send_message_to_live_agent_chat"
 ]);
 
 function isEnabledToolContribution(toolName: string): boolean {
@@ -1412,24 +1303,44 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
     }
 
     const liveToolRegistrations: vscode.Disposable[] = [];
+    const liveToolLogPath = path.join(context.globalStorageUri.fsPath, "live-tool-register.log");
+    const logLiveToolRegistration = (phase: "start" | "done" | "error", toolName: string, detail?: string): void => {
+      mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
+      appendFileSync(
+        liveToolLogPath,
+        `${new Date().toISOString()} ${phase} ${toolName}${detail ? ` ${detail}` : ""}\n`,
+        "utf8"
+      );
+    };
+    const registerLiveTool = (toolName: string, tool: any): vscode.Disposable => {
+      logLiveToolRegistration("start", toolName);
+      try {
+        const disposable = vscode.lm.registerTool(toolName, tool);
+        logLiveToolRegistration("done", toolName);
+        return disposable;
+      } catch (error) {
+        logLiveToolRegistration("error", toolName, errorMessage(error));
+        throw error;
+      }
+    };
 
     if (LOCAL_CHAT_CONTROL_SURFACES_ENABLED) {
       liveToolRegistrations.push(
-        vscode.lm.registerTool(
+        registerLiveTool(
           "list_live_agent_chats",
           new LocalChatTool<ListLiveChatsInput>(
             () => "Listing live agent chat sessions",
             async (input) => renderLiveChatList(await chatInterop.listChats(), input.limit ?? 20)
           )
         ),
-        vscode.lm.registerTool(
+        registerLiveTool(
           "inspect_live_agent_chat_quiescence",
           new LocalChatTool<InspectLiveChatQuiescenceInput>(
             (input) => `Inspecting live agent chat quiescence for ${JSON.stringify(input.sessionId)}`,
             async (input) => renderLiveChatQuiescence(chatInterop, input.sessionId)
           )
         ),
-        vscode.lm.registerTool(
+        registerLiveTool(
           "close_visible_live_chat_tabs",
           new LocalChatTool<CloseVisibleLiveChatTabsInput>(
             (input) => `Closing visible live chat tabs for ${JSON.stringify(input.sessionId)}`,
@@ -1443,7 +1354,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             }
           )
         ),
-        vscode.lm.registerTool(
+        registerLiveTool(
           "delete_live_agent_chat_artifacts",
           new LocalChatTool<DeleteLiveChatArtifactsInput>(
             (input) => `${input.dryRun ? "Dry-running" : input.scheduleExactSelfDelete ? "Scheduling offline delete for" : "Deleting"} live agent chat artifacts for ${JSON.stringify(input.sessionId)}`,
@@ -1538,7 +1449,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             }
           )
         ),
-        vscode.lm.registerTool(
+        registerLiveTool(
           "reveal_live_agent_chat",
           new LocalChatTool<LiveChatSelectionInput>(
             (input) => `Revealing live agent chat ${JSON.stringify(input.sessionId)}`,
@@ -1557,7 +1468,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
 
     if (LOCAL_CHAT_MUTATION_SURFACES_ENABLED) {
       liveToolRegistrations.push(
-        vscode.lm.registerTool(
+        registerLiveTool(
           "create_live_agent_chat",
           new LocalChatTool<LiveChatMutationInput>(
             () => "Creating a new live agent chat",
@@ -1575,7 +1486,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
             }
           )
         ),
-        vscode.lm.registerTool(
+        registerLiveTool(
           "send_message_to_live_agent_chat",
           new LocalChatTool<SendLiveChatMessageInput>(
             (input) => `Sending a message to live agent chat ${JSON.stringify(input.sessionId)}`,
@@ -1591,20 +1502,6 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
                 result.selection,
                 result.revealLifecycle
               );
-            }
-          )
-        ),
-        vscode.lm.registerTool(
-          "send_message_to_focused_live_chat",
-          new LocalChatTool<FocusedLiveChatMutationInput>(
-            () => "Sending a message to the currently focused live chat",
-            async (input) => {
-              await assertFocusedLiveChatNotSelfTargeting(chatInterop, "focused-send");
-              const result = await chatInterop.sendFocusedMessage(toCreateChatRequest(input));
-              if (!result.ok) {
-                throw new Error(result.reason ?? result.error ?? "Failed to send a message to the currently focused live chat.");
-              }
-              return formatChatMutationResult("Focused Live Agent Chat Updated", result.session, result.selection, result.revealLifecycle);
             }
           )
         )
@@ -1726,46 +1623,6 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
           captureCurrentChatFocusReport(await chatInterop.listChats()),
           { detailLevel: input.detailLevel ?? "summary" }
         )
-      )
-    ),
-    vscode.lm.registerTool(
-      "focus_visible_editor_live_chat",
-      new LiveChatTool<FocusedEditorChatSelectionInput>(
-        (input) => input.sessionId
-          ? `Focusing visible editor chat ${JSON.stringify(input.sessionId)}`
-          : "Focusing the active editor chat",
-        async (input) => {
-          const focusResult = await focusLikelyEditorChat(chatInterop, {
-            sessionId: input.sessionId
-          });
-          if (!focusResult.ok) {
-            throw new Error(focusResult.reason ?? "Failed to focus an editor-hosted chat.");
-          }
-          return renderChatFocusReportMarkdown(focusResult.report ?? captureCurrentChatFocusReport(await chatInterop.listChats()));
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      "send_message_to_focused_editor_chat",
-      new LiveChatTool<FocusedEditorChatMutationInput>(
-        (input) => input.sessionId
-          ? `Focusing visible editor chat ${JSON.stringify(input.sessionId)} and sending a message there`
-          : "Focusing the active editor chat and sending a message there",
-        async (input) => {
-          await assertFocusedLiveChatNotSelfTargeting(chatInterop, "focused-editor-send", input.sessionId);
-          const focusResult = await focusLikelyEditorChat(chatInterop, {
-            sessionId: input.sessionId
-          });
-          if (!focusResult.ok) {
-            throw new Error(focusResult.reason ?? "Failed to focus an editor-hosted chat.");
-          }
-
-          const result = await chatInterop.sendFocusedMessage(toCreateChatRequest(input));
-          if (!result.ok) {
-            throw new Error(result.reason ?? result.error ?? "Failed to send a message to the focused editor chat.");
-          }
-          return formatChatMutationResult("Focused Editor Live Agent Chat Updated", result.session, result.selection, result.revealLifecycle);
-        }
       )
     )
   );

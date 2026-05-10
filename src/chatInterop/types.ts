@@ -153,20 +153,12 @@ export interface ChatInteropApi {
   getExactSessionInteropSupport(): Promise<ExactSessionInteropSupport>;
   getFocusedChatInteropSupport(): Promise<FocusedChatInteropSupport>;
   createChat(request: CreateChatRequest): Promise<ChatCommandResult>;
+  sendMessage(request: SendChatMessageRequest): Promise<ChatCommandResult>;
   sendFocusedMessage(request: CreateChatRequest): Promise<ChatCommandResult>;
   closeVisibleTabs(sessionId: string): Promise<ChatCommandResult>;
   deleteChat(sessionId: string): Promise<ChatCommandResult>;
   revealChat(sessionId: string): Promise<ChatCommandResult>;
 }
-
-export type CommandMap = {
-  "tiinex.aiVscodeTools.chatInterop.listChats": () => Promise<ChatSessionSummary[]>;
-  "tiinex.aiVscodeTools.chatInterop.createChat": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTools.chatInterop.sendFocusedMessage": (request: CreateChatRequest) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTools.chatInterop.closeVisibleTabs": (sessionId: string) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTools.chatInterop.deleteChat": (sessionId: string) => Promise<ChatCommandResult>;
-  "tiinex.aiVscodeTools.chatInterop.revealChat": (sessionId: string) => Promise<ChatCommandResult>;
-};
 
 export function toModelSelector(value: ChatModelSelector | undefined): InternalChatOpenOptions["modelSelector"] | undefined {
   if (!value?.id) {

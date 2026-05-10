@@ -42,6 +42,7 @@ const distLocalToCopilotCliHandoff = path.join(packageRoot, "dist", "chatInterop
 const distCopilotCliTools = path.join(packageRoot, "dist", "tools", "copilot-cli.js");
 const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools", "agentArchitectProcessEvidence.js");
 const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
+const distLanguageModelTools = path.join(packageRoot, "dist", "languageModelTools.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
 const extensionSourcePath = path.join(packageRoot, "src", "extension.ts");
@@ -79,7 +80,6 @@ const expectedLanguageModelToolNames = [
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",
   "send_message_to_live_agent_chat",
-  "send_message_to_focused_live_chat",
   "reveal_live_agent_chat"
 ];
 
@@ -105,6 +105,16 @@ const expectedExtensionCommandNames = [
   "tiinex.aiVscodeTools.sendMessageToFocusedLiveChat"
 ];
 
+const liveToolManifestParityNames = new Set([
+  "list_live_agent_chats",
+  "inspect_live_agent_chat_quiescence",
+  "create_live_agent_chat",
+  "close_visible_live_chat_tabs",
+  "delete_live_agent_chat_artifacts",
+  "send_message_to_live_agent_chat",
+  "reveal_live_agent_chat"
+]);
+
 let sqlJsPromise;
 
 function assert(condition, message) {
@@ -115,7 +125,7 @@ function assert(condition, message) {
 
 function countRegisterToolOccurrences(sourceText, toolName) {
   const escapedToolName = toolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`registerTool\\(\\s*\"${escapedToolName}\"`, "g");
+  const pattern = new RegExp(`register(?:Live)?Tool\\(\\s*\"${escapedToolName}\"`, "g");
   return Array.from(sourceText.matchAll(pattern)).length;
 }
 
@@ -693,7 +703,7 @@ async function runCliChecks() {
       "--mode",
       "file-only",
       "--output",
-      "/tmp/agent-architect-tools-test.md"
+      "/tmp/tiinex-ai-vscode-tools-test.md"
     ],
     false
   );
@@ -736,8 +746,8 @@ async function runChatInteropCapabilityChecks() {
   } = capabilitiesModule;
 
   assert(
-    findExactSessionOpenCommand(["workbench.action.chat.openSession"]) === "workbench.action.chat.openSession",
-    "Chat interop capability test did not accept the generic openSession command when it is the only reveal surface."
+    findExactSessionOpenCommand(["workbench.action.chat.openSession"]) === undefined,
+    "Chat interop capability test still accepted the generic openSession command even though ordinary Local reveal is now editor-group-only."
   );
 
   assert(
@@ -750,7 +760,7 @@ async function runChatInteropCapabilityChecks() {
       "workbench.action.chat.openSession",
       "workbench.action.chat.openSessionInEditorGroup"
     ]) === "workbench.action.chat.openSessionInEditorGroup",
-    "Chat interop capability test did not prefer the editor-group session-open command when both reveal surfaces exist."
+    "Chat interop capability test did not resolve to the editor-group session-open command when both generic and editor-group surfaces exist."
   );
 
   assert(
@@ -778,8 +788,12 @@ async function runChatInteropCapabilityChecks() {
     "workbench.action.chat.openSessionWithPrompt"
   ]);
   assert(
-    genericSupport.canRevealExactSession === true,
-    "Chat interop capability test did not report generic exact-session reveal support correctly."
+    genericSupport.canRevealExactSession === false,
+    "Chat interop capability test incorrectly reported generic exact-session reveal support even though ordinary Local reveal is editor-group-only."
+  );
+  assert(
+    genericSupport.canSendExactSessionMessage === true,
+    "Chat interop capability test did not report generic exact-session send support when openSessionWithPrompt exists."
   );
 
   const cliOnlySupport = getExactSessionInteropSupport([
@@ -3609,7 +3623,7 @@ async function runSessionSendWorkflowChecks() {
   const require = createRequire(import.meta.url);
   const vscodeModule = require('vscode');
   const workflowModule = await import(pathToFileURL(distChatInteropSessionSendWorkflow).href);
-  const { canTrustGenericActiveChatAfterReveal, sendMessageToSession } = workflowModule;
+  const { sendMessageToSession } = workflowModule;
 
   const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
   const originalExecuteCommand = vscodeModule.commands.executeCommand;
@@ -3644,6 +3658,71 @@ async function runSessionSendWorkflowChecks() {
   vscodeModule.commands.executeCommand = async () => undefined;
 
   try {
+    let exactSendCalls = 0;
+    let exactSendRevealCalls = 0;
+    let exactSendFocusedCalls = 0;
+    const exactSendResult = await sendMessageToSession({
+      getPostCreateTimeoutMs() {
+        return 1_000;
+      },
+      async getExactSessionInteropSupport() {
+        return {
+          canRevealExactSession: true,
+          canSendExactSessionMessage: true,
+          revealUnsupportedReason: undefined,
+          sendUnsupportedReason: undefined
+        };
+      },
+      async sendMessage(request) {
+        exactSendCalls += 1;
+        return {
+          ok: true,
+          session: {
+            id: request.sessionId,
+            title: 'Exact Target',
+            lastUpdated: '2026-05-07T10:04:01.000Z',
+            mode: 'agent',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5-mini',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-exact.jsonl'
+          },
+          selection: {
+            mode: { status: 'not-requested' },
+            model: { status: 'not-requested' },
+            agent: { status: 'verified', requested: '#agent-architect', observed: 'agent-architect' },
+            dispatchedPrompt: request.prompt,
+            dispatchSurface: 'chat-open',
+            allRequestedVerified: true
+          },
+          dispatch: {
+            surface: 'chat-open',
+            dispatchedPrompt: request.prompt
+          }
+        };
+      },
+      async revealChat() {
+        exactSendRevealCalls += 1;
+        throw new Error('Exact-send workflow test should not reveal when direct exact send is available.');
+      },
+      async sendFocusedMessage() {
+        exactSendFocusedCalls += 1;
+        throw new Error('Exact-send workflow test should not use focused send when direct exact send is available.');
+      }
+    }, {
+      sessionId: 'session-exact',
+      prompt: 'exact prompt',
+      agentName: 'agent-architect',
+      blockOnResponse: true,
+      requireSelectionEvidence: false
+    });
+
+    assert(exactSendResult.ok === true, 'Session send workflow test did not succeed through direct exact send when the host exposed that capability.');
+    assert(exactSendCalls === 1, `Session send workflow test did not call exact send exactly once. Got: ${exactSendCalls}`);
+    assert(exactSendRevealCalls === 0, `Session send workflow test revealed even though exact send was available. Got: ${exactSendRevealCalls}`);
+    assert(exactSendFocusedCalls === 0, `Session send workflow test used focused send even though exact send was available. Got: ${exactSendFocusedCalls}`);
+
     let focusedSendCalls = 0;
     let revealCalls = 0;
     let focusedFallbackModelSelector;
@@ -4349,78 +4428,8 @@ async function runSessionSendWorkflowChecks() {
     `Session send workflow test did not preserve the unsupported-build diagnostic. Got: ${unsupportedResult.reason}`
   );
   assert(
-    unsupportedResult.reason?.includes('Session-targeted Local follow-up send depends on exact reveal before focused submit on this build.') === true,
-    `Session send workflow test did not explain that canonical Local follow-up send requires exact reveal. Got: ${unsupportedResult.reason}`
-  );
-
-  assert(
-    canTrustGenericActiveChatAfterReveal({
-      activeGroupIndex: 0,
-      liveChatTitles: ['Fallback Target'],
-      groups: [
-        {
-          isActive: true,
-          viewColumn: 1,
-          tabs: [
-            {
-              label: 'Chat',
-              isActive: true,
-              isDirty: false,
-              isPinned: false,
-              isPreview: false,
-              isLikelyChatEditor: true,
-              input: {
-                kind: 'custom:chat-editor',
-                constructorName: 'TabInputCustom',
-                uri: 'vscode-chat-session://local/MzRjNjVjOTQtYTFjNi00MTI0LWFlYjMtMzZhNjBjNzI2ZDc2',
-                viewType: 'chat-editor',
-                stringHints: ['vscode-chat-session://local/MzRjNjVjOTQtYTFjNi00MTI0LWFlYjMtMzZhNjBjNzI2ZDc2'],
-                objectKeys: []
-              }
-            }
-          ]
-        }
-      ]
-    }, {
-      sessionId: '34c65c94-a1c6-4124-aeb3-36a60c726d76',
-      sessionTitle: 'Fallback Target'
-    }) === true,
-    'Session send workflow test did not trust a generic active Chat tab whose resource matched the requested target session.'
-  );
-
-  assert(
-    canTrustGenericActiveChatAfterReveal({
-      activeGroupIndex: 0,
-      liveChatTitles: ['Fallback Target'],
-      groups: [
-        {
-          isActive: true,
-          viewColumn: 1,
-          tabs: [
-            {
-              label: 'Chat',
-              isActive: true,
-              isDirty: false,
-              isPinned: false,
-              isPreview: false,
-              isLikelyChatEditor: true,
-              input: {
-                kind: 'custom:chat-editor',
-                constructorName: 'TabInputCustom',
-                uri: 'vscode-chat-session://local/c29tZS1vdGhlci1zZXNzaW9u',
-                viewType: 'chat-editor',
-                stringHints: ['vscode-chat-session://local/c29tZS1vdGhlci1zZXNzaW9u'],
-                objectKeys: []
-              }
-            }
-          ]
-        }
-      ]
-    }, {
-      sessionId: '34c65c94-a1c6-4124-aeb3-36a60c726d76',
-      sessionTitle: 'Fallback Target'
-    }) === false,
-    'Session send workflow test incorrectly trusted a generic active Chat tab whose resource did not match the requested target session.'
+    unsupportedResult.reason?.includes('Session-targeted Local follow-up send depends on either exact send or exact reveal before focused submit on this build.') === true,
+    `Session send workflow test did not explain that canonical Local follow-up send requires exact send or exact reveal. Got: ${unsupportedResult.reason}`
   );
 }
 
@@ -5778,6 +5787,7 @@ async function runLiveChatSupportMatrixChecks() {
   assert(matrix.localNewChatCustomAgent.status === "unsupported", "Live chat support matrix test did not keep Local custom-agent support blocked.");
   assert(matrix.localFocusedPromptSubmit.status === "best-effort", "Live chat support matrix test did not expose focused Local prompt submit as best-effort when focusInput and submit exist.");
   assert(matrix.localExactReveal.status === "supported", "Live chat support matrix test did not expose the supported exact Local reveal surface.");
+  assert(matrix.localExactSend.status === "unsupported", "Live chat support matrix test did not reflect the missing generic exact Local send command.");
   assert(matrix.localSessionFollowUpSend.status === "supported", "Live chat support matrix test did not reflect the supported Local session follow-up send surface.");
   assert(matrix.manifestParticipants[0]?.id === "github.copilot.editsAgent", "Live chat support matrix test did not expose manifest chat participants.");
   assert(matrix.manifestModelCommands[0]?.includes("Change Completions Model"), "Live chat support matrix test did not expose manifest model commands.");
@@ -5788,6 +5798,7 @@ async function runLiveChatSupportMatrixChecks() {
   assert(markdown.includes("Local new chat custom agent: unsupported"), "Live chat support matrix markdown did not include the Local custom-agent limitation.");
   assert(markdown.includes("Local focused prompt submit: best-effort"), "Live chat support matrix markdown did not include the focused Local prompt submit status.");
   assert(markdown.includes("Local exact reveal: supported"), "Live chat support matrix markdown did not include the supported Local exact reveal status.");
+  assert(markdown.includes("Local exact send: unsupported"), "Live chat support matrix markdown did not include the exact Local send status.");
   assert(markdown.includes("Local session follow-up send: supported"), "Live chat support matrix markdown did not include the Local session follow-up send status.");
   assert(markdown.includes("workbench.action.chat.openSessionInEditorGroup: yes"), "Live chat support matrix markdown did not include the editor-group Local reveal command evidence.");
   assert(markdown.includes("github.copilot.chat.openModelPicker => Change Completions Model"), "Live chat support matrix markdown did not include the manifest model command evidence.");
@@ -6779,11 +6790,15 @@ async function runAgentArchitectProcessEvidenceChecks() {
 
 async function runManifestChecks() {
   const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf-8"));
+  const languageModelToolsModule = await import(pathToFileURL(distLanguageModelTools).href);
   const activationEvents = packageJson.activationEvents;
   const languageModelTools = packageJson.contributes?.languageModelTools;
   const extensionCommands = packageJson.contributes?.commands;
   const viewTitleMenu = packageJson.contributes?.menus?.["view/title"] ?? [];
   const viewItemContextMenu = packageJson.contributes?.menus?.["view/item/context"] ?? [];
+  const sourceToolContributions = Array.isArray(languageModelToolsModule.EXTENSION_TOOL_CONTRIBUTIONS)
+    ? languageModelToolsModule.EXTENSION_TOOL_CONTRIBUTIONS
+    : [];
 
   assert(Array.isArray(activationEvents), "package.json activationEvents must be an array.");
   assert(Array.isArray(languageModelTools), "package.json contributes.languageModelTools must be an array.");
@@ -6801,6 +6816,42 @@ async function runManifestChecks() {
     assert(
       contributedToolNames.includes(toolName),
       `package.json is missing the language model tool contribution ${toolName}.`
+    );
+  }
+
+  for (const toolName of liveToolManifestParityNames) {
+    assert(
+      sourceToolContributions.some((tool) => tool.name === toolName),
+      `src/languageModelTools.ts is missing the source-defined live language model tool contribution ${toolName}.`
+    );
+  }
+
+  for (const sourceTool of sourceToolContributions.filter((tool) => liveToolManifestParityNames.has(tool.name))) {
+    const manifestTool = languageModelTools.find((tool) => tool.name === sourceTool.name);
+
+    assert(manifestTool, `package.json is missing the source-defined language model tool contribution ${sourceTool.name}.`);
+    assert(manifestTool.canBeReferencedInPrompt === true, `package.json tool ${sourceTool.name} must remain referenceable in prompt.`);
+
+    const manifestShape = JSON.stringify({
+      name: manifestTool.name,
+      displayName: manifestTool.displayName,
+      userDescription: manifestTool.userDescription,
+      modelDescription: manifestTool.modelDescription,
+      toolReferenceName: manifestTool.toolReferenceName,
+      inputSchema: manifestTool.inputSchema
+    });
+    const sourceShape = JSON.stringify({
+      name: sourceTool.name,
+      displayName: sourceTool.displayName,
+      userDescription: sourceTool.userDescription,
+      modelDescription: sourceTool.modelDescription,
+      toolReferenceName: sourceTool.toolReferenceName,
+      inputSchema: sourceTool.inputSchema
+    });
+
+    assert(
+      manifestShape === sourceShape,
+      `package.json language model tool ${sourceTool.name} drifted from src/languageModelTools.ts.`
     );
   }
 
@@ -6900,7 +6951,6 @@ async function runRoutingGuardChecks() {
     "close_visible_live_chat_tabs",
     "delete_live_agent_chat_artifacts",
     "send_message_to_live_agent_chat",
-    "send_message_to_focused_live_chat",
     "reveal_live_agent_chat"
   ]) {
     assert(
@@ -6908,6 +6958,15 @@ async function runRoutingGuardChecks() {
       `Language-model tool source must register ${toolName} exactly once to avoid legacy/runtime duplication.`
     );
   }
+
+  assert(
+    !languageModelToolsSource.includes('name: "send_message_to_focused_live_chat"'),
+    "Focused-send fallback must not remain exposed as a competing language-model tool surface."
+  );
+  assert(
+    extensionSource.includes('focusLikelyEditorChat(chatInterop)'),
+    "Focused-send fallback command surface must steer to an editor-hosted Local chat before dispatch."
+  );
 }
 
 async function assertMissing(targetPath, message) {
@@ -6924,7 +6983,7 @@ async function assertMissing(targetPath, message) {
 
 async function runMcpChecks() {
   const client = new Client({
-    name: "agent-architect-tools-test",
+    name: "tiinex-ai-vscode-tools-test",
     version: "0.1.0"
   });
   const transport = new StdioClientTransport({
@@ -7122,7 +7181,7 @@ async function runMcpChecks() {
       arguments: {
         sessionFile: benchmarkSessionFile,
         deliveryMode: "file-only",
-        outputFile: "/tmp/agent-architect-tools-test-mcp.md"
+        outputFile: "/tmp/tiinex-ai-vscode-tools-test-mcp.md"
       }
     });
     const blockedText = blockedResult.content
