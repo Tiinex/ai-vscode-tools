@@ -39,6 +39,8 @@ Use skills for task-shaped operating behavior. Use this file for phase structure
 - The first real request in the create step must be long-running enough to exercise wait logic meaningfully. Prefer a read-only first request that normally runs longer than 20 seconds.
 - The create proof is not complete until one awaited follow-up message has been sent in the same created chat after the first response completes.
 - If focused send is exercised during this phase, treat it as explicit fallback-diagnostic coverage only, not as a canonical workflow step.
+- On the current host, do not treat `create_live_agent_chat` with `partialQuery: true` as a valid exact create bootstrap when it opens only an editor draft path without a persisted `chatSessions` session id.
+- If a create attempt yields only `chatEditingSessions` draft evidence and no persisted targetable session, classify that as unsupported host behavior for the path rather than as a provisional create pass.
 - If any canonical public operation is unavailable on the current execution surface, stop or defer. Do not substitute another route, manual workaround, or convenience path for the same operation.
 - If the canonical path is blocked, do not offload routine operator work to the human unless the missing capability is genuinely unreachable from the agent side.
 
@@ -66,6 +68,7 @@ Use skills for task-shaped operating behavior. Use this file for phase structure
 
 - All canonical Local-chat operations relevant to the intended sequence complete their own role reliably enough on the current OS, host environment, and IDE surface.
 - The create proof includes a long-running read-only first request plus one awaited follow-up in the same created chat.
+- No route still described as part of the exact workflow may terminate in a draft-only `chatEditingSessions` artifact without yielding a persisted, exact-targetable session id; that condition must fail fast instead.
 - Repeated create probes do not reuse the same role or close role variation in a way that hides inheritance or retargeting defects.
 - Exact-session send is judged against observed live wall time together with exact persisted timing, not by repo tests alone and not by persisted evidence alone.
 - Focused send, if retained, is explicitly downgraded to fallback or support-only status and does not survive as a peer public workflow beside exact-session send.

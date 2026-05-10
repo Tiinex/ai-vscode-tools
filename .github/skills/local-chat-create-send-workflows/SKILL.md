@@ -20,6 +20,7 @@ user-invocable: false
 
 ## Core Rules
 - For a new Local chat with a custom agent, prefer `create_live_agent_chat` and expect the host to use a direct agent-open route when available, with `/aa` prompt-file dispatch only as bounded fallback.
+- Do not rely on `create_live_agent_chat` with `partialQuery: true` as an exact bootstrap on the current host; it can open an editor draft without yielding a persisted session id for exact follow-up.
 - When the target role comes from a maintained workspace agent file, use that file's frontmatter `name` value as `agentName`; do not guess from the filename stem, a slug, or a temporary `/aa-live-chat-...` transport name.
 - If the authoritative agent name has not been read yet, inspect the maintained agent file or other maintained source first and only then call `create_live_agent_chat`.
 - When reading the create result, prefer `selection.agent`, session `mode`, session `agent`, and session `model` over `Persisted Request Agent`; on this host that request-agent field can remain `github.copilot.editsAgent` even when the custom agent landed correctly.

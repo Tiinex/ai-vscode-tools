@@ -50,7 +50,6 @@ export function buildPromptFileContent(prompt: string, agentName: string): strin
 
   return [
     "---",
-    `description: ${yamlQuote(`Temporary live chat dispatch for ${normalizedAgent}`)}`,
     `agent: ${yamlQuote(normalizedAgent)}`,
     "---",
     "",

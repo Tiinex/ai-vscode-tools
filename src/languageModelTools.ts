@@ -597,7 +597,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route when the first visible message should carry the requested agent.",
-    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it falls back to a temporary prompt-file slash command to anchor the requested role. Prefer this for normal agent-chat creation. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it may use bounded temporary prompt-file slash dispatch as fallback transport for the requested role. Prefer this tool for normal agent-chat creation, but treat prompt-file dispatch as fallback rather than the preferred semantic carrier. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
     toolReferenceName: "create-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -608,7 +608,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         agentName: {
           type: "string",
-          description: "Optional custom agent name for the first message in a new chat. When supplied, the host will prefer a direct agent-open route when available and otherwise use temporary prompt-file slash dispatch. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
+          description: "Optional custom agent name for the first message in a new chat. When supplied, the host will prefer a direct agent-open route when available and otherwise use bounded temporary prompt-file slash dispatch as fallback transport. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
         },
         mode: {
           type: "string",
@@ -684,7 +684,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "send_message_to_live_agent_chat",
     displayName: "Send Message To Live Agent Chat",
     userDescription: "Continue an existing live chat by session id.",
-    modelDescription: "Continue an existing live chat by session id. On this build the verified follow-up transport is: reveal the exact Local session, focus the resulting editor-hosted chat, then submit through the focused chat input. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused send surfaces may then use temporary prompt-file slash dispatch.",
+    modelDescription: "Continue an existing live chat by session id. On this build the verified follow-up transport is: reveal the exact Local session, focus the resulting editor-hosted chat, then submit through the focused chat input. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused send surfaces may then use bounded temporary prompt-file slash dispatch as fallback transport.",
     toolReferenceName: "send-message-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -699,7 +699,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         agentName: {
           type: "string",
-          description: "Optional custom agent name for an intentional role rebind on the continued request. Omit this for ordinary follow-ups in an already-correct chat. On focused fallback surfaces a supplied agentName may route through temporary prompt-file slash dispatch rather than a literal #agentName prefix."
+          description: "Optional custom agent name for an intentional role rebind on the continued request. Omit this for ordinary follow-ups in an already-correct chat. On focused fallback surfaces a supplied agentName may route through bounded temporary prompt-file slash dispatch rather than a literal #agentName prefix."
         },
         mode: {
           type: "string",

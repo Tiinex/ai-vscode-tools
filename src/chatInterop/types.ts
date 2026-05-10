@@ -306,15 +306,15 @@ export function buildCreateChatSelectionBlocker(
     return "Live createChat with explicit mode or model selection is unsupported on this VS Code/Copilot build because observed create-time selection can inherit the active chat UI state. Use createChat only without selection overrides, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
+  if (request.partialQuery === true) {
+    return "Live createChat with partialQuery is unsupported on this VS Code/Copilot build for exact workflow use because it can open an editor draft without producing a persisted created session id. Use create_live_agent_chat without partialQuery, or work against another explicitly targetable surface.";
+  }
+
   if (!request.agentName?.trim() && request.allowCreateWithoutAgentForDeleteProbe !== true) {
     return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use create_live_agent_chat with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
   if (request.requireSelectionEvidence) {
-    if (request.partialQuery === true) {
-      return "Live chat draft prefill cannot independently verify custom agent selection on this surface. Remove requireSelectionEvidence or use another explicitly verifiable surface.";
-    }
-
     const routeHint = options.directAgentOpenAvailable
       ? "Even with a direct agent-open command, this surface still cannot independently verify the persisted participant."
       : "This host will otherwise rely on a prompt artifact path to anchor the new chat start.";
@@ -330,7 +330,7 @@ export function buildSendChatSelectionBlocker(request: SendChatMessageRequest): 
   }
 
   if (request.requireSelectionEvidence && request.agentName?.trim()) {
-    return "Exact-session live chat send cannot independently verify a custom agent prompt selector on this surface. Use createChat with partialQuery: true for no-token prefill, or another explicitly verifiable surface.";
+    return "Exact-session live chat send cannot independently verify a custom agent prompt selector on this surface. Use create_live_agent_chat on a host-supported create path before same-chat continuation, or another explicitly verifiable surface.";
   }
 
   return undefined;
@@ -346,7 +346,7 @@ export function buildFocusedChatSelectionBlocker(request: CreateChatRequest): st
   }
 
   if (request.requireSelectionEvidence && request.agentName?.trim()) {
-    return "Focused live chat send cannot independently verify a custom agent prompt selector on this surface. Use createChat with partialQuery: true for draft-only prefill, or another explicitly verifiable surface.";
+    return "Focused live chat send cannot independently verify a custom agent prompt selector on this surface. Use create_live_agent_chat on a host-supported create path, or another explicitly verifiable surface.";
   }
 
   return undefined;

@@ -853,7 +853,20 @@ export class ChatInteropService implements ChatInteropApi {
     );
 
     const cleanup = async (): Promise<void> => {
-      await fs.rm(artifact.filePath, { force: true });
+      try {
+        await fs.rm(artifact.filePath, { force: true });
+        await this.traceCreateDebug("prompt-file.after-cleanup", {
+          filePath: artifact.filePath,
+          slashCommand: artifact.slashCommand
+        });
+      } catch (error) {
+        await this.traceCreateDebug("prompt-file.cleanup-failed", {
+          filePath: artifact.filePath,
+          slashCommand: artifact.slashCommand,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
     };
 
     try {

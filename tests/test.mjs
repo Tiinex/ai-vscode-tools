@@ -1058,6 +1058,7 @@ async function runChatInteropSelectionChecks() {
 
   const promptFileContent = buildPromptFileContent("Inspect the target artifact.", "agent-architect");
   assert(promptFileContent.includes('agent: "agent-architect"'), "Prompt-file dispatch test did not encode agent frontmatter.");
+  assert(!promptFileContent.includes("Temporary live chat dispatch"), "Prompt-file dispatch test should not emit explanatory description copy in the temporary prompt artifact.");
   assert(promptFileContent.endsWith("Inspect the target artifact.\n"), "Prompt-file dispatch test did not preserve the original prompt body.");
 
   const promptFileContentWithAgentName = buildPromptFileContent("Inspect the target artifact.", "Agent Architect");
@@ -1138,8 +1139,8 @@ async function runChatInteropSelectionChecks() {
       prompt: "Inspect the target artifact.",
       agentName: "agent-architect",
       partialQuery: true
-    }) === undefined,
-    "Live chat selection blocker test should allow partialQuery custom-agent create requests as the current best-effort prompt-file start."
+    })?.includes("can open an editor draft without producing a persisted created session id") === true,
+    "Live chat selection blocker test should fail fast on partialQuery create requests when the host cannot provide a persisted created session id."
   );
 
   assert(
