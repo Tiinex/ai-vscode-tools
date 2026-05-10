@@ -7487,7 +7487,6 @@ const namedChecks = [
   ["session-send-workflow", runSessionSendWorkflowChecks],
   ["live-chat-quiescence", runLiveChatQuiescenceChecks],
   ["live-tool-mutex", runLiveToolMutexChecks],
-  ["live-chat-quiescence-workspace", runLiveChatWorkspaceQuiescenceProbe],
   ["live-chat-support-matrix", runLiveChatSupportMatrixChecks],
   ["local-to-copilot-cli-handoff", runLocalToCopilotCliHandoffChecks],
   ["pending-request-heuristics", runPendingRequestHeuristicChecks],
@@ -7497,7 +7496,28 @@ const namedChecks = [
   ["routing-guard", runRoutingGuardChecks]
 ];
 
-const namedCheckMap = new Map(namedChecks);
+const optInNamedChecks = [
+  ["live-chat-quiescence-workspace", runLiveChatWorkspaceQuiescenceProbe]
+];
+
+const allNamedChecks = [...namedChecks, ...optInNamedChecks];
+const namedCheckMap = new Map(allNamedChecks);
+
+async function runDefaultChecksIsolated() {
+  for (const [checkName] of namedChecks) {
+    try {
+      await execFileAsync(process.execPath, [fileURLToPath(import.meta.url), checkName], {
+        cwd: workspaceRoot,
+        env: process.env
+      });
+    } catch (error) {
+      const stdout = typeof error?.stdout === 'string' ? error.stdout.trim() : '';
+      const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
+      const output = [stdout, stderr].filter(Boolean).join('\n');
+      throw new Error(output || `Default test check \"${checkName}\" failed.`);
+    }
+  }
+}
 
 function resolveSelectedChecks(argv) {
   if (argv.length === 0) {
@@ -7507,15 +7527,25 @@ function resolveSelectedChecks(argv) {
   return argv.map((checkName) => {
     const runner = namedCheckMap.get(checkName);
     if (!runner) {
-      throw new Error(`Unknown test check \"${checkName}\". Available checks: ${namedChecks.map(([name]) => name).join(", ")}`);
+      throw new Error(`Unknown test check \"${checkName}\". Available checks: ${allNamedChecks.map(([name]) => name).join(", ")}`);
     }
     return [checkName, runner];
   });
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
+
+  if (argv.length === 0) {
+    await cleanupWorkspaceTempArtifacts();
+    await runDefaultChecksIsolated();
+    process.stdout.write("Tests passed.\n");
+    await cleanupWorkspaceTempArtifacts();
+    return;
+  }
+
   await cleanupWorkspaceTempArtifacts();
-  const selectedChecks = resolveSelectedChecks(process.argv.slice(2));
+  const selectedChecks = resolveSelectedChecks(argv);
 
   try {
     for (const [, runner] of selectedChecks) {
