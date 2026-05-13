@@ -1165,8 +1165,8 @@ async function runChatInteropSelectionChecks() {
       prompt: "Inspect the target artifact.",
       agentName: "agent-architect",
       requireSelectionEvidence: true
-    })?.includes("cannot independently verify actual participant selection") === true,
-    "Live chat selection blocker test did not preserve the verified-participant blocker for current create-time custom-agent starts."
+    }) === undefined,
+    "Live chat selection blocker test should defer strict custom-agent verification to post-create persisted evidence instead of hard-blocking create-time dispatch."
   );
 
   assert(
@@ -2170,6 +2170,39 @@ async function runCreateChatDirectAgentCommandChecks() {
       [],
       [
         {
+          id: 'session-direct-agent-verified',
+          title: 'Direct Agent Open Verified Session',
+          lastUpdated: '2026-04-17T20:02:00.000Z',
+          mode: 'file:///tmp/agent-architect.agent.md',
+          agent: 'github.copilot.editsAgent',
+          model: 'copilot/gpt-5-mini',
+          archived: false,
+          provider: 'workspaceStorage',
+          sessionFile: '/tmp/session-direct-agent-verified.jsonl',
+          hasPendingEdits: false,
+          pendingRequestCount: 0,
+          lastRequestCompleted: true
+        }
+      ]
+    ]);
+
+    const strictVerifiedService = new ChatInteropService({}, { openDelayMs: 0, postCreateDelayMs: 10, postCreateTimeoutMs: 250 });
+    const strictVerifiedResult = await strictVerifiedService.createChat({
+      prompt: 'Require post-create participant evidence for this direct agent-open session.',
+      agentName: 'agent-architect',
+      requireSelectionEvidence: true,
+      blockOnResponse: true
+    });
+
+    assert(strictVerifiedResult.ok === true, `Strict createChat verification did not accept matching mode-backed evidence after dispatch. Got: ${strictVerifiedResult.reason}`);
+    assert(strictVerifiedResult.selection?.agent.status === 'verified', 'Strict createChat verification did not preserve verified agent evidence for the direct agent-open path.');
+
+    executedCommands.length = 0;
+    fsOps.length = 0;
+    MockChatSessionStorage.setBehaviors([
+      [],
+      [
+        {
           id: 'session-unlocked-wait',
           title: 'Unlocked Wait Session',
           lastUpdated: '2026-04-17T20:05:00.000Z',
@@ -2607,6 +2640,95 @@ async function runCreateChatDirectAgentCommandChecks() {
       assert(fsOps.some((entry) => entry.op === 'writeFile') === true, 'Prompt-file createChat test did not write the temporary prompt artifact.');
       assert(fsOps.some((entry) => entry.op === 'writeFile' && String(entry.args?.[1]).includes('agent: "Anchor Senior"')) === true, 'Prompt-file createChat test did not encode the resolved workspace custom-agent name in the temporary prompt artifact.');
       assert(fsOps.some((entry) => entry.op === 'rm') === true, 'Prompt-file createChat test did not clean up the temporary prompt artifact.');
+
+      executedCommands.length = 0;
+      fsOps.length = 0;
+      MockChatSessionStorage.setBehaviors([
+        [],
+        [
+          {
+            id: 'session-prompt-file-verified',
+            title: 'Prompt File Verified Session',
+            lastUpdated: '2026-05-07T10:41:00.000Z',
+            mode: 'file:///tmp/anchor-senior.agent.md',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5.4',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-prompt-file-verified.jsonl',
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true
+          }
+        ]
+      ]);
+
+      const strictPromptFileService = new ChatInteropService({}, { openDelayMs: 0, postCreateDelayMs: 10, postCreateTimeoutMs: 250, promptRegistrationDelayMs: 0 });
+      const strictPromptFileResult = await strictPromptFileService.createChat({
+        prompt: 'Require post-create participant evidence for this prompt-file session.',
+        agentName: 'anchor-senior',
+        requireSelectionEvidence: true,
+        blockOnResponse: true
+      });
+
+      assert(strictPromptFileResult.ok === true, `Strict prompt-file createChat verification did not accept matching mode-backed evidence after dispatch. Got: ${strictPromptFileResult.reason}`);
+      assert(strictPromptFileResult.selection?.agent.status === 'verified', 'Strict prompt-file createChat verification did not preserve verified agent evidence after fallback dispatch.');
+
+      executedCommands.length = 0;
+      fsOps.length = 0;
+      MockChatSessionStorage.setBehaviors([
+        [],
+        [
+          {
+            id: 'session-prompt-file-unverified',
+            title: 'Prompt File Unverified Session',
+            lastUpdated: '2026-05-07T10:42:00.000Z',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5.4',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-prompt-file-unverified.jsonl',
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true
+          }
+        ],
+        [
+          {
+            id: 'session-prompt-file-unverified',
+            title: 'Prompt File Unverified Session',
+            lastUpdated: '2026-05-07T10:42:00.000Z',
+            agent: 'github.copilot.editsAgent',
+            model: 'copilot/gpt-5.4',
+            archived: false,
+            provider: 'workspaceStorage',
+            sessionFile: '/tmp/session-prompt-file-unverified.jsonl',
+            hasPendingEdits: false,
+            pendingRequestCount: 0,
+            lastRequestCompleted: true
+          }
+        ]
+      ]);
+
+      const strictPromptFileFailureService = new ChatInteropService({}, { openDelayMs: 0, postCreateDelayMs: 10, postCreateTimeoutMs: 1000, promptRegistrationDelayMs: 0 });
+      const strictPromptFileFailureStartedAt = Date.now();
+      const strictPromptFileFailureResult = await strictPromptFileFailureService.createChat({
+        prompt: 'Fail quickly when fallback dispatch never yields persisted participant proof.',
+        agentName: 'anchor-senior',
+        requireSelectionEvidence: true,
+        blockOnResponse: true
+      });
+      const strictPromptFileFailureElapsedMs = Date.now() - strictPromptFileFailureStartedAt;
+
+      assert(strictPromptFileFailureResult.ok === false, 'Strict prompt-file createChat verification unexpectedly succeeded without persisted participant evidence.');
+      assert(
+        typeof strictPromptFileFailureResult.reason === 'string' && strictPromptFileFailureResult.reason.includes('Requested selection could not be fully evidenced'),
+        `Strict prompt-file createChat verification did not report a post-dispatch selection-evidence failure. Got: ${strictPromptFileFailureResult.reason}`
+      );
+      assert(
+        strictPromptFileFailureElapsedMs < 1500,
+        `Strict prompt-file createChat verification waited too long after a settled unverified session. Got: ${strictPromptFileFailureElapsedMs}ms`
+      );
     } finally {
       if (originalWorkspace) {
         originalWorkspace.workspaceFolders = originalWorkspaceFolders;

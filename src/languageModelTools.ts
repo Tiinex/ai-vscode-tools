@@ -597,7 +597,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route when the first visible message should carry the requested agent.",
-    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it may use bounded temporary prompt-file slash dispatch as fallback transport for the requested role. Prefer this tool for normal agent-chat creation, but treat prompt-file dispatch as fallback rather than the preferred semantic carrier. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it may use bounded temporary prompt-file slash dispatch as fallback transport for the requested role. Prefer this tool for normal agent-chat creation, but treat prompt-file dispatch as fallback rather than the preferred semantic carrier. When strict selection evidence is requested, this tool evaluates that from the created session after dispatch rather than pretending it can prove create-time participant state before the session exists. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
     toolReferenceName: "create-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -632,7 +632,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         requireSelectionEvidence: {
           type: "boolean",
-          description: "Fail if the requested agent, mode, or model selection cannot be explicitly evidenced after dispatch."
+          description: "Fail after dispatch if the requested agent, mode, or model selection cannot be explicitly evidenced from the created session."
         }
       },
       required: ["prompt"]

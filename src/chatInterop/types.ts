@@ -314,13 +314,6 @@ export function buildCreateChatSelectionBlocker(
     return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use create_live_agent_chat with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
-  if (request.requireSelectionEvidence) {
-    const routeHint = options.directAgentOpenAvailable
-      ? "Even with a direct agent-open command, this surface still cannot independently verify the persisted participant."
-      : "This host will otherwise rely on a prompt artifact path to anchor the new chat start.";
-    return `Live createChat can anchor a new chat start for a requested custom agent on this surface, but it cannot independently verify actual participant selection. ${routeHint} Remove requireSelectionEvidence to allow the current best-effort create path, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.`;
-  }
-
   return undefined;
 }
 

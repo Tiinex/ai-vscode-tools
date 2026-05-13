@@ -46,8 +46,9 @@ user-invocable: false
 3. Treat a direct agent-open command as the preferred create-time route when the host exposes one; otherwise treat `/aa` prompt-file dispatch as bounded fallback.
 4. Do not infer the requested agent from the temporary `/aa-live-chat-...` slash-command filename; that filename is transport scaffolding, not the authoritative agent identifier.
 5. Confirm the returned session id and requested agent outcome before treating the chat as a valid target.
-6. When the returned session `mode` or `selection.agent` clearly matches the requested workspace agent, treat that as the primary routing evidence even if `Persisted Request Agent` still shows the host-generic Copilot value.
-7. If selection evidence is reported as unverified or mismatched, treat the probe as failed rather than silently reusing the created chat.
+6. When `requireSelectionEvidence` is used on create, treat it as a post-dispatch persisted-evidence gate, not as proof that the host can certify the participant before the new session exists.
+7. When the returned session `mode` or `selection.agent` clearly matches the requested workspace agent, treat that as the primary routing evidence even if `Persisted Request Agent` still shows the host-generic Copilot value.
+8. If selection evidence is reported as unverified or mismatched after the created session is observed, treat the probe as failed rather than silently reusing the created chat.
 
 ## Same-Chat Follow-Up Procedure
 1. Use `send_message_to_live_agent_chat` with the exact session id for same-chat continuation.

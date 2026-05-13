@@ -992,6 +992,7 @@ export class ChatInteropService implements ChatInteropApi {
     const deadline = Date.now() + this.postCreateTimeoutMs;
     let candidate: ChatSessionSummary | undefined;
     let after = before;
+    let settledUnverifiedSignature: string | undefined;
     const requireSettled = request.blockOnResponse === true;
 
     while (Date.now() <= deadline) {
@@ -1032,6 +1033,20 @@ export class ChatInteropService implements ChatInteropApi {
       if (candidate && selection.allRequestedVerified && settled && clean) {
         return { session, selection, settled };
       }
+
+      if (candidate && settled && clean) {
+        const signature = `${candidate.id}:${candidate.lastUpdated ?? "-"}`;
+        if (settledUnverifiedSignature === signature) {
+          return { session, selection, settled };
+        }
+
+        // Allow one extra poll for a newer created session or late mode-backed evidence
+        // before failing the strict create on a settled, clean candidate.
+        settledUnverifiedSignature = signature;
+        continue;
+      }
+
+      settledUnverifiedSignature = undefined;
     }
 
     const session = candidate;
