@@ -68,6 +68,8 @@ Scoped VS Code session-view actions for manual operator use include:
 
 For agent-facing same-session live-chat workflows, prefer the language-model tools rather than these mirrored extension commands.
 
+For bounded cross-extension host testing, use the `invoke_youtube_host_command` LM tool instead of terminal fallback when the installed YouTube extension's SecretStorage or workspace-scoped settings matter.
+
 Core settings:
 
 - `tiinex.aiVscodeTools.showSessionsView`

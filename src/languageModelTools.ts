@@ -122,12 +122,239 @@ interface SendCopilotCliPromptInput {
   prompt: string;
 }
 
+type YouTubeHostCommandAction =
+  | "validate-provider-setup"
+  | "generate-openai-image"
+  | "open-openai-artifact"
+  | "close-active-openai-artifact"
+  | "create-working-topic"
+  | "add-feedback-topic-evidence"
+  | "add-feedback-topic-decision"
+  | "focus-feedback-topic";
+
+interface InvokeYouTubeHostCommandInput {
+  action: YouTubeHostCommandAction;
+  prompt?: string;
+  purpose?: string;
+  size?: string;
+  model?: string;
+  critiqueModel?: string;
+  autoCritique?: boolean;
+  showMetadata?: boolean;
+  openArtifact?: boolean;
+  artifact?: string;
+  jobId?: string;
+  topicId?: string;
+  title?: string;
+  summary?: string;
+  sourceKey?: string;
+  sourceLabel?: string;
+  type?: string;
+  status?: string;
+  source?: string;
+  reference?: string;
+  whyItMatters?: string;
+  capturedBy?: string;
+  note?: string;
+  by?: string;
+  section?: string;
+  highlightText?: string;
+}
+
 function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message;
   }
 
   return String(error);
+}
+
+const YOUTUBE_HOST_COMMAND_SPECS: Record<YouTubeHostCommandAction, { commandId: string; label: string }> = {
+  "validate-provider-setup": {
+    commandId: "tiinex.youtubeTools.validateProviderSetup",
+    label: "Validate Provider Setup"
+  },
+  "generate-openai-image": {
+    commandId: "tiinex.youtubeTools.generateOpenAiImage",
+    label: "Generate OpenAI Image"
+  },
+  "open-openai-artifact": {
+    commandId: "tiinex.youtubeTools.openOpenAiArtifact",
+    label: "Open OpenAI Artifact"
+  },
+  "close-active-openai-artifact": {
+    commandId: "tiinex.youtubeTools.closeActiveOpenAiArtifact",
+    label: "Close Active OpenAI Artifact"
+  },
+  "create-working-topic": {
+    commandId: "tiinex.youtubeTools.createWorkingTopic",
+    label: "Create Working Topic"
+  },
+  "add-feedback-topic-evidence": {
+    commandId: "tiinex.youtubeTools.addFeedbackTopicEvidence",
+    label: "Add Feedback Topic Evidence"
+  },
+  "add-feedback-topic-decision": {
+    commandId: "tiinex.youtubeTools.addFeedbackTopicDecision",
+    label: "Add Feedback Topic Decision"
+  },
+  "focus-feedback-topic": {
+    commandId: "tiinex.youtubeTools.focusFeedbackTopic",
+    label: "Focus Feedback Topic"
+  }
+};
+
+const YOUTUBE_OPENAI_ARTIFACT_KEYS = new Set(["final", "pass-1", "pass-2", "job", "operator", "viewer", "tts"]);
+
+function normalizeYouTubeOpenAiArtifact(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return YOUTUBE_OPENAI_ARTIFACT_KEYS.has(normalized) ? normalized : undefined;
+}
+
+function buildYouTubeHostCommandArgs(input: InvokeYouTubeHostCommandInput): Record<string, unknown> | undefined {
+  switch (input.action) {
+    case "validate-provider-setup":
+      return {
+        silent: true,
+        showNotifications: false,
+        revealOutput: false
+      };
+    case "close-active-openai-artifact":
+      return undefined;
+    case "create-working-topic":
+      return {
+        title: input.title,
+        summary: input.summary,
+        sourceKey: input.sourceKey,
+        sourceLabel: input.sourceLabel,
+        silent: true,
+        showNotifications: false,
+        revealOutput: false
+      };
+    case "generate-openai-image":
+      return {
+        prompt: input.prompt,
+        purpose: input.purpose,
+        size: input.size,
+        model: input.model,
+        critiqueModel: input.critiqueModel,
+        autoCritique: input.autoCritique,
+        silent: true,
+        showNotifications: false,
+        revealOutput: false,
+        showMetadata: input.showMetadata,
+        openArtifact: input.openArtifact
+      };
+    case "open-openai-artifact":
+      return {
+        artifact: normalizeYouTubeOpenAiArtifact(input.artifact),
+        jobId: input.jobId
+      };
+    case "add-feedback-topic-evidence":
+      return {
+        topicId: input.topicId,
+        type: input.type,
+        status: input.status,
+        source: input.source,
+        reference: input.reference,
+        whyItMatters: input.whyItMatters,
+        summary: input.summary,
+        capturedBy: input.capturedBy,
+        silent: true,
+        showNotifications: false,
+        revealOutput: false
+      };
+    case "add-feedback-topic-decision":
+      return {
+        topicId: input.topicId,
+        note: input.note,
+        by: input.by,
+        silent: true,
+        showNotifications: false,
+        revealOutput: false
+      };
+    case "focus-feedback-topic":
+      return {
+        topicId: input.topicId,
+        section: input.section,
+        highlightText: input.highlightText,
+        silent: true,
+        showNotifications: false,
+        revealOutput: false
+      };
+  }
+}
+
+function renderYouTubeHostCommandResult(
+  input: InvokeYouTubeHostCommandInput,
+  commandId: string,
+  result: unknown,
+  budget: number
+): string {
+  const lines = [
+    "# YouTube Host Command Result",
+    "",
+    `- action: ${input.action}`,
+    `- commandId: ${commandId}`,
+    `- returnedValue: ${result === undefined ? "no" : "yes"}`
+  ];
+
+  if (result && typeof result === "object") {
+    const objectResult = result as Record<string, unknown>;
+    if (typeof objectResult.jobId === "string") {
+      lines.push(`- jobId: ${objectResult.jobId}`);
+    }
+    if (typeof objectResult.finalImageFilePath === "string") {
+      lines.push(`- finalImageFilePath: ${objectResult.finalImageFilePath}`);
+    }
+    if (typeof objectResult.artifact === "string") {
+      lines.push(`- artifact: ${objectResult.artifact}`);
+    }
+    if (typeof objectResult.artifactPath === "string") {
+      lines.push(`- artifactPath: ${objectResult.artifactPath}`);
+    }
+  } else if (typeof result === "string" && result.trim()) {
+    lines.push(`- result: ${result.trim()}`);
+  }
+
+  if (result !== undefined) {
+    const serialized = JSON.stringify(result, null, 2);
+    if (serialized) {
+      const remainingBudget = Math.max(0, budget - lines.join("\n").length - 32);
+      if (remainingBudget > 0) {
+        const trimmed = serialized.length > remainingBudget
+          ? `${serialized.slice(0, Math.max(0, remainingBudget - 15))}\n... [truncated]`
+          : serialized;
+        lines.push("", "```json", trimmed, "```");
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function youtubeHostCommandInvocationMessage(input: InvokeYouTubeHostCommandInput): string {
+  switch (input.action) {
+    case "generate-openai-image":
+      return "Generating image";
+    case "open-openai-artifact":
+      return "Opening image artifact";
+    case "close-active-openai-artifact":
+      return "Closing image artifact";
+    case "create-working-topic":
+      return "Creating working topic";
+    case "add-feedback-topic-evidence":
+      return "Adding topic evidence";
+    case "add-feedback-topic-decision":
+      return "Recording topic decision";
+    case "focus-feedback-topic":
+      return "Focusing topic";
+    case "validate-provider-setup":
+      return "Validating provider setup";
+  }
 }
 
 type DiscoveryScope = "all-local" | "current-workspace";
@@ -517,6 +744,69 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
       properties: {
         detailLevel: detailLevelProperty
       }
+    }
+  },
+  {
+    name: "invoke_youtube_host_command",
+    displayName: "Invoke YouTube Host Command",
+    userDescription: "Run one bounded YouTube extension command through the current VS Code host.",
+    modelDescription: "Run one bounded YouTube extension command through the current VS Code host so the installed YouTube extension can use its real SecretStorage, workspace-scoped settings, and UI-side behavior instead of terminal fallback. This surface is intentionally allowlisted to provider validation, OpenAI image generation, OpenAI artifact open, and active artifact close. For generate-openai-image, prefer supplying prompt and purpose so the command does not need to stop on interactive UI questions. This tool affects the VS Code UI and rejects concurrent host-bound invocations.",
+    toolReferenceName: "invoke-youtube-host-command",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          description: "Which YouTube host command to run through VS Code.",
+          enum: [
+            "validate-provider-setup",
+            "generate-openai-image",
+            "open-openai-artifact",
+            "close-active-openai-artifact"
+          ]
+        },
+        prompt: {
+          type: "string",
+          description: "Image prompt for generate-openai-image. If omitted for that action, the YouTube extension will prompt interactively."
+        },
+        purpose: {
+          type: "string",
+          description: "Image purpose for generate-openai-image, for example story-beat, concept-frame, thumbnail, or moodboard."
+        },
+        size: {
+          type: "string",
+          description: "Optional OpenAI image size override for generate-openai-image."
+        },
+        model: {
+          type: "string",
+          description: "Optional OpenAI image model override for generate-openai-image."
+        },
+        critiqueModel: {
+          type: "string",
+          description: "Optional critique model override for generate-openai-image."
+        },
+        autoCritique: {
+          type: "boolean",
+          description: "Optional override for whether the YouTube extension runs its bounded critique/regenerate pass."
+        },
+        showMetadata: {
+          type: "boolean",
+          description: "When false, suppress the generated job metadata preview during generate-openai-image."
+        },
+        openArtifact: {
+          type: "boolean",
+          description: "When false, suppress opening the final image after generate-openai-image."
+        },
+        artifact: {
+          type: "string",
+          description: "Artifact key for open-openai-artifact. Allowed values: final, pass-1, pass-2, job, operator, viewer, tts."
+        },
+        jobId: {
+          type: "string",
+          description: "Optional exact job id for open-openai-artifact. If omitted, the YouTube extension may prompt or use the latest job depending on the action path."
+        }
+      },
+      required: ["action"]
     }
   },
   {
@@ -1523,6 +1813,32 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
 
     context.subscriptions.push(...liveToolRegistrations);
   }
+
+  context.subscriptions.push(
+    vscode.lm.registerTool(
+      "invoke_youtube_host_command",
+      new LiveChatTool<InvokeYouTubeHostCommandInput>(
+        (input) => youtubeHostCommandInvocationMessage(input),
+        async (input, budget) => {
+          const spec = YOUTUBE_HOST_COMMAND_SPECS[input.action];
+          if (!spec) {
+            throw new Error(`Unsupported YouTube host command action: ${String(input.action)}`);
+          }
+
+          const commands = await vscode.commands.getCommands(true);
+          if (!commands.includes(spec.commandId)) {
+            throw new Error(`The YouTube host command ${spec.commandId} is not currently registered in this VS Code window.`);
+          }
+
+          const args = buildYouTubeHostCommandArgs(input);
+          const result = args === undefined
+            ? await vscode.commands.executeCommand(spec.commandId)
+            : await vscode.commands.executeCommand(spec.commandId, args);
+          return renderYouTubeHostCommandResult(input, spec.commandId, result, budget);
+        }
+      )
+    )
+  );
 
   if (!FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED) {
     return;
