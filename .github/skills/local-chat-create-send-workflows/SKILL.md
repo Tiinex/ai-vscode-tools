@@ -1,6 +1,6 @@
 ---
 name: local-chat-create-send-workflows
-description: 'Guidance for exact Local chat create/send workflows in VS Code. Use when creating a new Local chat with a custom agent, continuing the same Local chat, or interpreting exact send versus internal focused-fallback transport on hosts that still need fallback.'
+description: 'Guidance for exact Local chat create/send workflows in VS Code. Use only when the task is specifically about canonical Local-chat role startup, same-chat continuation, or validating the Local-chat create/send public workflow itself.'
 user-invocable: false
 ---
 
@@ -10,11 +10,19 @@ user-invocable: false
 - Use this skill when a task involves `create_live_agent_chat` or `send_message_to_live_agent_chat`.
 - Use it when the goal is to preserve exact target continuity for a Local chat instead of relying on loose UI focus.
 - Use it when the task depends on safe same-chat follow-ups, bounded create-time role dispatch, or explicit failure instead of ambiguous retargeting.
+- Use it for Local-chat role startup proof, Local-chat role continuity proof, or Local-chat workflow validation where create/send is itself the object under test.
+
+## When Not to Use
+- Do not use this skill for validation of unrelated LM tools whose primary execution surface is not Local-chat create/send.
+- Do not use this skill for `run_traceable_subagent` validation, traceable child-lane runtime checks, or other tool-runtime probes where Local-chat would only be an indirect wrapper around the real test object.
+- Do not use this skill merely because a task is host-near, VS Code-local, or role-adjacent; Local-chat create/send must be the actual workflow under test.
+- Do not let this skill become the default path for general role development, role-grounding checks, or model-provenance validation unless the explicit goal is to test the Local-chat workflow itself.
 
 ## Default Posture
 - Prefer exact create and exact session-targeted send surfaces over focused surfaces.
 - Treat the first custom-agent message in a new Local chat as a transport bootstrap, not as proof that every later follow-up should repeat agent selection.
 - Treat focused-send as an internal fallback transport, not as a competing public LM tool route.
+- Treat this skill as workflow-specific rather than as a general role-testing or host-validation skill.
 - On the current host, treat matching mode-backed custom-agent evidence as stronger than the generic persisted request-agent field when validating a custom-agent create result.
 - Treat Local-chat LM tools as serial single-flight work against shared host state; do not intentionally overlap create, list, inspect, reveal, send, close, or delete operations.
 - If a canonical Local-chat LM tool seems to be missing from the current session after reload or later in a long conversation, do one explicit targeted tool lookup for that exact tool name before concluding that the tool is unavailable or reopening a non-canonical route.

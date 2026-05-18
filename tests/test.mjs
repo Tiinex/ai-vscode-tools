@@ -44,6 +44,7 @@ const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools"
 const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
 const distLanguageModelTools = path.join(packageRoot, "dist", "languageModelTools.js");
 const distTraceableSubagent = path.join(packageRoot, "dist", "traceableSubagent.js");
+const distToolNameNormalization = path.join(packageRoot, "dist", "toolNameNormalization.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
 const extensionSourcePath = path.join(packageRoot, "src", "extension.ts");
@@ -7099,6 +7100,14 @@ async function runRoutingGuardChecks() {
     "README must document the experimental traceable subagent LM tool."
   );
   assert(
+    readme.includes("prefer non-leading parent input"),
+    "README must keep the non-leading input guidance for run_traceable_subagent."
+  );
+  assert(
+    readme.includes("do not let raw user wording outweigh the child lane's bounded investigative contract"),
+    "README must keep the userInput versus parentTask weighting guidance for run_traceable_subagent."
+  );
+  assert(
     readme.includes("The canonical public live-chat workflow surface is the language-model tool family"),
     "README routing guard must keep the live-chat LM tool family marked as the canonical public workflow surface."
   );
@@ -7168,7 +7177,38 @@ async function runRoutingGuardChecks() {
 }
 
 async function runTraceableSubagentChecks() {
-  const traceableSubagent = await import(pathToFileURL(distTraceableSubagent).href);
+  const vscodeModule = await import(pathToFileURL(vscodeStubModulePath).href);
+  const vscode = vscodeModule.default ?? vscodeModule;
+  vscode.workspace = vscode.workspace || {};
+  vscode.lm = vscode.lm || { tools: [] };
+  vscode.LanguageModelChatToolMode = vscode.LanguageModelChatToolMode || { Auto: "auto" };
+  vscode.LanguageModelTextPart = vscode.LanguageModelTextPart || class LanguageModelTextPart {
+    constructor(value) {
+      this.value = value;
+    }
+  };
+  vscode.LanguageModelToolCallPart = vscode.LanguageModelToolCallPart || class LanguageModelToolCallPart {};
+  vscode.LanguageModelDataPart = vscode.LanguageModelDataPart || class LanguageModelDataPart {};
+  vscode.LanguageModelChatMessage = vscode.LanguageModelChatMessage || {
+    User(content) {
+      return { role: "user", content };
+    },
+    Assistant(content) {
+      return { role: "assistant", content };
+    },
+    Tool(content) {
+      return { role: "tool", content };
+    }
+  };
+  const traceableSubagent = await import(`${pathToFileURL(distTraceableSubagent).href}?traceable-subagent=${Date.now()}`);
+  const toolNameNormalization = await import(`${pathToFileURL(distToolNameNormalization).href}?tool-name-normalization=${Date.now()}`);
+
+  assert(
+    toolNameNormalization.normalizeToolReferenceKey("tiinex.ai-vscode-tools/listAgentSessions") === "list_agent_sessions"
+      && toolNameNormalization.normalizeToolReferenceKey("tiinex.ai-vscode-tools/invoke-youtube-host-command") === "invoke_youtube_host_command"
+      && toolNameNormalization.normalizeToolReferenceKey("read/readFile") === "read_file",
+    "Tool-name normalization must collapse namespaced prompt aliases, hyphenated aliases, and slash-scoped runtime names to one comparison key."
+  );
 
   const selectedTools = traceableSubagent.selectTraceableSubagentTools([
     { name: "run_traceable_subagent", description: "self" },
@@ -7196,6 +7236,146 @@ async function runTraceableSubagentChecks() {
   assert(
     selectedTools.some((tool) => tool.name === "runSubagent"),
     "Traceable subagent tool selection must allow native runSubagent as an opaque delegation lane."
+  );
+
+  const inheritedSelectedTools = traceableSubagent.selectTraceableSubagentTools([
+    { name: "read/readFile", description: "file read" },
+    { name: "search/textSearch", description: "search" },
+    { name: "create_live_agent_chat", description: "mutation" }
+  ], {
+    userInput: "inspect a file",
+    parentTask: "use inherited role tools",
+    blockedToolNames: [],
+    defaultAllowedToolNames: ["read/readFile", "search/textSearch"]
+  });
+
+  assert(
+    inheritedSelectedTools.length === 2
+      && inheritedSelectedTools.some((tool) => tool.name === "read/readFile")
+      && inheritedSelectedTools.some((tool) => tool.name === "search/textSearch"),
+    `Traceable subagent tool selection must inherit the resolved agent role tool declarations when no explicit allowlist is provided. Got: ${JSON.stringify(inheritedSelectedTools)}`
+  );
+  assert(
+    !inheritedSelectedTools.some((tool) => tool.name === "create_live_agent_chat"),
+    "Traceable subagent inherited tool selection must still enforce the default blocked tool set."
+  );
+
+  const inheritedPromptReferenceTools = traceableSubagent.selectTraceableSubagentTools([
+    { name: "list_agent_sessions", description: "session list" },
+    { name: "run_traceable_subagent", description: "self" },
+    { name: "create_live_agent_chat", description: "mutation" },
+    { name: "invoke_youtube_host_command", description: "live host mutation" }
+  ], {
+    userInput: "inspect available sessions",
+    parentTask: "use inherited namespaced prompt references",
+    blockedToolNames: [],
+    defaultAllowedToolNames: [
+      "tiinex.ai-vscode-tools/listAgentSessions",
+      "tiinex.ai-vscode-tools/runTraceableSubagent",
+      "tiinex.ai-vscode-tools/createLiveAgentChat",
+      "tiinex.ai-vscode-tools/invoke-youtube-host-command"
+    ]
+  });
+
+  assert(
+    JSON.stringify(inheritedPromptReferenceTools.map((tool) => tool.name)) === JSON.stringify(["list_agent_sessions"]),
+    `Traceable subagent tool selection must translate inherited namespaced prompt references to host runtime tool names while preserving the default blocked set. Got: ${JSON.stringify(inheritedPromptReferenceTools)}`
+  );
+
+  const blockedPromptReferenceTools = traceableSubagent.selectTraceableSubagentTools([
+    { name: "list_agent_sessions", description: "session list" },
+    { name: "reveal_live_agent_chat", description: "safe reveal" },
+    { name: "search/textSearch", description: "search" }
+  ], {
+    userInput: "inspect available sessions",
+    parentTask: "block a tool through a namespaced prompt reference",
+    blockedToolNames: ["tiinex.ai-vscode-tools/listAgentSessions"]
+  });
+
+  assert(
+    JSON.stringify(blockedPromptReferenceTools.map((tool) => tool.name)) === JSON.stringify(["search/textSearch"]),
+    `Traceable subagent tool selection must translate blocked namespaced prompt references to host runtime tool names. Got: ${JSON.stringify(blockedPromptReferenceTools)}`
+  );
+
+  const explicitPromptReferenceTools = traceableSubagent.selectTraceableSubagentTools([
+    { name: "list_agent_sessions", description: "session list" },
+    { name: "search/textSearch", description: "search" },
+    { name: "create_live_agent_chat", description: "mutation" }
+  ], {
+    userInput: "inspect available sessions",
+    parentTask: "explicit allowlist should accept namespaced prompt references",
+    allowedToolNames: ["tiinex.ai-vscode-tools/listAgentSessions"],
+    blockedToolNames: []
+  });
+
+  assert(
+    JSON.stringify(explicitPromptReferenceTools.map((tool) => tool.name)) === JSON.stringify(["list_agent_sessions"]),
+    `Traceable subagent tool selection must let explicit namespaced prompt aliases resolve to host runtime tool names. Got: ${JSON.stringify(explicitPromptReferenceTools)}`
+  );
+
+  const inheritedDependencySurface = traceableSubagent.selectTraceableSubagentTools([
+    { name: "read/readFile", description: "file read" },
+    { name: "search/textSearch", description: "text search" },
+    { name: "search/fileSearch", description: "file search" },
+    { name: "search/listDirectory", description: "directory listing" },
+    { name: "search/codebase", description: "broader search" },
+    { name: "create_live_agent_chat", description: "mutation" }
+  ], {
+    userInput: "inspect two workspace roots",
+    parentTask: "use the inherited child-lane dependency surface",
+    blockedToolNames: [],
+    defaultAllowedToolNames: [
+      "read/readFile",
+      "search/textSearch",
+      "search/fileSearch",
+      "search/listDirectory",
+      "search/missingTool"
+    ]
+  });
+
+  const inheritedDependencyToolNames = inheritedDependencySurface.map((tool) => tool.name);
+  assert(
+    JSON.stringify(inheritedDependencyToolNames) === JSON.stringify([
+      "read/readFile",
+      "search/textSearch",
+      "search/fileSearch",
+      "search/listDirectory"
+    ]),
+    `Traceable subagent inherited tool selection must keep the concrete read/search dependency surface and ignore unavailable declarations. Got: ${JSON.stringify(inheritedDependencyToolNames)}`
+  );
+
+  const explicitOverrideSelectedTools = traceableSubagent.selectTraceableSubagentTools([
+    { name: "read/readFile", description: "file read" },
+    { name: "search/textSearch", description: "search" }
+  ], {
+    userInput: "inspect a file",
+    parentTask: "explicit allowlist wins",
+    allowedToolNames: ["search/textSearch"],
+    blockedToolNames: [],
+    defaultAllowedToolNames: ["read/readFile"]
+  });
+
+  assert(
+    explicitOverrideSelectedTools.length === 1 && explicitOverrideSelectedTools[0]?.name === "search/textSearch",
+    `Traceable subagent tool selection must let an explicit caller allowlist override inherited role tools. Got: ${JSON.stringify(explicitOverrideSelectedTools)}`
+  );
+
+  const defaultSelectors = traceableSubagent.buildTraceableSubagentModelSelectors({});
+  assert(
+    defaultSelectors.length === 0,
+    "Traceable subagent model selection must fail closed when no exact model selector is provided."
+  );
+
+  const explicitSelectors = traceableSubagent.buildTraceableSubagentModelSelectors({
+    modelSelector: {
+      vendor: "openai",
+      family: "gpt-5",
+      id: "gpt-5.4"
+    }
+  });
+  assert(
+    explicitSelectors.length === 1 && explicitSelectors[0]?.vendor === "openai" && explicitSelectors[0]?.family === "gpt-5" && explicitSelectors[0]?.id === "gpt-5.4",
+    "Traceable subagent model selection must preserve an explicit caller-provided exact model selector without adding fallback selectors."
   );
 
   const promptSections = traceableSubagent.buildTraceableSubagentPromptSections({
@@ -7267,7 +7447,8 @@ async function runTraceableSubagentChecks() {
         note: "Native runSubagent delegation remains opaque from the parent trace lane."
       }
     ],
-    rawModelText: "{\"finalSummary\":\"ok\"}"
+    rawModelText: "{\"finalSummary\":\"ok\"}",
+    debugLogPath: "/tmp/traceable-subagent-debug.jsonl"
   });
 
   assert(
@@ -7278,6 +7459,265 @@ async function runTraceableSubagentChecks() {
     markdown.includes("Native runSubagent delegation remains opaque"),
     "Traceable subagent markdown renderer must surface opaque delegation notes."
   );
+  assert(
+    markdown.includes("/tmp/traceable-subagent-debug.jsonl"),
+    "Traceable subagent markdown renderer must surface the debug log path when present."
+  );
+
+  const originalWorkspace = vscode.workspace;
+  const originalWorkspaceFolders = originalWorkspace?.workspaceFolders;
+  const originalLm = vscode.lm;
+  const originalToolMode = vscode.LanguageModelChatToolMode;
+  const originalTextPart = vscode.LanguageModelTextPart;
+  const originalToolCallPart = vscode.LanguageModelToolCallPart;
+  const originalDataPart = vscode.LanguageModelDataPart;
+  const originalChatMessage = vscode.LanguageModelChatMessage;
+  const tempRoots = [];
+
+  vscode.LanguageModelChatToolMode = { Auto: "auto" };
+  vscode.LanguageModelTextPart = class LanguageModelTextPart {
+    constructor(value) {
+      this.value = value;
+    }
+  };
+  vscode.LanguageModelToolCallPart = class LanguageModelToolCallPart {};
+  vscode.LanguageModelDataPart = class LanguageModelDataPart {};
+  vscode.LanguageModelChatMessage = {
+    User(content) {
+      return { role: "user", content };
+    },
+    Assistant(content) {
+      return { role: "assistant", content };
+    },
+    Tool(content) {
+      return { role: "tool", content };
+    }
+  };
+
+  try {
+    const groundedRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-grounded-"));
+    tempRoots.push(groundedRoot);
+    const groundedAgentsDir = path.join(groundedRoot, ".github", "agents");
+    await fs.mkdir(groundedAgentsDir, { recursive: true });
+    await fs.writeFile(path.join(groundedAgentsDir, "anchor.gpt-5-mini.live-feedback-loop.experimental.agent.md"), [
+      "---",
+      "name: Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)",
+      "description: Grounded traceable test agent.",
+      "argument-hint: Test only.",
+      "model: GPT-5 mini (copilot)",
+      "tools: [read/readFile, search/textSearch, search/fileSearch, search/listDirectory]",
+      "experimental: true",
+      "---",
+      "",
+      "You are a grounded test agent.",
+      "Return the bounded trace payload."
+    ].join("\n"), "utf8");
+
+    let selectedTraceableSelector;
+    let groundedSendRequestTools = [];
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: groundedRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "read/readFile", description: "file read" },
+        { name: "search/textSearch", description: "text search" },
+        { name: "search/fileSearch", description: "file search" },
+        { name: "search/listDirectory", description: "directory listing" },
+        { name: "create_live_agent_chat", description: "mutation" }
+      ],
+      async selectChatModels(selector) {
+        selectedTraceableSelector = selector;
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(_messages, options) {
+            groundedSendRequestTools = Array.isArray(options?.tools) ? options.tools.map((tool) => tool.name) : [];
+            async function* stream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"grounded ok"}');
+            }
+            return { stream: stream() };
+          }
+        }];
+      },
+      async invokeTool() {
+        throw new Error("Traceable grounded test should not invoke tools.");
+      }
+    };
+
+    const groundedDebugDir = path.join(groundedRoot, ".traceable-debug");
+
+    const groundedResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the grounded agent role.",
+      parentTask: "Use the grounded agent artifact and return a bounded trace payload.",
+      agentRole: { name: "Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)" }
+    }, {
+      debugLogDir: groundedDebugDir
+    });
+
+    assert(
+      selectedTraceableSelector?.vendor === "copilot" && selectedTraceableSelector?.id === "gpt-5-mini",
+      `Traceable subagent grounded-role test did not translate the agent artifact model to the expected exact selector. Got: ${JSON.stringify(selectedTraceableSelector)}`
+    );
+    assert(
+      groundedResult.model?.id === "gpt-5-mini" && groundedResult.stopReason === "completed" && groundedResult.finalSummary === "grounded ok",
+      `Traceable subagent grounded-role test did not complete through the agent artifact model path. Got: ${JSON.stringify(groundedResult)}`
+    );
+    assert(
+      JSON.stringify(groundedResult.allowedToolNames) === JSON.stringify([
+        "read/readFile",
+        "search/textSearch",
+        "search/fileSearch",
+        "search/listDirectory"
+      ])
+        && JSON.stringify(groundedSendRequestTools) === JSON.stringify([
+          "read/readFile",
+          "search/textSearch",
+          "search/fileSearch",
+          "search/listDirectory"
+        ]),
+      `Traceable subagent grounded-role test did not inherit the agent artifact tool declarations into the runtime tool allowlist. Result: ${JSON.stringify({ allowedToolNames: groundedResult.allowedToolNames, groundedSendRequestTools })}`
+    );
+    assert(
+      groundedResult.debugLogPath === path.join(groundedDebugDir, "traceable-subagent-debug.jsonl"),
+      `Traceable subagent grounded-role test did not return the expected debug log path. Got: ${groundedResult.debugLogPath}`
+    );
+    const groundedDebugLog = await fs.readFile(groundedResult.debugLogPath, "utf8");
+    assert(
+      groundedDebugLog.includes('"phase":"model_selected"') && groundedDebugLog.includes('"id":"gpt-5-mini"'),
+      `Traceable subagent grounded-role test did not write the expected model-selection debug entry. Got: ${groundedDebugLog}`
+    );
+
+    const unsupportedRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-unsupported-model-"));
+    tempRoots.push(unsupportedRoot);
+    const unsupportedAgentsDir = path.join(unsupportedRoot, ".github", "agents");
+    await fs.mkdir(unsupportedAgentsDir, { recursive: true });
+    await fs.writeFile(path.join(unsupportedAgentsDir, "parallax.experimental.agent.md"), [
+      "---",
+      "name: Parallax (Experimental)",
+      "description: Unsupported model declaration test.",
+      "argument-hint: Test only.",
+      "model: Claude Opus 4.7 (copilot)",
+      "tools: [read/readFile]",
+      "experimental: true",
+      "---",
+      "",
+      "You are a test agent with an unsupported model declaration."
+    ].join("\n"), "utf8");
+
+    let unsupportedSelectCalls = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: unsupportedRoot } }];
+    vscode.lm = {
+      tools: [],
+      async selectChatModels() {
+        unsupportedSelectCalls += 1;
+        return [];
+      },
+      async invokeTool() {
+        throw new Error("Traceable unsupported-model test should not invoke tools.");
+      }
+    };
+
+    const unsupportedModelResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the unsupported model declaration.",
+      parentTask: "Fail closed if the agent artifact model declaration cannot be translated safely.",
+      agentRole: { name: "Parallax (Experimental)" }
+    });
+
+    assert(
+      unsupportedSelectCalls === 0,
+      `Traceable subagent unsupported-model test reached model selection unexpectedly. Got calls: ${unsupportedSelectCalls}`
+    );
+    assert(
+      unsupportedModelResult.stopReason === "tool_blocked" && unsupportedModelResult.finalSummary.includes("could not translate"),
+      `Traceable subagent unsupported-model test did not fail closed on an unrecognized model declaration. Got: ${JSON.stringify(unsupportedModelResult)}`
+    );
+
+    const ambiguousRootA = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-a-"));
+    const ambiguousRootB = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-b-"));
+    tempRoots.push(ambiguousRootA, ambiguousRootB);
+    for (const ambiguousRoot of [ambiguousRootA, ambiguousRootB]) {
+      const ambiguousAgentsDir = path.join(ambiguousRoot, ".github", "agents");
+      await fs.mkdir(ambiguousAgentsDir, { recursive: true });
+      await fs.writeFile(path.join(ambiguousAgentsDir, "anchor.gpt-5-mini.agent.md"), [
+        "---",
+        "name: Anchor (GPT-5 mini)",
+        "description: Ambiguous direct-match test agent.",
+        "argument-hint: Test only.",
+        "model: GPT-5 mini (copilot)",
+        "tools: [read/readFile]",
+        "---",
+        "",
+        "You are an ambiguous test agent."
+      ].join("\n"), "utf8");
+    }
+
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: ambiguousRootA } }, { uri: { fsPath: ambiguousRootB } }];
+    vscode.lm = {
+      tools: [],
+      async selectChatModels() {
+        throw new Error("Traceable ambiguity test should fail before model selection.");
+      },
+      async invokeTool() {
+        throw new Error("Traceable ambiguity test should not invoke tools.");
+      }
+    };
+
+    const ambiguousResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the ambiguous role.",
+      parentTask: "Fail closed if multiple direct agent artifact matches exist.",
+      agentRole: { name: "Anchor (GPT-5 mini)" }
+    });
+
+    assert(
+      ambiguousResult.stopReason === "tool_blocked" && ambiguousResult.finalSummary.includes("matched multiple direct workspace agent artifacts"),
+      `Traceable subagent ambiguity test did not fail closed on multiple direct matches. Got: ${JSON.stringify(ambiguousResult)}`
+    );
+  } finally {
+    if (originalWorkspace) {
+      originalWorkspace.workspaceFolders = originalWorkspaceFolders;
+    } else {
+      delete vscode.workspace;
+    }
+
+    if (originalLm === undefined) {
+      delete vscode.lm;
+    } else {
+      vscode.lm = originalLm;
+    }
+
+    if (originalToolMode === undefined) {
+      delete vscode.LanguageModelChatToolMode;
+    } else {
+      vscode.LanguageModelChatToolMode = originalToolMode;
+    }
+
+    if (originalTextPart === undefined) {
+      delete vscode.LanguageModelTextPart;
+    } else {
+      vscode.LanguageModelTextPart = originalTextPart;
+    }
+
+    if (originalToolCallPart === undefined) {
+      delete vscode.LanguageModelToolCallPart;
+    } else {
+      vscode.LanguageModelToolCallPart = originalToolCallPart;
+    }
+
+    if (originalDataPart === undefined) {
+      delete vscode.LanguageModelDataPart;
+    } else {
+      vscode.LanguageModelDataPart = originalDataPart;
+    }
+
+    if (originalChatMessage === undefined) {
+      delete vscode.LanguageModelChatMessage;
+    } else {
+      vscode.LanguageModelChatMessage = originalChatMessage;
+    }
+
+    await Promise.all(tempRoots.map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })));
+  }
 }
 
 async function assertMissing(targetPath, message) {

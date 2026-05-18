@@ -480,7 +480,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "List Agent Sessions",
     userDescription: "List recent stored local chat sessions from workspace storage.",
     modelDescription: "List recent stored local chat sessions. Use this when you need to discover available session ids before inspecting a specific session. The tool returns a bounded text list with session id, timestamp, size, and path. It is read-only and only inspects persisted local session metadata." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-sessions",
+    toolReferenceName: "listAgentSessions",
     inputSchema: {
       type: "object",
       properties: {
@@ -498,7 +498,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Get Agent Session Index",
     userDescription: "Render a bounded trailing index of recent persisted rows for one stored session.",
     modelDescription: "Render a bounded trailing index of recent persisted rows for one stored local chat session. Use this to inspect recent activity without exporting the full session. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-index",
+    toolReferenceName: "getAgentSessionIndex",
     inputSchema: {
       type: "object",
       properties: {
@@ -511,7 +511,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Get Agent Session Window",
     userDescription: "Render a bounded window of persisted rows around matching anchor text in one session.",
     modelDescription: "Render a bounded window of persisted rows around matching anchor text in one stored local chat session. Use this when you need local context around a phrase or event rather than a full export. You may also anchor the window at the latest persisted compaction boundary by setting afterLatestCompact=true. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-window",
+    toolReferenceName: "getAgentSessionWindow",
     inputSchema: {
       type: "object",
       properties: {
@@ -546,7 +546,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Export Agent Session Markdown",
     userDescription: "Render a markdown export of one stored session.",
     modelDescription: "Render a markdown export of one stored local chat session. Use this when you need a broader persisted-session view than an index, snapshot, or profile. It is read-only in this extension surface and returns markdown inline instead of writing files." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-export",
+    toolReferenceName: "exportAgentSessionMarkdown",
     inputSchema: {
       type: "object",
       properties: {
@@ -563,7 +563,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Export Agent Evidence Transcript",
     userDescription: "Render a canonical evidence transcript for one stored session.",
     modelDescription: "Render a canonical evidence transcript from persisted transcript artifacts for one stored local chat session. Use this when you need a findings-safe transcript view with explicit omissions and provenance. By default this agent-facing tool returns a compact block inventory; pass detailLevel=full when you need verbatim payload contents. You can additionally filter from the latest persisted compaction boundary, from an anchor block, or cap the emitted block count. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-transcript",
+    toolReferenceName: "exportAgentEvidenceTranscript",
     inputSchema: {
       type: "object",
       properties: {
@@ -587,7 +587,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Get Agent Session Snapshot",
     userDescription: "Render a compact current-state snapshot for one stored session.",
     modelDescription: "Render a compact current-state snapshot for one stored local chat session. Use this for a small current-state summary derived from persisted artifacts, including persisted input mode, selected model, and latest request agent/model fields when recoverable. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-snapshot",
+    toolReferenceName: "getAgentSessionSnapshot",
     inputSchema: {
       type: "object",
       properties: {
@@ -604,7 +604,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Estimate Agent Context Breakdown",
     userDescription: "Estimate persisted context pressure by category for one stored session.",
     modelDescription: "Estimate persisted context pressure by category for one stored local chat session. Use this when you need a bounded heuristic picture of context utilization from persisted artifacts. By default this agent-facing tool returns a compact summary; pass detailLevel=full for the complete breakdown and signal list. You can restrict the estimate to content after the latest persisted compaction boundary and optionally cap the number of latest request families included. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-context-breakdown",
+    toolReferenceName: "estimateAgentContextBreakdown",
     inputSchema: {
       type: "object",
       properties: {
@@ -627,7 +627,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Get Agent Session Profile",
     userDescription: "Render a findings-first diagnostic profile for one stored session.",
     modelDescription: "Render a findings-first diagnostic profile for one stored local chat session. Use this when you want the main risks and context signals summarized from persisted artifacts. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-profile",
+    toolReferenceName: "getAgentSessionProfile",
     inputSchema: {
       type: "object",
       properties: {
@@ -644,7 +644,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Survey Agent Sessions",
     userDescription: "Compare several recent stored sessions with compact diagnostic metrics.",
     modelDescription: "Compare several recent stored local chat sessions with compact diagnostic metrics. Use this when you need a quick cross-session view instead of inspecting only one session. It is read-only and returns markdown." + SESSION_INSPECTION_ROUTING_NOTE,
-    toolReferenceName: "agent-session-survey",
+    toolReferenceName: "surveyAgentSessions",
     inputSchema: {
       type: "object",
       properties: {
@@ -681,32 +681,45 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: TRACEABLE_SUBAGENT_TOOL_NAME,
     displayName: "Run Traceable Subagent",
     userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
-    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentTask, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, and treats native runSubagent delegation as opaque rather than fully trace-supported. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
-    toolReferenceName: "traceable-subagent",
+    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentTask, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, and treats native runSubagent delegation as opaque rather than fully trace-supported. Prefer non-leading parent framing: use userInput as the source wording or material to inspect rather than the desired answer shape, and let parentTask carry the bounded investigative contract without smuggling in the target conclusion. When agentRole is provided, the runtime resolves a workspace .agent.md artifact and grounds the child from both its frontmatter and body. To avoid hidden model-cost drift, the runtime uses the agent artifact's declared model when it can translate it deterministically; otherwise it requires an exact model id in modelSelector.id and does not auto-select a fallback model. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
+    toolReferenceName: "runTraceableSubagent",
     inputSchema: {
       type: "object",
       properties: {
         userInput: {
           type: "string",
-          description: "The original or near-original user wording for the task being delegated. Keep this distinct from parentTask."
+          description: "The original or near-original user wording or source material for the task being delegated. Keep this distinct from parentTask and do not rely on it as the desired answer shape."
         },
         parentTask: {
           type: "string",
-          description: "The exact task that the parent wants the child lane to perform."
+          description: "The exact bounded investigative task that the parent wants the child lane to perform. Prefer non-leading wording that preserves inquiry without baking in the target conclusion."
+        },
+        agentRole: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Optional agent role label or machine-facing agent stem to resolve to a workspace .agent.md artifact. When provided, the runtime grounds the child from that artifact's frontmatter and body."
+            },
+            filePath: {
+              type: "string",
+              description: "Optional absolute or workspace-relative .agent.md path to use instead of resolving by role name."
+            }
+          }
         },
         parentExpectations: {
           type: "object",
           properties: {
             expectedSteps: {
               type: "array",
-              description: "Optional expected steps the parent wants before trusting a strong conclusion.",
+              description: "Optional expected investigative steps the parent wants before trusting a strong conclusion. Use this for process checks rather than desired answers.",
               items: {
                 type: "string"
               }
             },
             expectedToolFamilies: {
               type: "array",
-              description: "Optional tool families or specific tools the parent expects to appear in the trace.",
+              description: "Optional tool families or specific tools the parent expects to appear in the trace as process evidence, not as proof that a particular conclusion is correct.",
               items: {
                 type: "string"
               }
@@ -772,32 +785,32 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
           properties: {
             vendor: {
               type: "string",
-              description: "Optional model vendor selector for the child run. Defaults to copilot."
+              description: "Optional model vendor to pair with an exact model id for the child run."
             },
             family: {
               type: "string",
-              description: "Optional model family selector for the child run."
+              description: "Optional model family to pair with an exact model id for the child run."
             },
             id: {
               type: "string",
-              description: "Optional exact model id selector for the child run."
+              description: "Exact model id selector for the child run. If agentRole resolves to a model-bearing agent artifact, that role model wins when it can be translated deterministically. Otherwise, if this field is omitted, the runtime stops instead of auto-selecting a model implicitly."
             },
             version: {
               type: "string",
-              description: "Optional model version selector for the child run."
+              description: "Optional model version to pair with an exact model id for the child run."
             }
           }
         },
         allowedToolNames: {
           type: "array",
-          description: "Optional exact tool-name allowlist for the child lane. When omitted, the lane uses the host tool list minus its default blocked set.",
+          description: "Optional tool allowlist for the child lane. Entries may use host runtime tool names or prompt-reference aliases such as tiinex.ai-vscode-tools/listAgentSessions. When omitted, the lane uses the host tool list minus its default blocked set.",
           items: {
             type: "string"
           }
         },
         blockedToolNames: {
           type: "array",
-          description: "Optional extra exact tool names to block for this run in addition to the default self/mutation blocklist.",
+          description: "Optional extra tool names to block for this run in addition to the default self/mutation blocklist. Entries may use host runtime tool names or prompt-reference aliases.",
           items: {
             type: "string"
           }
@@ -886,7 +899,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Invoke YouTube Host Command",
     userDescription: "Run one bounded YouTube extension command through the current VS Code host.",
     modelDescription: "Run one bounded YouTube extension command through the current VS Code host so the installed YouTube extension can use its real SecretStorage, workspace-scoped settings, and UI-side behavior instead of terminal fallback. This surface is intentionally allowlisted to provider validation, OpenAI image generation, OpenAI artifact open, and active artifact close. For generate-openai-image, prefer supplying prompt and purpose so the command does not need to stop on interactive UI questions. This tool affects the VS Code UI and rejects concurrent host-bound invocations.",
-    toolReferenceName: "invoke-youtube-host-command",
+    toolReferenceName: "invokeYoutubeHostCommand",
     inputSchema: {
       type: "object",
       properties: {
@@ -990,7 +1003,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "List Live Agent Chats",
     userDescription: "List local live chat sessions that can be reopened or continued.",
     modelDescription: "List local live chat sessions that can be reopened or continued. Use this before sending a new message into an existing chat. The tool is observational and reflects best-effort disk-backed session discovery.",
-    toolReferenceName: "live-agent-chats",
+    toolReferenceName: "listLiveAgentChats",
     inputSchema: {
       type: "object",
       properties: {
@@ -1006,7 +1019,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Inspect Live Agent Chat Quiescence",
     userDescription: "Inspect whether one live agent chat currently looks ongoing or settled from persisted evidence.",
     modelDescription: "Inspect whether one exact live agent chat currently looks ongoing or settled from persisted evidence using the same quiescence logic that the Local create/send wait path uses. This is a read-only diagnostic surface: it checks the persisted summary, companion transcript, quiet-window gate, and session-tail override, then reports whether the chat currently looks settled enough to return or still in-flight.",
-    toolReferenceName: "inspect-live-agent-chat-quiescence",
+    toolReferenceName: "inspectLiveAgentChatQuiescence",
     inputSchema: {
       type: "object",
       properties: {
@@ -1023,7 +1036,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route. On this host, supply agentName explicitly when creating a fresh live chat.",
     modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. On this host, provide agentName explicitly and avoid mode/model overrides for the first attempt; a neutral new chat without agentName is unsafe and will fail fast, and create-time mode/model selection is host-bounded. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it may use bounded temporary prompt-file slash dispatch as fallback transport for the requested role. Prefer this tool for normal agent-chat creation, but treat prompt-file dispatch as fallback rather than the preferred semantic carrier. When strict selection evidence is requested, this tool evaluates that from the created session after dispatch rather than pretending it can prove create-time participant state before the session exists. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
-    toolReferenceName: "create-live-agent-chat",
+    toolReferenceName: "createLiveAgentChat",
     inputSchema: {
       type: "object",
       properties: {
@@ -1068,7 +1081,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Close Visible Live Chat Tabs",
     userDescription: "Close visible editor-hosted live chat tabs for one exact session.",
     modelDescription: "Close visible editor-hosted live chat tabs for an exact or prefix session identifier without deleting the persisted session itself. Use this for safe Local cleanup after probes or tests when the target chat may still be open in editor tabs. This tool affects the VS Code UI and relies on exact tab-matching checks in the close path rather than the heuristic exact-session self-targeting guard.",
-    toolReferenceName: "close-visible-live-chat-tabs",
+    toolReferenceName: "closeVisibleLiveChatTabs",
     inputSchema: {
       type: "object",
       properties: {
@@ -1085,7 +1098,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Delete Live Agent Chat Artifacts",
     userDescription: "Close visible editor-hosted tabs, delete persisted artifacts, and queue exact offline cleanup for one live chat session, or dry-run the same target-resolution path without deleting anything.",
     modelDescription: "Close visible editor-hosted Local chat tabs for one exact session identifier, delete that session's persisted session JSONL plus known transcript and chat-resource companion artifacts from disk, and then queue exact offline cleanup for the same session target. This destructive route requires the full session id, refuses heuristic title-only editor matches, and is intended only for probe or test-chat cleanup. This tool affects the VS Code UI and relies on exact close-before-delete checks in the delete path rather than the heuristic exact-session self-targeting guard. When dryRun=true, the tool still resolves the exact target session and applies the settled-state execution guard, but it returns before any tab close, artifact deletion, or offline cleanup is attempted; dry runs may inspect the current terminal-bound chat without enabling real deletion. When scheduleExactSelfDelete=true, the tool queues exact offline cleanup instead of attempting live deletion; it may also best-effort close visible editor-hosted chat tabs immediately when the target already looks settled and is not the current terminal-bound conversation.",
-    toolReferenceName: "delete-live-agent-chat-artifacts",
+    toolReferenceName: "deleteLiveAgentChatArtifacts",
     inputSchema: {
       type: "object",
       properties: {
@@ -1110,7 +1123,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Send Message To Live Agent Chat",
     userDescription: "Continue an existing live chat by session id.",
     modelDescription: "Continue an existing live chat by session id. On this build the verified follow-up transport is: reveal the exact Local session, focus the resulting editor-hosted chat, then submit through the focused chat input. For ordinary follow-ups in an already-correct chat, omit agentName so the send stays on the normal session path. Supply agentName only when you intentionally want to rebind or change role on the existing conversation, knowing that focused send surfaces may then use bounded temporary prompt-file slash dispatch as fallback transport.",
-    toolReferenceName: "send-message-live-agent-chat",
+    toolReferenceName: "sendMessageToLiveAgentChat",
     inputSchema: {
       type: "object",
       properties: {
@@ -1159,7 +1172,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     displayName: "Reveal Live Agent Chat",
     userDescription: "Re-open an existing live chat so the visible thread reloads current persisted state.",
     modelDescription: "Re-open an existing live chat session in an editor group when the current build supports internal session-targeted chat commands. When a matching editor-hosted Local chat tab is already open, this path closes that tab first so the reopened session reloads current persisted state. Use this before inspection or best-effort follow-up when the visible thread must match persisted state.",
-    toolReferenceName: "reveal-live-agent-chat",
+    toolReferenceName: "revealLiveAgentChat",
     inputSchema: {
       type: "object",
       properties: {
@@ -1957,7 +1970,8 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         "Run Traceable Subagent",
         () => "Running traceable subagent",
         async (input) => renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
-          accessInformation: context.languageModelAccessInformation
+          accessInformation: context.languageModelAccessInformation,
+          debugLogDir: context.globalStorageUri.fsPath
         }))
       )
     ),

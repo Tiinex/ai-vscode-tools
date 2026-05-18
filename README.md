@@ -17,6 +17,8 @@ As of May 2026, the persisted inspection and cleanup lanes are in active use and
 
 An experimental `run_traceable_subagent` LM tool is now included for a bounded trace-first child lane. It is intentionally v1: it keeps `userInput` separate from `parentTask`, blocks self-reentry, and values explicit runtime trace over native `runSubagent` UX parity.
 
+For `run_traceable_subagent`, prefer non-leading parent input. Treat `userInput` as source material or the original user wording to inspect, not as the desired answer shape, and do not let raw user wording outweigh the child lane's bounded investigative contract carried by `parentTask`.
+
 ## Why Install It
 
 - It makes stored Local chat state inspectable instead of opaque.
@@ -129,7 +131,7 @@ This repo is not an agent-authoring framework and it does not claim a broad auto
 
 The shipped surface is intentionally Local-first. Persisted-session inspection is the strongest supported lane. Live Local chat actions are bounded operational tools, not a claim of perfect live-chat control.
 
-The experimental traceable-subagent lane is separate from the canonical Local-chat workflow. It exists for narrow grounded child investigations with explicit request contract, budget contract, and runtime tool ledger, not as a broad autonomous framework.
+The experimental traceable-subagent lane is separate from the canonical Local-chat workflow. It exists for narrow grounded child investigations with explicit request contract, budget contract, and runtime tool ledger, not as a broad autonomous framework. In prompt references, use `#runTraceableSubagent`.
 
 ## Portability For VS Code Copilot Developers And Other IDE Teams
 

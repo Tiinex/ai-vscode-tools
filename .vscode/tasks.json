@@ -135,6 +135,20 @@
 			"isBackground": false
 		},
 		{
+			"label": "workspace prompt surface audit",
+			"type": "shell",
+			"command": "npm",
+			"args": [
+				"run",
+				"audit:workspace-prompt-surfaces"
+			],
+			"isBackground": false,
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
 			"label": "editor tab matcher checks",
 			"type": "shell",
 			"command": "node",
