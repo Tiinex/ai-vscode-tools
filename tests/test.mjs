@@ -7187,7 +7187,19 @@ async function runTraceableSubagentChecks() {
       this.value = value;
     }
   };
-  vscode.LanguageModelToolCallPart = vscode.LanguageModelToolCallPart || class LanguageModelToolCallPart {};
+  vscode.LanguageModelToolCallPart = vscode.LanguageModelToolCallPart || class LanguageModelToolCallPart {
+    constructor(callId, name, input) {
+      this.callId = callId;
+      this.name = name;
+      this.input = input;
+    }
+  };
+  vscode.LanguageModelToolResultPart = vscode.LanguageModelToolResultPart || class LanguageModelToolResultPart {
+    constructor(callId, content) {
+      this.callId = callId;
+      this.content = content;
+    }
+  };
   vscode.LanguageModelDataPart = vscode.LanguageModelDataPart || class LanguageModelDataPart {};
   vscode.LanguageModelChatMessage = vscode.LanguageModelChatMessage || {
     User(content) {
@@ -7378,12 +7390,17 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent model selection must preserve an explicit caller-provided exact model selector without adding fallback selectors."
   );
 
+  vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+
   const promptSections = traceableSubagent.buildTraceableSubagentPromptSections({
     userInput: "original wording",
     parentTask: "inspect the controlling code path",
     parentExpectations: {
       expectedSteps: ["search", "read"],
       disallowStrongConclusionWithoutEvidence: true
+    },
+    carriedContext: {
+      fileContext: ["src/traceableSubagent.ts"]
     },
     wrapperPolicy: {
       name: "tiinex-traceable-subagent-v1",
@@ -7406,6 +7423,27 @@ async function runTraceableSubagentChecks() {
   assert(
     promptSections.promptTexts.some((section) => section.includes('"parentTask": "inspect the controlling code path"')),
     "Traceable subagent prompt sections must expose parentTask explicitly."
+  );
+  assert(
+    promptSections.promptTexts.some((section) => section.toLowerCase().includes(JSON.stringify(path.resolve(packageRoot, "src", "traceableSubagent.ts")).slice(1, -1).toLowerCase())),
+    `Traceable subagent prompt sections must surface resolved absolute file anchors for carried file context. Got: ${JSON.stringify(promptSections.promptTexts)}`
+  );
+  assert(
+    promptSections.promptTexts.some((section) => section.includes("Task file anchor rule:")),
+    "Traceable subagent prompt sections must tell the child lane to prefer task file anchors over nearby role-artifact files when they exist."
+  );
+
+  const multiFilePromptSections = traceableSubagent.buildTraceableSubagentPromptSections({
+    userInput: "compare the anchored files",
+    parentTask: "inspect the requested files without drifting into unrelated sources",
+    carriedContext: {
+      fileContext: ["src/traceableSubagent.ts", "tests/test.mjs", "package.json"]
+    }
+  }, ["copilot_readFile"]);
+
+  assert(
+    multiFilePromptSections.promptTexts.some((section) => section.includes("cover each anchored file at least once before drilling deeper into one file")),
+    `Traceable subagent prompt sections must tell the child lane how to spend read budget across multiple anchored files. Got: ${JSON.stringify(multiFilePromptSections.promptTexts)}`
   );
 
   const parsedPayload = traceableSubagent.extractTraceableSubagentPayload('```json\n{"steps":[],"expectedButMissing":[],"stopReason":"completed","completionClaim":"partial","finalSummary":"ok"}\n```');
@@ -7470,6 +7508,7 @@ async function runTraceableSubagentChecks() {
   const originalToolMode = vscode.LanguageModelChatToolMode;
   const originalTextPart = vscode.LanguageModelTextPart;
   const originalToolCallPart = vscode.LanguageModelToolCallPart;
+  const originalToolResultPart = vscode.LanguageModelToolResultPart;
   const originalDataPart = vscode.LanguageModelDataPart;
   const originalChatMessage = vscode.LanguageModelChatMessage;
   const tempRoots = [];
@@ -7480,7 +7519,19 @@ async function runTraceableSubagentChecks() {
       this.value = value;
     }
   };
-  vscode.LanguageModelToolCallPart = class LanguageModelToolCallPart {};
+  vscode.LanguageModelToolCallPart = class LanguageModelToolCallPart {
+    constructor(callId, name, input) {
+      this.callId = callId;
+      this.name = name;
+      this.input = input;
+    }
+  };
+  vscode.LanguageModelToolResultPart = class LanguageModelToolResultPart {
+    constructor(callId, content) {
+      this.callId = callId;
+      this.content = content;
+    }
+  };
   vscode.LanguageModelDataPart = class LanguageModelDataPart {};
   vscode.LanguageModelChatMessage = {
     User(content) {
@@ -7682,6 +7733,133 @@ async function runTraceableSubagentChecks() {
       `Traceable subagent unavailable-tools test did not fail closed on an unusable declared tool surface. Got: ${JSON.stringify(unavailableToolsResult)}`
     );
 
+    let synthesisReservationSendCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest() {
+            synthesisReservationSendCount += 1;
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("call-1", "copilot_readFile", { filePath: "a", startLine: 1, endLine: 10 });
+              yield new vscode.LanguageModelToolCallPart("call-2", "copilot_readFile", { filePath: "a", startLine: 11, endLine: 20 });
+              yield new vscode.LanguageModelToolCallPart("call-3", "copilot_readFile", { filePath: "a", startLine: 21, endLine: 30 });
+              yield new vscode.LanguageModelToolCallPart("call-4", "copilot_readFile", { filePath: "a", startLine: 31, endLine: 40 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-1","intent":"inspect file slices","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"synthesized ok"}');
+            }
+            return { stream: synthesisReservationSendCount === 1 ? firstStream() : secondStream() };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const synthesisReservationResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect a local guard.",
+      parentTask: "Use read-only evidence and return a final bounded trace payload.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 4, maxToolCalls: 4 }
+    });
+
+    assert(
+      synthesisReservationResult.stopReason === "completed"
+        && synthesisReservationResult.completionClaim === "complete"
+        && synthesisReservationResult.finalSummary === "synthesized ok",
+      `Traceable subagent synthesis-reservation test did not reach a final payload after deferring the last batched tool call. Got: ${JSON.stringify(synthesisReservationResult)}`
+    );
+    assert(
+      JSON.stringify(synthesisReservationResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "success", "success", "notRun"])
+        && synthesisReservationResult.toolCalls[3]?.note?.includes("preserve a final synthesis turn"),
+      `Traceable subagent synthesis-reservation test did not defer the last batched tool call to preserve a synthesis turn. Got: ${JSON.stringify(synthesisReservationResult.toolCalls)}`
+    );
+
+    let finalRecoverySendCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(messages, options) {
+            finalRecoverySendCount += 1;
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("recover-call-1", "copilot_readFile", { filePath: "a", startLine: 1, endLine: 10 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelToolCallPart("recover-call-2", "copilot_readFile", { filePath: "a", startLine: 11, endLine: 20 });
+            }
+            async function* thirdStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-recovery","intent":"finish after deferred final iteration","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"recovered ok"}');
+            }
+            assert(
+              !(finalRecoverySendCount === 3 && Array.isArray(options?.tools) && options.tools.length > 0),
+              `Traceable subagent final-recovery test expected the recovery turn to disable tools. Got tools: ${JSON.stringify(options?.tools)}`
+            );
+            if (finalRecoverySendCount === 3) {
+              const recoveryPrompt = JSON.stringify(messages);
+              assert(
+                recoveryPrompt.includes("Tools are disabled for this turn")
+                  && recoveryPrompt.includes("do not print tool-call JSON")
+                  && recoveryPrompt.includes("stopReason 'insufficient_grounding'"),
+                `Traceable subagent final-recovery test did not include the stricter tool-less recovery prompt. Got: ${recoveryPrompt}`
+              );
+            }
+            return {
+              stream: finalRecoverySendCount === 1
+                ? firstStream()
+                : finalRecoverySendCount === 2
+                  ? secondStream()
+                  : thirdStream()
+            };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const finalRecoveryResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect one more slice if needed.",
+      parentTask: "Use read-only evidence and still finish with a final bounded trace payload if the last regular iteration can no longer run tools.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 2, maxToolCalls: 2 }
+    });
+
+    assert(
+      finalRecoverySendCount === 3
+        && finalRecoveryResult.stopReason === "completed"
+        && finalRecoveryResult.completionClaim === "complete"
+        && finalRecoveryResult.finalSummary === "recovered ok",
+      `Traceable subagent final-recovery test did not use one extra tool-less recovery turn after the last regular iteration deferred tool calls. Got: ${JSON.stringify({ finalRecoverySendCount, finalRecoveryResult })}`
+    );
+    assert(
+      JSON.stringify(finalRecoveryResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "notRun"]),
+      `Traceable subagent final-recovery test did not preserve the expected tool ledger across the recovery turn. Got: ${JSON.stringify(finalRecoveryResult.toolCalls)}`
+    );
+
     const ambiguousRootA = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-a-"));
     const ambiguousRootB = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-b-"));
     tempRoots.push(ambiguousRootA, ambiguousRootB);
@@ -7751,6 +7929,12 @@ async function runTraceableSubagentChecks() {
       delete vscode.LanguageModelToolCallPart;
     } else {
       vscode.LanguageModelToolCallPart = originalToolCallPart;
+    }
+
+    if (originalToolResultPart === undefined) {
+      delete vscode.LanguageModelToolResultPart;
+    } else {
+      vscode.LanguageModelToolResultPart = originalToolResultPart;
     }
 
     if (originalDataPart === undefined) {

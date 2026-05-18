@@ -19,6 +19,10 @@ An experimental `run_traceable_subagent` LM tool is now included for a bounded t
 
 For `run_traceable_subagent`, prefer non-leading parent input. Treat `userInput` as source material or the original user wording to inspect, not as the desired answer shape, and do not let raw user wording outweigh the child lane's bounded investigative contract carried by `parentTask`.
 
+As of the latest Windows host validation, `run_traceable_subagent` is now considered reliable for bounded read-only analysis work. The traceable lane has repo-test coverage plus repeated live validation for role/model grounding, fail-closed tool selection, task-file anchoring, synthesis-slot reservation, a tool-less final recovery turn, recovery-output format discipline, and anchored multi-file read-budget coverage.
+
+What is not yet claimed for `run_traceable_subagent` is broader proof around same-lane follow-up behavior, wide non-leading multi-repo epistemic questions, or native `runSubagent` UX parity inside Copilot Chat. Treat those as open reliability-expansion work, not as already-proven guarantees.
+
 ## Why Install It
 
 - It makes stored Local chat state inspectable instead of opaque.
@@ -347,6 +351,26 @@ Each platform lane below is tracked as a checklist.
 		- [x] Manual Test: host validation confirmed focused-send blocked ambiguous targeting when fallback transport coverage was exercised.
 		- [x] Skill: create/send workflow guidance marks focused live-chat send as internal fallback transport rather than a second public route.
 		- [x] Skill Test: focused live-chat fallback guidance has been checked against current behavior.
+
+- Traceable subagent bounded read-only lane
+	- Windows
+		- [x] Use Case: bounded read-only child runs keep `userInput` separate from `parentTask`, ground against explicit task files, and fail closed when model or tool grounding is unsafe.
+		- [x] Use Case: a child run that would otherwise spend its full tool budget can defer excess tool calls, preserve a synthesis slot, and still produce a final bounded payload.
+		- [x] Use Case: the final regular iteration may schedule one tool-less recovery turn, and that recovery turn emits one final JSON object rather than raw tool-request text.
+		- [x] Use Case: when multiple anchored task files are provided, the child lane can cover each anchored file and reach grounded completion in a live Windows probe.
+		- [x] Unit Test: `traceable-subagent` passes with synthesis-reservation and final-recovery regressions in `tests/test.mjs`.
+		- [x] Manual Test: host validation confirmed bounded single-file and harder multi-file read-only probes reached correct final payloads on the current Windows surface.
+		- [ ] Manual Test: same-lane follow-up behavior has been explicitly validated on the current Windows surface.
+		- [ ] Manual Test: a broad non-leading multi-repo epistemic question has been validated on the current Windows surface.
+		- [ ] UX: Copilot Chat rendering has reached near-native `runSubagent` observability without inventing a separate custom surface.
+
+## Traceable Subagent Roadmap
+
+- Preserve the current bounded read-only reliability bar; do not regress fail-closed grounding, synthesis reservation, or final-recovery formatting.
+- Validate one real same-lane follow-up path so the traceable lane is not only trusted for first-turn bounded probes.
+- Validate one broad non-leading multi-repo epistemic question so repo-local reliability is not mistaken for wider evidence orchestration.
+- Improve Copilot Chat rendering toward a more native expander experience by shaping the existing tool result surface rather than inventing a separate UI.
+- Keep README status, tests, and live validation aligned so the repo does not drift into claiming more than the host has actually proved.
 
 ## Validation Protocol
 

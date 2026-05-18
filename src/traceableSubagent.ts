@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import * as vscode from "vscode";
 import { isRuntimeAgentArtifactPath, normalizeArtifactPath } from "./tools/runtimeAgentArtifactStructure";
@@ -593,7 +593,14 @@ export function buildTraceableSubagentPromptSections(
 ): { requestEnvelope: Record<string, unknown>; promptTexts: string[] } {
   const requestEnvelope = buildTraceableSubagentRequestEnvelope(input);
   const wrapperPolicy = normalizedWrapperPolicy(input);
+  const fileContextAnchors = resolveTraceableFileContextAnchors(input.carriedContext?.fileContext);
   const promptTexts = [
+    ...(fileContextAnchors.length > 0
+      ? [
+        `Task file anchors (use these exact absolute paths first when the task refers to them):\n${JSON.stringify(fileContextAnchors, null, 2)}`,
+        "Task file anchor rule:\n- When the parent task or carried file context points at one of these files, treat those absolute paths as the primary read targets.\n- Do not substitute the resolved agent artifact file or body for those task files unless the parent explicitly asks for the role artifact itself."
+      ]
+      : []),
     ...(resolvedAgentArtifact
       ? [
         `Resolved agent role artifact metadata:\n${JSON.stringify({
@@ -612,6 +619,12 @@ export function buildTraceableSubagentPromptSections(
       "Traceable subagent runtime contract:",
       "- This is a bounded Tiinex child lane.",
       "- Keep the original user input distinct from the parent task.",
+      fileContextAnchors.length > 0
+        ? "- If the request includes task file anchors, prefer reading those exact absolute paths before nearby role-artifact files or inferred repo paths."
+        : "- Prefer direct source files named by the parent over inferred nearby files when choosing what to read.",
+      fileContextAnchors.length > 1
+        ? "- If multiple task file anchors are provided, try to cover each anchored file at least once before drilling deeper into one file, unless one file alone clearly determines the answer."
+        : "- Avoid repeated rereads when one grounded read is enough to answer the bounded question.",
       "- Use tools only when they materially improve grounding.",
       `- Do not call ${TRACEABLE_SUBAGENT_TOOL_NAME} from inside this lane.`,
       "- If you rely materially on native runSubagent, report that as opaque delegation.",
@@ -745,7 +758,7 @@ export function extractTraceableSubagentPayload(rawText: string): TraceableSubag
 }
 
 function summarizeToolError(error: unknown): { result: TraceableToolResult; note: string } {
-  if (error instanceof vscode.LanguageModelError) {
+  if (typeof vscode.LanguageModelError === "function" && error instanceof vscode.LanguageModelError) {
     return {
       result: error.code === vscode.LanguageModelError.Blocked().code ? "inputNeeded" : "failure",
       note: error.message
@@ -818,6 +831,45 @@ function summarizeModelCandidates(models: readonly vscode.LanguageModelChat[]): 
     id: model.id,
     version: model.version
   })), 480);
+}
+
+function resolveTraceableFileContextAnchors(fileContext: string[] | undefined): string[] {
+  if (!Array.isArray(fileContext) || fileContext.length === 0) {
+    return [];
+  }
+  const workspaceRoots = (vscode.workspace.workspaceFolders ?? [])
+    .map((folder) => folder.uri.fsPath)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const anchors: string[] = [];
+  const seen = new Set<string>();
+
+  const pushAnchor = (candidate: string | undefined) => {
+    const normalized = candidate?.trim();
+    if (!normalized || seen.has(normalized) || !existsSync(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    anchors.push(normalized);
+  };
+
+  for (const entry of fileContext) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (path.isAbsolute(trimmed)) {
+      pushAnchor(trimmed);
+      continue;
+    }
+    for (const workspaceRoot of workspaceRoots) {
+      pushAnchor(path.resolve(workspaceRoot, trimmed));
+    }
+  }
+
+  return anchors;
 }
 
 export function buildTraceableSubagentModelSelectors(input: Pick<TraceableSubagentInput, "modelSelector">): vscode.LanguageModelChatSelector[] {
@@ -1063,6 +1115,9 @@ export async function runTraceableSubagent(
 
   const messages = buildTraceableSubagentMessages(input, selectedToolNames, resolvedAgentArtifact);
   let lastRawModelText = "";
+  let completedIterations = 0;
+  let lastIterationSummary: Record<string, unknown> | undefined;
+  let allowOneFinalRecoveryTurn = false;
 
   await appendTraceableSubagentDebugEvent(debugLogPath, {
     phase: "model_selected",
@@ -1081,15 +1136,18 @@ export async function runTraceableSubagent(
     allowedToolNames: selectedToolNames
   });
 
-  for (let iteration = 0; iteration < budgetPolicy.maxIterations; iteration += 1) {
+  for (let iteration = 0; iteration < budgetPolicy.maxIterations + (allowOneFinalRecoveryTurn ? 1 : 0); iteration += 1) {
+    completedIterations = iteration + 1;
+    const isFinalRecoveryIteration = iteration >= budgetPolicy.maxIterations;
+    const toolsForIteration = isFinalRecoveryIteration ? [] : selectedTools;
     let response: vscode.LanguageModelChatResponse;
     try {
       response = await model.sendRequest(
         messages,
         {
           justification: "Run a bounded Tiinex traceable subagent lane.",
-          tools: selectedTools,
-          toolMode: selectedTools.length > 0 ? vscode.LanguageModelChatToolMode.Auto : undefined
+          tools: toolsForIteration,
+          toolMode: toolsForIteration.length > 0 ? vscode.LanguageModelChatToolMode.Auto : undefined
         },
         options.token
       );
@@ -1154,6 +1212,23 @@ export async function runTraceableSubagent(
     }
 
     lastRawModelText = textBuffer.trim();
+    await appendTraceableSubagentDebugEvent(debugLogPath, {
+      phase: "iteration_response_summary",
+      iteration,
+      isFinalRecoveryIteration,
+      assistantTextLength: lastRawModelText.length,
+      assistantTextPreview: lastRawModelText ? truncate(lastRawModelText, 220) : "",
+      toolCallCount: toolCallParts.length,
+      toolCallNames: toolCallParts.map((part) => part.name),
+      accumulatedToolCallCount: toolCalls.length
+    });
+    lastIterationSummary = {
+      iteration,
+      isFinalRecoveryIteration,
+      assistantTextLength: lastRawModelText.length,
+      toolCallCount: toolCallParts.length,
+      toolCallNames: toolCallParts.map((part) => part.name)
+    };
     if (toolCallParts.length === 0) {
       const parsedPayload = extractTraceableSubagentPayload(lastRawModelText);
       if (!parsedPayload) {
@@ -1202,7 +1277,32 @@ export async function runTraceableSubagent(
     messages.push(vscode.LanguageModelChatMessage.Assistant(assistantParts));
 
     const toolResultParts: vscode.LanguageModelToolResultPart[] = [];
+    const remainingToolBudget = budgetPolicy.maxToolCalls - toolCalls.length;
+    const shouldReserveSynthesisSlot = remainingToolBudget > 0 && toolCallParts.length >= remainingToolBudget;
+    const maxRunnableToolCallsThisIteration = shouldReserveSynthesisSlot
+      ? Math.max(remainingToolBudget - 1, 0)
+      : remainingToolBudget;
+    let runnableToolCallsThisIteration = 0;
+    let deferredToolCallsThisIteration = 0;
     for (const call of toolCallParts) {
+      if (runnableToolCallsThisIteration >= maxRunnableToolCallsThisIteration) {
+        const note = shouldReserveSynthesisSlot
+          ? `Deferred ${call.name} to preserve a final synthesis turn before the tool budget is exhausted.`
+          : `Tool-call budget exhausted before ${call.name} could run.`;
+        deferredToolCallsThisIteration += 1;
+        toolCalls.push({
+          callId: call.callId,
+          toolName: call.name,
+          argsSummary: summarizeJson(call.input),
+          result: "notRun",
+          note
+        });
+        toolResultParts.push(
+          new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(note)])
+        );
+        continue;
+      }
+
       if (toolCalls.length >= budgetPolicy.maxToolCalls) {
         const note = `Tool-call budget exhausted before ${call.name} could run.`;
         toolCalls.push({
@@ -1239,6 +1339,8 @@ export async function runTraceableSubagent(
           toolInvocationToken: undefined
         }, options.token);
 
+        runnableToolCallsThisIteration += 1;
+
         if (isOpaqueNativeDelegationTool(call.name)) {
           opaqueDelegations.push({
             toolName: call.name,
@@ -1269,6 +1371,57 @@ export async function runTraceableSubagent(
     }
 
     messages.push(vscode.LanguageModelChatMessage.User(toolResultParts));
+
+    const remainingToolCalls = budgetPolicy.maxToolCalls - toolCalls.length;
+    await appendTraceableSubagentDebugEvent(debugLogPath, {
+      phase: "iteration_tool_results",
+      iteration,
+      isFinalRecoveryIteration,
+      shouldReserveSynthesisSlot,
+      requestedToolCallCount: toolCallParts.length,
+      executedToolCallCount: runnableToolCallsThisIteration,
+      deferredToolCallCount: deferredToolCallsThisIteration,
+      remainingToolCalls,
+      accumulatedToolCallCount: toolCalls.length
+    });
+    lastIterationSummary = {
+      ...(lastIterationSummary ?? {}),
+      shouldReserveSynthesisSlot,
+      requestedToolCallCount: toolCallParts.length,
+      executedToolCallCount: runnableToolCallsThisIteration,
+      deferredToolCallCount: deferredToolCallsThisIteration,
+      remainingToolCalls,
+      accumulatedToolCallCount: toolCalls.length
+    };
+
+    const shouldScheduleFinalRecoveryTurn = !isFinalRecoveryIteration
+      && iteration === budgetPolicy.maxIterations - 1
+      && deferredToolCallsThisIteration > 0
+      && runnableToolCallsThisIteration === 0
+      && !allowOneFinalRecoveryTurn;
+    if (shouldScheduleFinalRecoveryTurn) {
+      allowOneFinalRecoveryTurn = true;
+      messages.push(vscode.LanguageModelChatMessage.User([
+        new vscode.LanguageModelTextPart(
+          "Traceable subagent final recovery turn: the last regular iteration ended with deferred tool calls and no runnable tool results. Tools are disabled for this turn. Do not request any more tools, do not print tool-call JSON, and do not print filePath request objects. Using only the evidence already gathered, emit one final JSON object now. If the gathered evidence is still insufficient, emit one final JSON object with stopReason 'insufficient_grounding' and explain the missing evidence there instead of asking for more reads."
+        )
+      ]));
+      await appendTraceableSubagentDebugEvent(debugLogPath, {
+        phase: "final_recovery_turn_scheduled",
+        iteration,
+        deferredToolCallCount: deferredToolCallsThisIteration,
+        remainingToolCalls,
+        accumulatedToolCallCount: toolCalls.length
+      });
+    }
+
+    if (remainingToolCalls <= 1) {
+      messages.push(vscode.LanguageModelChatMessage.User([
+        new vscode.LanguageModelTextPart(
+          `Traceable subagent budget warning: only ${Math.max(remainingToolCalls, 0)} tool call(s) remain. If you already have enough grounded evidence, stop using tools now and emit the final JSON payload.`
+        )
+      ]));
+    }
   }
 
   return finalizeResult(fallbackResult(
@@ -1292,6 +1445,8 @@ export async function runTraceableSubagent(
       traceStatus: toolCalls.some((entry) => entry.result === "notRun") ? "trace-conflicted" : "trace-incomplete"
     }
   ), "budget_exhausted", {
+    completedIterations,
+    lastIterationSummary,
     matchedSelector,
     selectedModel: modelInfo,
     resolvedAgentArtifact: resolvedAgentArtifact ? {
