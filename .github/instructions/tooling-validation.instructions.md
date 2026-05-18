@@ -14,6 +14,8 @@ Use skills for task-shaped operating behavior. Use this file for phase structure
 - Treat the language-model tool surface as the canonical public live-chat workflow surface for this repo on the current host unless a newer maintained artifact explicitly replaces that decision.
 - For same-session live-chat operations on the current host, treat the language-model tools as the only public workflow surface.
 - Current canonical public Local-chat operations are `list_live_agent_chats`, `create_live_agent_chat`, `inspect_live_agent_chat_quiescence`, `reveal_live_agent_chat`, `send_message_to_live_agent_chat`, `close_visible_live_chat_tabs`, and `delete_live_agent_chat_artifacts`.
+- When a canonical public Local-chat operation appears to be missing from the current tool catalog, do one explicit targeted tool lookup for that exact operation before treating it as unavailable, especially after reloads or in long conversations where the visible tool list can lag host state.
+- Do not treat a stale cached tool list or one failed broad discovery pass as sufficient evidence that a canonical public Local-chat tool is truly unavailable on the current host.
 - Treat focused send as internal fallback transport or support-only diagnostic coverage, not as a peer public workflow beside exact-session send.
 - Treat mirrored VS Code commands, fallback transport, debug commands, and support commands as non-peer surfaces unless a maintained artifact explicitly grants a separate operator role.
 - Treat Local-chat LM tool operations as serial single-flight work against shared host state. Concurrent invocation should fail fast rather than queue silently, overlap optimistically, or wait indefinitely.

@@ -17,9 +17,11 @@ user-invocable: false
 - Treat focused-send as an internal fallback transport, not as a competing public LM tool route.
 - On the current host, treat matching mode-backed custom-agent evidence as stronger than the generic persisted request-agent field when validating a custom-agent create result.
 - Treat Local-chat LM tools as serial single-flight work against shared host state; do not intentionally overlap create, list, inspect, reveal, send, close, or delete operations.
+- If a canonical Local-chat LM tool seems to be missing from the current session after reload or later in a long conversation, do one explicit targeted tool lookup for that exact tool name before concluding that the tool is unavailable or reopening a non-canonical route.
 
 ## Core Rules
 - For a new Local chat with a custom agent, prefer `create_live_agent_chat` and expect the host to use a direct agent-open route when available, with `/aa` prompt-file dispatch only as bounded fallback.
+- If `create_live_agent_chat` or `send_message_to_live_agent_chat` does not appear in an initial broad tool listing, re-run discovery with an exact targeted lookup for that specific tool name before treating the canonical path as blocked.
 - Do not rely on `create_live_agent_chat` with `partialQuery: true` as an exact bootstrap on the current host; it can open an editor draft without yielding a persisted session id for exact follow-up.
 - When the target role comes from a maintained workspace agent file, use that file's frontmatter `name` value as `agentName`; do not guess from the filename stem, a slug, or a temporary `/aa-live-chat-...` transport name.
 - If the authoritative agent name has not been read yet, inspect the maintained agent file or other maintained source first and only then call `create_live_agent_chat`.

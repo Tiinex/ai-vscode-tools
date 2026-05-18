@@ -303,7 +303,7 @@ export function buildCreateChatSelectionBlocker(
   options: CreateChatSelectionBlockerOptions = {}
 ): string | undefined {
   if (request.mode?.trim() || request.modelSelector?.id?.trim()) {
-    return "Live createChat with explicit mode or model selection is unsupported on this VS Code/Copilot build because observed create-time selection can inherit the active chat UI state. Use createChat only without selection overrides, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
+    return "create_live_agent_chat with explicit mode or model selection is unsupported on this VS Code/Copilot build because observed create-time selection can inherit the active chat UI state. Use create_live_agent_chat without mode/model overrides, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
   if (request.partialQuery === true) {
@@ -311,7 +311,7 @@ export function buildCreateChatSelectionBlocker(
   }
 
   if (!request.agentName?.trim() && request.allowCreateWithoutAgentForDeleteProbe !== true) {
-    return "Live createChat without an explicit agent is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use create_live_agent_chat with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
+    return "create_live_agent_chat without an explicit agentName is unsafe on this VS Code/Copilot build because a new chat can inherit active chat mode or model state from the currently focused conversation. Use create_live_agent_chat with an explicit agentName, or work against an existing target via reveal_live_agent_chat plus send_message_to_live_agent_chat.";
   }
 
   return undefined;
@@ -319,7 +319,7 @@ export function buildCreateChatSelectionBlocker(
 
 export function buildSendChatSelectionBlocker(request: SendChatMessageRequest): string | undefined {
   if (request.mode || request.modelSelector) {
-    return "Exact-session live chat send cannot currently prove or enforce mode/model selection on this surface; use createChat with explicit verification, or treat send as prompt-only dispatch.";
+    return "send_message_to_live_agent_chat cannot currently prove or enforce mode/model selection on this surface. Omit mode/model and treat the send as prompt-only continuation on this host, or use another explicitly verifiable create surface when one exists.";
   }
 
   if (request.requireSelectionEvidence && request.agentName?.trim()) {
@@ -331,7 +331,7 @@ export function buildSendChatSelectionBlocker(request: SendChatMessageRequest): 
 
 export function buildFocusedChatSelectionBlocker(request: CreateChatRequest): string | undefined {
   if (request.mode) {
-    return "Focused live chat send cannot currently prove or enforce mode selection on this surface; pre-select it in the UI first, or use createChat with explicit verification.";
+    return "Focused live chat send cannot currently prove or enforce mode selection on this surface; pre-select it in the UI first, or omit mode and use send_message_to_live_agent_chat only as prompt-only continuation on this host.";
   }
 
   if (request.modelSelector && request.requireSelectionEvidence) {

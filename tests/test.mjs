@@ -43,10 +43,12 @@ const distCopilotCliTools = path.join(packageRoot, "dist", "tools", "copilot-cli
 const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools", "agentArchitectProcessEvidence.js");
 const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
 const distLanguageModelTools = path.join(packageRoot, "dist", "languageModelTools.js");
+const distTraceableSubagent = path.join(packageRoot, "dist", "traceableSubagent.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
 const extensionSourcePath = path.join(packageRoot, "src", "extension.ts");
 const toolingValidationInstructionPath = path.join(packageRoot, ".github", "instructions", "tooling-validation.instructions.md");
+const localChatCreateSendSkillPath = path.join(packageRoot, ".github", "skills", "local-chat-create-send-workflows", "SKILL.md");
 const languageModelToolsSourcePath = path.join(packageRoot, "src", "languageModelTools.ts");
 const vscodeStubModulePath = path.join(packageRoot, "node_modules", "vscode", "index.js");
 const disposableProbeFallbackScriptPath = path.join(packageRoot, "tools", "create-disposable-local-chat-probe.ps1");
@@ -75,6 +77,7 @@ const expectedLanguageModelToolNames = [
   "estimate_agent_context_breakdown",
   "get_agent_session_profile",
   "survey_agent_sessions",
+  "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
@@ -106,6 +109,7 @@ const expectedExtensionCommandNames = [
 ];
 
 const liveToolManifestParityNames = new Set([
+  "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
@@ -1118,6 +1122,26 @@ async function runChatInteropSelectionChecks() {
       agentName: "agent-architect",
       mode: "Agent",
       modelSelector: { id: "gpt-5.4", vendor: "copilot" }
+    })?.includes("create_live_agent_chat") === true,
+    "Live chat selection blocker test did not name the public create_live_agent_chat surface in the create-time selection blocker."
+  );
+
+  assert(
+    buildCreateChatSelectionBlocker({
+      prompt: "Inspect the target artifact.",
+      agentName: "agent-architect",
+      mode: "Agent",
+      modelSelector: { id: "gpt-5.4", vendor: "copilot" }
+    })?.includes("createChat") === false,
+    "Live chat selection blocker test should not leak the internal createChat name in the public create-time selection blocker."
+  );
+
+  assert(
+    buildCreateChatSelectionBlocker({
+      prompt: "Inspect the target artifact.",
+      agentName: "agent-architect",
+      mode: "Agent",
+      modelSelector: { id: "gpt-5.4", vendor: "copilot" }
     })?.includes("inherit the active chat UI state") === true,
     "Live chat selection blocker test did not block best-effort Local createChat role dispatch after the observed selection-drift failure."
   );
@@ -1156,8 +1180,15 @@ async function runChatInteropSelectionChecks() {
   assert(
     buildCreateChatSelectionBlocker({
       prompt: "Inspect the target artifact."
-    })?.includes("without an explicit agent is unsafe") === true,
+    })?.includes("without an explicit agentName is unsafe") === true,
     "Live chat selection blocker test did not block a plain createChat after the observed inherited-mode neutral-create failure."
+  );
+
+  assert(
+    buildCreateChatSelectionBlocker({
+      prompt: "Inspect the target artifact."
+    })?.includes("agentName") === true,
+    "Live chat selection blocker test did not tell the caller to provide agentName explicitly on the public create surface."
   );
 
   assert(
@@ -7040,6 +7071,7 @@ async function runRoutingGuardChecks() {
   const extensionSource = await fs.readFile(extensionSourcePath, "utf-8");
   const sessionSendWorkflowSource = await fs.readFile(path.join(packageRoot, "src", "chatInterop", "sessionSendWorkflow.ts"), "utf-8");
   const toolingValidationInstructions = await fs.readFile(toolingValidationInstructionPath, "utf-8");
+  const localChatCreateSendSkill = await fs.readFile(localChatCreateSendSkillPath, "utf-8");
   const languageModelToolsSource = await fs.readFile(languageModelToolsSourcePath, "utf-8");
 
   assert(
@@ -7061,6 +7093,18 @@ async function runRoutingGuardChecks() {
   assert(
     readme.includes("Bounded inspection surfaces should be preferred over opening raw session JSONL directly."),
     "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
+  );
+  assert(
+    readme.includes("run_traceable_subagent"),
+    "README must document the experimental traceable subagent LM tool."
+  );
+  assert(
+    readme.includes("The canonical public live-chat workflow surface is the language-model tool family"),
+    "README routing guard must keep the live-chat LM tool family marked as the canonical public workflow surface."
+  );
+  assert(
+    readme.includes("commands are kept as Tiinex Sessions view UI affordances"),
+    "README routing guard must keep mirrored live-chat commands downgraded to sessions-view UI affordances rather than peer workflows."
   );
   assert(
     extensionSource.includes('postCreateTimeoutMs", 900000'),
@@ -7085,6 +7129,14 @@ async function runRoutingGuardChecks() {
   assert(
     !toolingValidationInstructions.includes("create-disposable-local-chat-probe.ps1"),
     "Maintained validation instructions must not point back to the removed disposable probe PowerShell fallback."
+  );
+  assert(
+    toolingValidationInstructions.includes("explicit targeted tool lookup"),
+    "Maintained validation instructions must require an explicit targeted tool lookup before treating a canonical Local-chat tool as unavailable in a long conversation or after reload."
+  );
+  assert(
+    localChatCreateSendSkill.includes("explicit targeted tool lookup"),
+    "Local-chat create/send skill must require an explicit targeted tool lookup before concluding that a canonical Local-chat tool is unavailable."
   );
 
   for (const toolName of [
@@ -7112,6 +7164,119 @@ async function runRoutingGuardChecks() {
   assert(
     sessionSendWorkflowSource.includes("focusLikelyEditorChat(chatInterop"),
     "Canonical session send must keep the editor-hosted focused fallback available behind the canonical path when direct exact send is unavailable."
+  );
+}
+
+async function runTraceableSubagentChecks() {
+  const traceableSubagent = await import(pathToFileURL(distTraceableSubagent).href);
+
+  const selectedTools = traceableSubagent.selectTraceableSubagentTools([
+    { name: "run_traceable_subagent", description: "self" },
+    { name: "list_agent_sessions", description: "read only" },
+    { name: "create_live_agent_chat", description: "mutation" },
+    { name: "runSubagent", description: "native" }
+  ], {
+    userInput: "show me the controlling code path",
+    parentTask: "inspect the code path",
+    blockedToolNames: []
+  });
+
+  assert(
+    selectedTools.some((tool) => tool.name === "list_agent_sessions"),
+    "Traceable subagent tool selection must keep safe read-only tools available by default."
+  );
+  assert(
+    !selectedTools.some((tool) => tool.name === "run_traceable_subagent"),
+    "Traceable subagent tool selection must block self-reentry by default."
+  );
+  assert(
+    !selectedTools.some((tool) => tool.name === "create_live_agent_chat"),
+    "Traceable subagent tool selection must block live mutation tools by default."
+  );
+  assert(
+    selectedTools.some((tool) => tool.name === "runSubagent"),
+    "Traceable subagent tool selection must allow native runSubagent as an opaque delegation lane."
+  );
+
+  const promptSections = traceableSubagent.buildTraceableSubagentPromptSections({
+    userInput: "original wording",
+    parentTask: "inspect the controlling code path",
+    parentExpectations: {
+      expectedSteps: ["search", "read"],
+      disallowStrongConclusionWithoutEvidence: true
+    },
+    wrapperPolicy: {
+      name: "tiinex-traceable-subagent-v1",
+      closureMode: "bounded-summary"
+    }
+  }, ["list_agent_sessions", "runSubagent"]);
+
+  assert(
+    promptSections.requestEnvelope.userInput === "original wording",
+    "Traceable subagent request envelope must keep userInput as a first-class field."
+  );
+  assert(
+    promptSections.requestEnvelope.parentTask === "inspect the controlling code path",
+    "Traceable subagent request envelope must keep parentTask separate from userInput."
+  );
+  assert(
+    promptSections.promptTexts.some((section) => section.includes('"userInput": "original wording"')),
+    "Traceable subagent prompt sections must expose userInput explicitly."
+  );
+  assert(
+    promptSections.promptTexts.some((section) => section.includes('"parentTask": "inspect the controlling code path"')),
+    "Traceable subagent prompt sections must expose parentTask explicitly."
+  );
+
+  const parsedPayload = traceableSubagent.extractTraceableSubagentPayload('```json\n{"steps":[],"expectedButMissing":[],"stopReason":"completed","completionClaim":"partial","finalSummary":"ok"}\n```');
+
+  assert(
+    parsedPayload?.stopReason === "completed" && parsedPayload?.completionClaim === "partial",
+    "Traceable subagent payload extraction must parse fenced JSON child output."
+  );
+
+  const markdown = traceableSubagent.renderTraceableSubagentMarkdown({
+    request: {
+      userInput: "original wording",
+      parentTask: "inspect the controlling code path"
+    },
+    model: {
+      vendor: "copilot",
+      family: "gpt-5",
+      id: "gpt-5-mini",
+      version: "test"
+    },
+    allowedToolNames: ["list_agent_sessions", "runSubagent"],
+    toolCalls: [
+      {
+        callId: "call-1",
+        toolName: "runSubagent",
+        argsSummary: "{}",
+        result: "success"
+      }
+    ],
+    traceStatus: "trace-incomplete",
+    steps: [],
+    expectedButMissing: [],
+    stopReason: "completed",
+    completionClaim: "partial",
+    finalSummary: "ok",
+    opaqueDelegations: [
+      {
+        toolName: "runSubagent",
+        note: "Native runSubagent delegation remains opaque from the parent trace lane."
+      }
+    ],
+    rawModelText: "{\"finalSummary\":\"ok\"}"
+  });
+
+  assert(
+    markdown.includes("# Traceable Subagent Result"),
+    "Traceable subagent markdown renderer must emit the result heading."
+  );
+  assert(
+    markdown.includes("Native runSubagent delegation remains opaque"),
+    "Traceable subagent markdown renderer must surface opaque delegation notes."
   );
 }
 
@@ -7615,6 +7780,7 @@ const namedChecks = [
   ["pending-request-heuristics", runPendingRequestHeuristicChecks],
   ["copilot-cli-inspection", runCopilotCliInspectionChecks],
   ["agent-architect-process-evidence", runAgentArchitectProcessEvidenceChecks],
+  ["traceable-subagent", runTraceableSubagentChecks],
   ["manifest", runManifestChecks],
   ["routing-guard", runRoutingGuardChecks]
 ];

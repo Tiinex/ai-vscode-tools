@@ -35,6 +35,12 @@ import {
   launchOfflineLocalChatCleanup,
   queueOfflineLocalChatCleanupRequest
 } from "./offlineLocalChatCleanup";
+import {
+  renderTraceableSubagentMarkdown,
+  runTraceableSubagent,
+  TRACEABLE_SUBAGENT_TOOL_NAME,
+  type TraceableSubagentInput
+} from "./traceableSubagent";
 
 type JsonSchema = Record<string, unknown>;
 type DetailLevel = "summary" | "full";
@@ -672,6 +678,135 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: TRACEABLE_SUBAGENT_TOOL_NAME,
+    displayName: "Run Traceable Subagent",
+    userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
+    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentTask, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, and treats native runSubagent delegation as opaque rather than fully trace-supported. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
+    toolReferenceName: "traceable-subagent",
+    inputSchema: {
+      type: "object",
+      properties: {
+        userInput: {
+          type: "string",
+          description: "The original or near-original user wording for the task being delegated. Keep this distinct from parentTask."
+        },
+        parentTask: {
+          type: "string",
+          description: "The exact task that the parent wants the child lane to perform."
+        },
+        parentExpectations: {
+          type: "object",
+          properties: {
+            expectedSteps: {
+              type: "array",
+              description: "Optional expected steps the parent wants before trusting a strong conclusion.",
+              items: {
+                type: "string"
+              }
+            },
+            expectedToolFamilies: {
+              type: "array",
+              description: "Optional tool families or specific tools the parent expects to appear in the trace.",
+              items: {
+                type: "string"
+              }
+            },
+            disallowStrongConclusionWithoutEvidence: {
+              type: "boolean",
+              description: "When true, the child should avoid strong completion tone without grounded evidence."
+            }
+          }
+        },
+        carriedContext: {
+          type: "object",
+          properties: {
+            priorTurnsSummary: {
+              type: "string",
+              description: "Optional bounded summary of prior turns carried into the child run."
+            },
+            fileContext: {
+              type: "array",
+              description: "Optional file paths or file-context labels carried into the child run.",
+              items: {
+                type: "string"
+              }
+            },
+            reductions: {
+              type: "array",
+              description: "Optional compacted reductions or constraints that should remain explicit to the child.",
+              items: {
+                type: "string"
+              }
+            }
+          }
+        },
+        wrapperPolicy: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description: "Optional explicit lane name for the runtime wrapper."
+            },
+            closureMode: {
+              type: "string",
+              description: "Closure contract for the child lane output.",
+              enum: ["open", "bounded-summary", "explicit-final"]
+            }
+          }
+        },
+        budgetPolicy: {
+          type: "object",
+          properties: {
+            maxIterations: {
+              type: "number",
+              description: "Maximum number of model iterations for the child lane."
+            },
+            maxToolCalls: {
+              type: "number",
+              description: "Maximum number of runtime-observed tool calls before the lane must stop or report notRun."
+            }
+          }
+        },
+        modelSelector: {
+          type: "object",
+          properties: {
+            vendor: {
+              type: "string",
+              description: "Optional model vendor selector for the child run. Defaults to copilot."
+            },
+            family: {
+              type: "string",
+              description: "Optional model family selector for the child run."
+            },
+            id: {
+              type: "string",
+              description: "Optional exact model id selector for the child run."
+            },
+            version: {
+              type: "string",
+              description: "Optional model version selector for the child run."
+            }
+          }
+        },
+        allowedToolNames: {
+          type: "array",
+          description: "Optional exact tool-name allowlist for the child lane. When omitted, the lane uses the host tool list minus its default blocked set.",
+          items: {
+            type: "string"
+          }
+        },
+        blockedToolNames: {
+          type: "array",
+          description: "Optional extra exact tool names to block for this run in addition to the default self/mutation blocklist.",
+          items: {
+            type: "string"
+          }
+        }
+      },
+      required: ["userInput", "parentTask"]
+    }
+  },
+  {
     name: "inspect_copilot_cli_session",
     displayName: "Inspect Copilot CLI Session",
     userDescription: "Render a bounded inspection of one Copilot CLI session-state entry.",
@@ -886,8 +1021,8 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
   {
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
-    userDescription: "Preferred clean new-chat route when the first visible message should carry the requested agent.",
-    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it may use bounded temporary prompt-file slash dispatch as fallback transport for the requested role. Prefer this tool for normal agent-chat creation, but treat prompt-file dispatch as fallback rather than the preferred semantic carrier. When strict selection evidence is requested, this tool evaluates that from the created session after dispatch rather than pretending it can prove create-time participant state before the session exists. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
+    userDescription: "Preferred clean new-chat route. On this host, supply agentName explicitly when creating a fresh live chat.",
+    modelDescription: "Direct Local new-chat create route. Opens a new chat and sends the first prompt. On this host, provide agentName explicitly and avoid mode/model overrides for the first attempt; a neutral new chat without agentName is unsafe and will fail fast, and create-time mode/model selection is host-bounded. When agentName is supplied, the host will prefer a direct agent-open command when one is exposed; otherwise it may use bounded temporary prompt-file slash dispatch as fallback transport for the requested role. Prefer this tool for normal agent-chat creation, but treat prompt-file dispatch as fallback rather than the preferred semantic carrier. When strict selection evidence is requested, this tool evaluates that from the created session after dispatch rather than pretending it can prove create-time participant state before the session exists. This tool affects the VS Code UI and rejects concurrent live-chat operations.",
     toolReferenceName: "create-live-agent-chat",
     inputSchema: {
       type: "object",
@@ -898,15 +1033,15 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         agentName: {
           type: "string",
-          description: "Optional custom agent name for the first message in a new chat. When supplied, the host will prefer a direct agent-open route when available and otherwise use bounded temporary prompt-file slash dispatch as fallback transport. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
+          description: "Custom agent name for the first message in a new chat. On this host, treat agentName as effectively required for safe new-chat creation; when supplied, the host will prefer a direct agent-open route when available and otherwise use bounded temporary prompt-file slash dispatch as fallback transport. For ordinary follow-ups in an already-correct chat, omit agentName instead of repeating it."
         },
         mode: {
           type: "string",
-          description: "Optional chat mode, for example Agent."
+          description: "Optional chat mode, for example Agent. On this host, create-time mode selection is host-bounded and may be rejected for exact workflow use."
         },
         modelId: {
           type: "string",
-          description: "Optional model identifier to select for the live chat."
+          description: "Optional model identifier to select for the live chat. On this host, create-time model selection is host-bounded and may be rejected for exact workflow use."
         },
         modelVendor: {
           type: "string",
@@ -914,7 +1049,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         partialQuery: {
           type: "boolean",
-          description: "Open with a partial query instead of dispatching a full request when supported."
+          description: "Open with a partial query instead of dispatching a full request when supported. Do not use this for exact workflow bootstrap on this host; it can open only a draft without a persisted created session id."
         },
         blockOnResponse: {
           type: "boolean",
@@ -1053,6 +1188,7 @@ const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
 
 function isEnabledToolContribution(toolName: string): boolean {
   return isFirstSliceSessionTool(toolName)
+    || toolName === TRACEABLE_SUBAGENT_TOOL_NAME
     || (LOCAL_CHAT_CONTROL_SURFACES_ENABLED && LOCAL_CHAT_CONTROL_TOOL_NAMES.has(toolName))
     || (LOCAL_CHAT_MUTATION_SURFACES_ENABLED && LOCAL_CHAT_MUTATION_TOOL_NAMES.has(toolName));
 }
@@ -1815,6 +1951,16 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
   }
 
   context.subscriptions.push(
+    vscode.lm.registerTool(
+      TRACEABLE_SUBAGENT_TOOL_NAME,
+      new ReadOnlyTool<TraceableSubagentInput>(
+        "Run Traceable Subagent",
+        () => "Running traceable subagent",
+        async (input) => renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
+          accessInformation: context.languageModelAccessInformation
+        }))
+      )
+    ),
     vscode.lm.registerTool(
       "invoke_youtube_host_command",
       new LiveChatTool<InvokeYouTubeHostCommandInput>(

@@ -15,6 +15,8 @@ In practice, these tools are primarily used to support the companion `ai` repo a
 
 As of May 2026, the persisted inspection and cleanup lanes are in active use and the focused repo checks pass, but the live Local chat tooling is not yet fully end-to-end validated on the current runtime surface. Treat the live tooling as in progress rather than fully release-proven until that final runtime validation is complete.
 
+An experimental `run_traceable_subagent` LM tool is now included for a bounded trace-first child lane. It is intentionally v1: it keeps `userInput` separate from `parentTask`, blocks self-reentry, and values explicit runtime trace over native `runSubagent` UX parity.
+
 ## Why Install It
 
 - It makes stored Local chat state inspectable instead of opaque.
@@ -65,6 +67,10 @@ Scoped VS Code session-view actions for manual operator use include:
 - `Tiinex: Delete Local Chat Artifacts`
 - `Tiinex: Create Local Chat`
 - `Tiinex: Send Message To Local Chat`
+
+The canonical public live-chat workflow surface is the language-model tool family such as `create_live_agent_chat`, `send_message_to_live_agent_chat`, and `reveal_live_agent_chat`.
+
+The mirrored `tiinex.aiVscodeTools.*LiveChat*` commands are kept as Tiinex Sessions view UI affordances over the same internal service, not as peer public workflows beside the LM tools.
 
 For agent-facing same-session live-chat workflows, prefer the language-model tools rather than these mirrored extension commands.
 
@@ -122,6 +128,8 @@ This repo is not an agent-authoring framework and it does not claim a broad auto
 - queue exact offline cleanup when destructive work should happen only after VS Code exits
 
 The shipped surface is intentionally Local-first. Persisted-session inspection is the strongest supported lane. Live Local chat actions are bounded operational tools, not a claim of perfect live-chat control.
+
+The experimental traceable-subagent lane is separate from the canonical Local-chat workflow. It exists for narrow grounded child investigations with explicit request contract, budget contract, and runtime tool ledger, not as a broad autonomous framework.
 
 ## Portability For VS Code Copilot Developers And Other IDE Teams
 
