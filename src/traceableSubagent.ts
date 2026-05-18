@@ -903,10 +903,12 @@ export async function runTraceableSubagent(
   }
 
   const availableToolNames = vscode.lm.tools.map((tool) => tool.name);
+  const requestedAllowedToolNames = uniqueStrings(input.allowedToolNames);
+  const inheritedAllowedToolNames = resolvedAgentArtifact?.toolDeclarations ?? [];
   const selectedTools = selectTraceableSubagentTools(vscode.lm.tools, {
-    allowedToolNames: input.allowedToolNames,
+    allowedToolNames: requestedAllowedToolNames,
     blockedToolNames: input.blockedToolNames,
-    defaultAllowedToolNames: resolvedAgentArtifact?.toolDeclarations
+    defaultAllowedToolNames: inheritedAllowedToolNames
   });
   const selectedToolNames = selectedTools.map((tool) => tool.name);
 
@@ -914,9 +916,9 @@ export async function runTraceableSubagent(
     phase: "tool_surface_snapshot",
     availableToolCount: availableToolNames.length,
     availableToolNames,
-    requestedAllowedToolNames: uniqueStrings(input.allowedToolNames),
+    requestedAllowedToolNames,
     requestedBlockedToolNames: uniqueStrings(input.blockedToolNames),
-    inheritedAllowedToolNames: resolvedAgentArtifact?.toolDeclarations ?? [],
+    inheritedAllowedToolNames,
     selectedToolCount: selectedToolNames.length,
     selectedToolNames
   });
@@ -967,6 +969,24 @@ export async function runTraceableSubagent(
         filePath: resolvedAgentArtifact.filePath,
         modelDeclaration: resolvedAgentArtifact.modelDeclaration
       } : undefined,
+      selectorAttempts: selectors
+    });
+  }
+
+  if (selectedToolNames.length === 0 && (requestedAllowedToolNames.length > 0 || inheritedAllowedToolNames.length > 0)) {
+    return finalizeResult(fallbackResult(
+      input,
+      [],
+      `Traceable subagent tool selection resolved no runnable tools from the requested surface. requestedAllowed=${summarizeJson(requestedAllowedToolNames, 220)}; inheritedAllowed=${summarizeJson(inheritedAllowedToolNames, 220)}; available=${summarizeJson(availableToolNames, 260)}`,
+      "tool_blocked",
+      "unresolved",
+      {
+        allowedToolNames: selectedToolNames
+      }
+    ), "tool_surface_unavailable", {
+      requestedAllowedToolNames,
+      inheritedAllowedToolNames,
+      availableToolNames,
       selectorAttempts: selectors
     });
   }

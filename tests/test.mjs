@@ -7633,6 +7633,55 @@ async function runTraceableSubagentChecks() {
       `Traceable subagent unsupported-model test did not fail closed on an unrecognized model declaration. Got: ${JSON.stringify(unsupportedModelResult)}`
     );
 
+    const unavailableToolsRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-unavailable-tools-"));
+    tempRoots.push(unavailableToolsRoot);
+    const unavailableToolsAgentsDir = path.join(unavailableToolsRoot, ".github", "agents");
+    await fs.mkdir(unavailableToolsAgentsDir, { recursive: true });
+    await fs.writeFile(path.join(unavailableToolsAgentsDir, "echo.gpt-5-mini.candidate.agent.md"), [
+      "---",
+      "name: Echo (GPT-5 mini) (Candidate)",
+      "description: Unavailable tool surface test.",
+      "argument-hint: Test only.",
+      "model: GPT-5 mini (copilot)",
+      "tools: [tiinex.ai-vscode-tools/listAgentSessions]",
+      "candidate: true",
+      "---",
+      "",
+      "You are a test agent with a tool surface that cannot be satisfied on this host snapshot."
+    ].join("\n"), "utf8");
+
+    let unavailableToolsSelectCalls = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: unavailableToolsRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "create_live_agent_chat", description: "mutation" }
+      ],
+      async selectChatModels() {
+        unavailableToolsSelectCalls += 1;
+        return [];
+      },
+      async invokeTool() {
+        throw new Error("Traceable unavailable-tools test should not invoke tools.");
+      }
+    };
+
+    const unavailableToolsResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the unavailable tool surface.",
+      parentTask: "Fail closed if the declared tool surface resolves to no runnable tools.",
+      agentRole: { name: "Echo (GPT-5 mini) (Candidate)" }
+    });
+
+    assert(
+      unavailableToolsSelectCalls === 0,
+      `Traceable subagent unavailable-tools test reached model selection unexpectedly. Got calls: ${unavailableToolsSelectCalls}`
+    );
+    assert(
+      unavailableToolsResult.stopReason === "tool_blocked"
+        && unavailableToolsResult.finalSummary.includes("resolved no runnable tools")
+        && unavailableToolsResult.finalSummary.includes("listAgentSessions"),
+      `Traceable subagent unavailable-tools test did not fail closed on an unusable declared tool surface. Got: ${JSON.stringify(unavailableToolsResult)}`
+    );
+
     const ambiguousRootA = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-a-"));
     const ambiguousRootB = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-b-"));
     tempRoots.push(ambiguousRootA, ambiguousRootB);
