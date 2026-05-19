@@ -7446,6 +7446,24 @@ async function runTraceableSubagentChecks() {
     `Traceable subagent prompt sections must tell the child lane how to spend read budget across multiple anchored files. Got: ${JSON.stringify(multiFilePromptSections.promptTexts)}`
   );
 
+  const followUpPromptSections = traceableSubagent.buildTraceableSubagentPromptSections({
+    userInput: "answer the narrower follow-up",
+    parentTask: "refine the earlier finding with one bounded follow-up judgment",
+    carriedContext: {
+      priorTurnsSummary: "Earlier run found the controlling guard in src/traceableSubagent.ts and stopped after a bounded read-only pass.",
+      fileContext: ["src/traceableSubagent.ts"]
+    }
+  }, ["copilot_readFile"]);
+
+  assert(
+    followUpPromptSections.promptTexts.some((section) => section.includes("Prior turns summary for this run:"))
+      && followUpPromptSections.promptTexts.some((section) => section.includes("Follow-up rule:"))
+      && followUpPromptSections.promptTexts.some((section) => section.includes("answer that question directly rather than re-solving the whole previous task"))
+      && followUpPromptSections.promptTexts.some((section) => section.includes("start from that finding and only reread the minimum source needed"))
+      && followUpPromptSections.promptTexts.some((section) => section.includes("Do not restart from the top of a large file")),
+    `Traceable subagent prompt sections must surface carried prior-turn context and explicit follow-up discipline. Got: ${JSON.stringify(followUpPromptSections.promptTexts)}`
+  );
+
   const parsedPayload = traceableSubagent.extractTraceableSubagentPayload('```json\n{"steps":[],"expectedButMissing":[],"stopReason":"completed","completionClaim":"partial","finalSummary":"ok"}\n```');
 
   assert(
@@ -7819,6 +7837,7 @@ async function runTraceableSubagentChecks() {
               assert(
                 recoveryPrompt.includes("Tools are disabled for this turn")
                   && recoveryPrompt.includes("do not print tool-call JSON")
+                  && recoveryPrompt.includes("do not say that you are going to read more")
                   && recoveryPrompt.includes("stopReason 'insufficient_grounding'"),
                 `Traceable subagent final-recovery test did not include the stricter tool-less recovery prompt. Got: ${recoveryPrompt}`
               );

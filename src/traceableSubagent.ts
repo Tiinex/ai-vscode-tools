@@ -595,6 +595,12 @@ export function buildTraceableSubagentPromptSections(
   const wrapperPolicy = normalizedWrapperPolicy(input);
   const fileContextAnchors = resolveTraceableFileContextAnchors(input.carriedContext?.fileContext);
   const promptTexts = [
+    ...(input.carriedContext?.priorTurnsSummary?.trim()
+      ? [
+        `Prior turns summary for this run:\n${input.carriedContext.priorTurnsSummary.trim()}`,
+        "Follow-up rule:\n- Treat the prior turns summary as carried context for continuity, not as a replacement for fresh grounding on the current parent task.\n- If the current turn asks a narrower follow-up question, answer that question directly rather than re-solving the whole previous task unless new grounding makes that necessary.\n- If the prior turns summary already contains a directly relevant earlier finding, start from that finding and only reread the minimum source needed to verify or refine it.\n- Do not restart from the top of a large file unless the narrower follow-up actually requires that broader reread."
+      ]
+      : []),
     ...(fileContextAnchors.length > 0
       ? [
         `Task file anchors (use these exact absolute paths first when the task refers to them):\n${JSON.stringify(fileContextAnchors, null, 2)}`,
@@ -1403,7 +1409,7 @@ export async function runTraceableSubagent(
       allowOneFinalRecoveryTurn = true;
       messages.push(vscode.LanguageModelChatMessage.User([
         new vscode.LanguageModelTextPart(
-          "Traceable subagent final recovery turn: the last regular iteration ended with deferred tool calls and no runnable tool results. Tools are disabled for this turn. Do not request any more tools, do not print tool-call JSON, and do not print filePath request objects. Using only the evidence already gathered, emit one final JSON object now. If the gathered evidence is still insufficient, emit one final JSON object with stopReason 'insufficient_grounding' and explain the missing evidence there instead of asking for more reads."
+          "Traceable subagent final recovery turn: the last regular iteration ended with deferred tool calls and no runnable tool results. Tools are disabled for this turn. Do not request any more tools, do not print tool-call JSON, do not print filePath request objects, and do not say that you are going to read more. Using only the evidence already gathered, emit one final JSON object now. If the gathered evidence is still insufficient, emit one final JSON object with stopReason 'insufficient_grounding' and explain the missing evidence there instead of asking for more reads."
         )
       ]));
       await appendTraceableSubagentDebugEvent(debugLogPath, {
