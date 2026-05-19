@@ -363,6 +363,28 @@ function youtubeHostCommandInvocationMessage(input: InvokeYouTubeHostCommandInpu
   }
 }
 
+function summarizeInvocationText(value: string | undefined, maxChars = 32): string | undefined {
+  const trimmed = value?.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length <= maxChars
+    ? trimmed
+    : `${trimmed.slice(0, Math.max(0, maxChars - 16))}... [truncated]`;
+}
+
+function traceableSubagentInvocationMessage(input: TraceableSubagentInput): string {
+  const summary = summarizeInvocationText(input.parentTask) ?? summarizeInvocationText(input.userInput);
+  const fileCount = Array.isArray(input.carriedContext?.fileContext) ? input.carriedContext.fileContext.length : 0;
+  const scope = fileCount > 0 ? ` (${fileCount} file${fileCount === 1 ? "" : "s"})` : "";
+
+  if (!summary || fileCount > 0) {
+    return `Tracing subagent${scope}`;
+  }
+
+  return `Tracing subagent: ${summary}`;
+}
+
 type DiscoveryScope = "all-local" | "current-workspace";
 
 interface ListLiveChatsInput {
@@ -1968,7 +1990,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
       TRACEABLE_SUBAGENT_TOOL_NAME,
       new ReadOnlyTool<TraceableSubagentInput>(
         "Run Traceable Subagent",
-        () => "Running traceable subagent",
+        (input) => traceableSubagentInvocationMessage(input),
         async (input) => renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
           accessInformation: context.languageModelAccessInformation,
           debugLogDir: context.globalStorageUri.fsPath

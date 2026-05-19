@@ -7474,7 +7474,8 @@ async function runTraceableSubagentChecks() {
   const markdown = traceableSubagent.renderTraceableSubagentMarkdown({
     request: {
       userInput: "original wording",
-      parentTask: "inspect the controlling code path"
+      parentTask: "inspect the controlling code path",
+      notes: "x".repeat(2500)
     },
     model: {
       vendor: "copilot",
@@ -7492,8 +7493,21 @@ async function runTraceableSubagentChecks() {
       }
     ],
     traceStatus: "trace-incomplete",
-    steps: [],
-    expectedButMissing: [],
+    steps: [
+      {
+        id: "step-1",
+        intent: "Inspect the controlling code path",
+        status: "completed",
+        note: "Observed the bounded trace surface."
+      }
+    ],
+    expectedButMissing: [
+      {
+        kind: "step",
+        label: "Read exact file slice",
+        reason: "The child stopped after an opaque delegation."
+      }
+    ],
     stopReason: "completed",
     completionClaim: "partial",
     finalSummary: "ok",
@@ -7512,8 +7526,44 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent markdown renderer must emit the result heading."
   );
   assert(
+    markdown.includes("## Outcome"),
+    "Traceable subagent markdown renderer must lead with an outcome section rather than raw JSON only."
+  );
+  assert(
+    markdown.includes("## Recent Steps"),
+    "Traceable subagent markdown renderer must surface recent steps in a readable section."
+  );
+  assert(
+    markdown.includes("## Tool Activity"),
+    "Traceable subagent markdown renderer must surface tool activity in a readable section."
+  );
+  assert(
+    markdown.includes("## Expected But Missing"),
+    "Traceable subagent markdown renderer must surface expected-but-missing items as a readable section."
+  );
+  assert(
+    markdown.includes("Read exact file slice: The child stopped after an opaque delegation."),
+    "Traceable subagent markdown renderer must surface expected-but-missing details outside raw JSON only."
+  );
+  assert(
+    markdown.includes("## Opaque Delegations"),
+    "Traceable subagent markdown renderer must surface opaque delegations as a readable section."
+  );
+  assert(
     markdown.includes("Native runSubagent delegation remains opaque"),
     "Traceable subagent markdown renderer must surface opaque delegation notes."
+  );
+  assert(
+    markdown.includes("## Technical Details"),
+    "Traceable subagent markdown renderer must keep the full technical trace available after the readable summary sections."
+  );
+  assert(
+    markdown.includes("### Request Contract Preview"),
+    "Traceable subagent markdown renderer must label technical request details as a bounded preview for chat readability."
+  );
+  assert(
+    markdown.includes("[truncated]"),
+    "Traceable subagent markdown renderer must bound oversized technical JSON blocks instead of emitting one giant blob."
   );
   assert(
     markdown.includes("/tmp/traceable-subagent-debug.jsonl"),
@@ -7877,6 +7927,53 @@ async function runTraceableSubagentChecks() {
     assert(
       JSON.stringify(finalRecoveryResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "notRun"]),
       `Traceable subagent final-recovery test did not preserve the expected tool ledger across the recovery turn. Got: ${JSON.stringify(finalRecoveryResult.toolCalls)}`
+    );
+
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest() {
+            async function* stream() {
+              yield new vscode.LanguageModelTextPart("I will read the remainder of tests/test.mjs to find explicit traceable-subagent tests.\n\n{\"filePath\":\"c:\\\\repo\\\\tests\\\\test.mjs\",\"startLine\":1200,\"endLine\":2400}");
+            }
+            return { stream: stream() };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const unparseablePayloadResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "inspect current status",
+      parentTask: "return a bounded summary",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 2, maxToolCalls: 2 }
+    });
+
+    assert(
+      unparseablePayloadResult.stopReason === "insufficient_grounding"
+        && unparseablePayloadResult.completionClaim === "unresolved"
+        && unparseablePayloadResult.finalSummary.includes("did not emit a final JSON payload")
+        && unparseablePayloadResult.expectedButMissing.some((item) => item.label === "Final JSON payload"),
+      `Traceable subagent unparseable-payload fallback test did not produce a disciplined unresolved summary. Got: ${JSON.stringify(unparseablePayloadResult)}`
+    );
+    assert(
+      unparseablePayloadResult.rawModelText?.includes("I will read the remainder")
+        && !unparseablePayloadResult.finalSummary.includes("I will read the remainder"),
+      "Traceable subagent unparseable-payload fallback must keep raw child output available without promoting it into the final summary."
     );
 
     const ambiguousRootA = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-a-"));
@@ -8371,6 +8468,31 @@ async function runLiveToolMutexChecks() {
 
     const createTool = registeredTools.get("create_live_agent_chat");
     assert(createTool && typeof createTool.invoke === "function", "Live tool mutex test could not capture the create_live_agent_chat tool registration.");
+
+    const traceableTool = registeredTools.get("run_traceable_subagent");
+    assert(
+      traceableTool && typeof traceableTool.prepareInvocation === "function",
+      "Live tool mutex test could not capture the run_traceable_subagent tool registration."
+    );
+
+    const traceablePrepared = traceableTool.prepareInvocation({
+      input: {
+        userInput: "compare plan and implementation",
+        parentTask: "determine what crossed from plan into verified implementation and what remains open",
+        carriedContext: {
+          fileContext: ["a.ts", "b.ts"]
+        }
+      }
+    });
+
+    assert(
+      String(traceablePrepared?.invocationMessage ?? "") === "Tracing subagent (2 files)",
+      `Traceable subagent invocation message must stay short and scope-oriented for anchored runs. Got: ${String(traceablePrepared?.invocationMessage ?? "")}`
+    );
+    assert(
+      !String(traceablePrepared?.invocationMessage ?? "").includes("determine what crossed from plan into verified implementation"),
+      "Traceable subagent invocation message must avoid carrying long task prose into the collapsed running row for anchored runs."
+    );
 
     const invocationOptions = {
       input: {

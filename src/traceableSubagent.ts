@@ -510,6 +510,20 @@ function summarizeJson(value: unknown, maxChars = 180): string {
   }
 }
 
+function appendBoundedJsonPreview(lines: string[], title: string, value: unknown, maxChars = DEFAULT_OUTPUT_TEXT_CHARS): void {
+  const preview = truncate(JSON.stringify(value, null, 2), maxChars);
+  lines.push(
+    title,
+    "```json",
+    preview,
+    "```"
+  );
+
+  if (preview.includes("[truncated]")) {
+    lines.push("- Preview bounded for chat readability.");
+  }
+}
+
 async function appendTraceableSubagentDebugEvent(logPath: string | undefined, entry: Record<string, unknown>): Promise<void> {
   if (!logPath) {
     return;
@@ -825,6 +839,42 @@ function fallbackResult(
     opaqueDelegations: extra.opaqueDelegations ?? [],
     rawModelText: extra.rawModelText
   };
+}
+
+function buildUnparseableChildPayloadFallback(
+  input: TraceableSubagentInput,
+  toolCalls: TraceableSubagentToolCallRecord[],
+  rawModelText: string,
+  model: TraceableSubagentRunResult["model"],
+  allowedToolNames: string[]
+): TraceableSubagentRunResult {
+  const trimmed = rawModelText.trim();
+  const askedForMoreReads = /\b(i will read|read the remainder|read more|going to read more)\b/i.test(trimmed)
+    || /"filePath"\s*:/i.test(trimmed);
+
+  return fallbackResult(
+    input,
+    toolCalls,
+    askedForMoreReads
+      ? "Child lane did not emit a final JSON payload and instead attempted to continue reading. See Raw Child Output for the exact text."
+      : "Child lane returned no parseable final JSON payload. See Raw Child Output for the exact text.",
+    "insufficient_grounding",
+    "unresolved",
+    {
+      model,
+      allowedToolNames,
+      rawModelText,
+      expectedButMissing: [
+        {
+          kind: "step",
+          label: "Final JSON payload",
+          reason: askedForMoreReads
+            ? "The child attempted to continue reading instead of emitting the required final JSON object."
+            : "The child stopped without emitting a parseable final JSON object."
+        }
+      ]
+    }
+  );
 }
 
 function summarizeModelCandidates(models: readonly vscode.LanguageModelChat[]): string {
@@ -1238,17 +1288,12 @@ export async function runTraceableSubagent(
     if (toolCallParts.length === 0) {
       const parsedPayload = extractTraceableSubagentPayload(lastRawModelText);
       if (!parsedPayload) {
-        return finalizeResult(fallbackResult(
+        return finalizeResult(buildUnparseableChildPayloadFallback(
           input,
           toolCalls,
           lastRawModelText || "Child lane returned no parseable trace payload.",
-          "insufficient_grounding",
-          "unresolved",
-          {
-            model: modelInfo,
-            allowedToolNames: selectedToolNames,
-            rawModelText: lastRawModelText
-          }
+          modelInfo,
+          selectedToolNames
         ), "child_payload_unparseable", {
           matchedSelector,
           selectedModel: modelInfo
@@ -1463,8 +1508,11 @@ export async function runTraceableSubagent(
 }
 
 export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResult): string {
+  const recentSteps = result.steps.slice(0, 6);
   const lines = [
     "# Traceable Subagent Result",
+    "",
+    "## Outcome",
     "",
     `- Trace Status: ${result.traceStatus}`,
     `- Stop Reason: ${result.stopReason}`,
@@ -1474,34 +1522,77 @@ export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResu
     `- Debug Log: ${result.debugLogPath ?? "-"}`,
     `- Allowed Tool Count: ${result.allowedToolNames.length}`,
     `- Runtime Tool Calls: ${result.toolCalls.length}`,
-    "",
-    "## Request Contract",
-    "```json",
-    JSON.stringify(result.request, null, 2),
-    "```",
-    "",
-    "## Runtime Tool Ledger",
-    "```json",
-    JSON.stringify(result.toolCalls, null, 2),
-    "```",
-    "",
-    "## Child Trace",
-    "```json",
-    JSON.stringify({
-      steps: result.steps,
-      expectedButMissing: result.expectedButMissing,
-      opaqueDelegations: result.opaqueDelegations,
-      stopReason: result.stopReason,
-      completionClaim: result.completionClaim,
-      finalSummary: result.finalSummary
-    }, null, 2),
-    "```"
+    ""
   ];
+
+  if (recentSteps.length > 0) {
+    lines.push("## Recent Steps", "");
+
+    for (const step of recentSteps) {
+      const note = step.note?.trim();
+      lines.push(`- ${step.intent} [${step.status}]${note ? `: ${note}` : ""}`);
+    }
+
+    if (result.steps.length > recentSteps.length) {
+      lines.push(`- ${result.steps.length - recentSteps.length} more step(s) in technical details.`);
+    }
+
+    lines.push("");
+  }
+
+  if (result.toolCalls.length > 0) {
+    lines.push("## Tool Activity", "");
+
+    for (const toolCall of result.toolCalls) {
+      const note = "note" in toolCall && typeof toolCall.note === "string" ? toolCall.note.trim() : "";
+      lines.push(`- ${toolCall.toolName} [${toolCall.result}]${note ? `: ${note}` : ""}`);
+    }
+
+    lines.push("");
+  }
+
+  if (result.expectedButMissing.length > 0) {
+    lines.push("", "## Expected But Missing");
+
+    for (const item of result.expectedButMissing) {
+      const label = item.label?.trim() || item.kind;
+      const reason = item.reason?.trim();
+      lines.push(`- ${label}${reason ? `: ${reason}` : ""}`);
+    }
+  }
+
+  if (result.opaqueDelegations.length > 0) {
+    lines.push("", "## Opaque Delegations");
+
+    for (const delegation of result.opaqueDelegations) {
+      const note = delegation.note?.trim();
+      lines.push(`- ${delegation.toolName}${note ? `: ${note}` : ""}`);
+    }
+  }
+
+  lines.push(
+    "",
+    "## Technical Details",
+    "",
+  );
+
+  appendBoundedJsonPreview(lines, "### Request Contract Preview", result.request);
+  lines.push("");
+  appendBoundedJsonPreview(lines, "### Runtime Tool Ledger Preview", result.toolCalls);
+  lines.push("");
+  appendBoundedJsonPreview(lines, "### Child Trace Preview", {
+    steps: result.steps,
+    expectedButMissing: result.expectedButMissing,
+    opaqueDelegations: result.opaqueDelegations,
+    stopReason: result.stopReason,
+    completionClaim: result.completionClaim,
+    finalSummary: result.finalSummary
+  });
 
   if (result.rawModelText?.trim()) {
     lines.push(
       "",
-      "## Raw Child Output",
+      "### Raw Child Output",
       "```text",
       truncate(result.rawModelText.trim(), DEFAULT_OUTPUT_TEXT_CHARS),
       "```"

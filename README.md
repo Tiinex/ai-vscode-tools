@@ -21,7 +21,7 @@ For `run_traceable_subagent`, prefer non-leading parent input. Treat `userInput`
 
 As of the latest Windows host validation, `run_traceable_subagent` is now considered reliable for bounded read-only analysis work. The traceable lane has repo-test coverage plus repeated live validation for role/model grounding, fail-closed tool selection, task-file anchoring, synthesis-slot reservation, a tool-less final recovery turn, recovery-output format discipline, anchored multi-file read-budget coverage, and a bounded same-lane follow-up pair on the same file.
 
-What is not yet claimed for `run_traceable_subagent` is native `runSubagent` UX parity inside Copilot Chat, or that the current repo files alone provide fully independent proof of every claimed manual Windows-host validation step without relying on the maintained status surfaces. Treat those as still-open or still-bounded claims rather than already-proven guarantees.
+What is not yet claimed for `run_traceable_subagent` is native `runSubagent` UX parity inside Copilot Chat, or that the current repo files alone provide fully independent proof of every claimed manual Windows-host validation step without relying on the maintained status surfaces. Treat those as still-open or still-bounded claims rather than already-proven guarantees. The maintained scaffold for future repo-visible host-validation artifacts now lives in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
 
 ## Why Install It
 
@@ -376,6 +376,7 @@ Each platform lane below is tracked as a checklist.
 
 - Maintained tooling validation protocol lives in `.github/instructions/tooling-validation.instructions.md`.
 - Use that file for Phase 1 and Phase 2 structure, live-pass criteria, and tooling definition-of-done expectations.
+- Maintained repo-visible host-validation evidence for the traceable lane, when carried independently of this README, belongs in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
 
 ## Known Limits
 
