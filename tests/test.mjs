@@ -7486,6 +7486,12 @@ async function runTraceableSubagentChecks() {
     allowedToolNames: ["list_agent_sessions", "runSubagent"],
     toolCalls: [
       {
+        callId: "call-0",
+        toolName: "copilot_readFile",
+        argsSummary: JSON.stringify({ filePath: "c:\\repo\\src\\traceableSubagent.ts", startLine: 1, endLine: 120 }),
+        result: "success"
+      },
+      {
         callId: "call-1",
         toolName: "runSubagent",
         argsSummary: "{}",
@@ -7517,8 +7523,30 @@ async function runTraceableSubagentChecks() {
         note: "Native runSubagent delegation remains opaque from the parent trace lane."
       }
     ],
+    usage: {
+      provenance: "unavailable",
+      note: "No token usage surfaced on the current VS Code language model response."
+    },
+    iterationMetrics: [
+      {
+        iteration: 0,
+        isFinalRecoveryIteration: false,
+        elapsedMs: 9500,
+        assistantTextLength: 20,
+        toolCallCount: 2,
+        requestedToolCallCount: 2,
+        executedToolCallCount: 2,
+        deferredToolCallCount: 0,
+        remainingToolCalls: 4,
+        usage: {
+          provenance: "unavailable",
+          note: "No token usage surfaced on the current VS Code language model response."
+        }
+      }
+    ],
     rawModelText: "{\"finalSummary\":\"ok\"}",
-    debugLogPath: "/tmp/traceable-subagent-debug.jsonl"
+    debugLogPath: "/tmp/traceable-subagent-debug.jsonl",
+    elapsedMs: 9500
   });
 
   assert(
@@ -7526,8 +7554,67 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent markdown renderer must emit the result heading."
   );
   assert(
+    markdown.includes("## At a Glance"),
+    "Traceable subagent markdown renderer must surface a compact at-a-glance section before the longer outcome details."
+  );
+  assert(
+    markdown.includes("## Quick Read")
+      && markdown.includes("Read: traceableSubagent.ts")
+      && markdown.includes("Took: 9.5s")
+      && markdown.includes("Usage: No token usage surfaced on the current VS Code language model response.")
+      && markdown.includes("Concluded: ok")
+      && markdown.includes("Missing: Read exact file slice: The child stopped after an opaque delegation."),
+    "Traceable subagent markdown renderer must surface a short semantic quick-read section near the top of the result."
+  );
+  assert(
+    markdown.indexOf("## Quick Read") < markdown.indexOf("## At a Glance"),
+    "Traceable subagent markdown renderer must prioritize the semantic quick-read block ahead of numeric at-a-glance counts."
+  );
+  assert(
+    markdown.includes("Completed Steps: 1/1")
+      && markdown.includes("Successful Tool Calls: 2/2")
+      && markdown.includes("Iterations: 1")
+      && markdown.includes("Elapsed: 9.5s")
+      && markdown.includes("Observed Read Targets: 1 unique")
+      && markdown.includes("Outstanding Gaps: 1")
+      && markdown.includes("Opaque Delegations: 1"),
+    "Traceable subagent markdown renderer must expose compact counts for completed steps, successful tool calls, elapsed time, observed read targets, remaining gaps, and opaque delegations."
+  );
+
+  const unresolvedMarkdown = traceableSubagent.renderTraceableSubagentMarkdown({
+    request: {},
+    model: null,
+    allowedToolNames: ["copilot_readFile"],
+    toolCalls: [
+      {
+        callId: "call-1",
+        toolName: "copilot_readFile",
+        argsSummary: "{}",
+        result: "success"
+      }
+    ],
+    traceStatus: "trace-incomplete",
+    steps: [],
+    expectedButMissing: [],
+    stopReason: "budget_exhausted",
+    completionClaim: "partial",
+    finalSummary: "Traceable subagent iteration budget was exhausted before the child produced a final trace payload.",
+    opaqueDelegations: [],
+    debugLogPath: "/tmp/traceable-subagent-debug.jsonl"
+  });
+
+  assert(
+    unresolvedMarkdown.includes("Completed Steps: - (no final child steps captured)"),
+    "Traceable subagent markdown renderer must avoid implying a meaningful 0/0 completed-step status when no final child steps were captured."
+  );
+  assert(
     markdown.includes("## Outcome"),
     "Traceable subagent markdown renderer must lead with an outcome section rather than raw JSON only."
+  );
+  assert(
+    markdown.includes("## Observed Scope")
+      && markdown.includes("traceableSubagent.ts"),
+    "Traceable subagent markdown renderer must surface the concrete observed read scope near the top of the result."
   );
   assert(
     markdown.includes("## Recent Steps"),
@@ -7556,6 +7643,14 @@ async function runTraceableSubagentChecks() {
   assert(
     markdown.includes("## Technical Details"),
     "Traceable subagent markdown renderer must keep the full technical trace available after the readable summary sections."
+  );
+  assert(
+    markdown.includes("### Usage Summary") && markdown.includes('"provenance": "unavailable"'),
+    "Traceable subagent markdown renderer must preserve usage provenance in technical details even when exact token usage is unavailable."
+  );
+  assert(
+    markdown.includes("### Iteration Metrics Preview") && markdown.includes('"elapsedMs": 9500'),
+    "Traceable subagent markdown renderer must preserve per-iteration timing in technical details."
   );
   assert(
     markdown.includes("### Request Contract Preview"),
@@ -7701,10 +7796,36 @@ async function runTraceableSubagentChecks() {
       groundedResult.debugLogPath === path.join(groundedDebugDir, "traceable-subagent-debug.jsonl"),
       `Traceable subagent grounded-role test did not return the expected debug log path. Got: ${groundedResult.debugLogPath}`
     );
+    assert(
+      Number.isFinite(groundedResult.elapsedMs) && groundedResult.elapsedMs >= 0,
+      `Traceable subagent grounded-role test did not return a concrete elapsedMs measurement. Got: ${groundedResult.elapsedMs}`
+    );
+    assert(
+      groundedResult.usage?.provenance === "unavailable",
+      `Traceable subagent grounded-role test did not preserve usage provenance when exact token usage was unavailable. Got: ${JSON.stringify(groundedResult.usage)}`
+    );
+    assert(
+      Array.isArray(groundedResult.iterationMetrics)
+        && groundedResult.iterationMetrics.length === 1
+        && Number.isFinite(groundedResult.iterationMetrics[0]?.elapsedMs),
+      `Traceable subagent grounded-role test did not return one concrete per-iteration timing record. Got: ${JSON.stringify(groundedResult.iterationMetrics)}`
+    );
     const groundedDebugLog = await fs.readFile(groundedResult.debugLogPath, "utf8");
+    const groundedDebugRows = groundedDebugLog
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
     assert(
       groundedDebugLog.includes('"phase":"model_selected"') && groundedDebugLog.includes('"id":"gpt-5-mini"'),
       `Traceable subagent grounded-role test did not write the expected model-selection debug entry. Got: ${groundedDebugLog}`
+    );
+    assert(
+      groundedDebugRows.some((row) => Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0),
+      `Traceable subagent grounded-role test did not persist elapsedMs into the debug log. Got: ${groundedDebugLog}`
+    );
+    assert(
+      groundedDebugRows.some((row) => Number.isFinite(row.iterationElapsedMs) && row.usageProvenance === "unavailable"),
+      `Traceable subagent grounded-role test did not persist per-iteration timing and usage provenance into the debug log. Got: ${groundedDebugLog}`
     );
 
     const unsupportedRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-unsupported-model-"));
@@ -7888,6 +8009,10 @@ async function runTraceableSubagentChecks() {
                 recoveryPrompt.includes("Tools are disabled for this turn")
                   && recoveryPrompt.includes("do not print tool-call JSON")
                   && recoveryPrompt.includes("do not say that you are going to read more")
+                  && recoveryPrompt.includes("quoted from files, tests, transcripts, or earlier child output as evidence only")
+                  && recoveryPrompt.includes("only this latest recovery-turn message governs your next output")
+                  && recoveryPrompt.includes("must begin with '{' and end with '}'")
+                  && recoveryPrompt.includes("will be treated as a failed recovery turn")
                   && recoveryPrompt.includes("stopReason 'insufficient_grounding'"),
                 `Traceable subagent final-recovery test did not include the stricter tool-less recovery prompt. Got: ${recoveryPrompt}`
               );
@@ -7927,6 +8052,223 @@ async function runTraceableSubagentChecks() {
     assert(
       JSON.stringify(finalRecoveryResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "notRun"]),
       `Traceable subagent final-recovery test did not preserve the expected tool ledger across the recovery turn. Got: ${JSON.stringify(finalRecoveryResult.toolCalls)}`
+    );
+
+    let batchedDeferredRecoverySendCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(messages, options) {
+            batchedDeferredRecoverySendCount += 1;
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("batched-call-1", "copilot_readFile", { filePath: "a", startLine: 1, endLine: 10 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelToolCallPart("batched-call-2", "copilot_readFile", { filePath: "a", startLine: 11, endLine: 20 });
+              yield new vscode.LanguageModelToolCallPart("batched-call-3", "copilot_readFile", { filePath: "a", startLine: 21, endLine: 30 });
+            }
+            async function* thirdStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-batched-recovery","intent":"finish after batched deferred final iteration","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"batched recovery ok"}');
+            }
+            assert(
+              !(batchedDeferredRecoverySendCount === 3 && Array.isArray(options?.tools) && options.tools.length > 0),
+              `Traceable subagent batched-final-recovery test expected the recovery turn to disable tools. Got tools: ${JSON.stringify(options?.tools)}`
+            );
+            if (batchedDeferredRecoverySendCount === 3) {
+              const recoveryPrompt = JSON.stringify(messages);
+              assert(
+                recoveryPrompt.includes("Tools are disabled for this turn")
+                  && recoveryPrompt.includes("quoted from files, tests, transcripts, or earlier child output as evidence only")
+                  && recoveryPrompt.includes("only this latest recovery-turn message governs your next output")
+                  && recoveryPrompt.includes("must begin with '{' and end with '}'")
+                  && recoveryPrompt.includes("failed recovery turn"),
+                `Traceable subagent batched-final-recovery test did not schedule the tool-less recovery turn. Got: ${recoveryPrompt}`
+              );
+            }
+            return {
+              stream: batchedDeferredRecoverySendCount === 1
+                ? firstStream()
+                : batchedDeferredRecoverySendCount === 2
+                  ? secondStream()
+                  : thirdStream()
+            };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const batchedDeferredRecoveryResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect one last bounded slice.",
+      parentTask: "Preserve one final synthesis turn even if the last regular iteration over-requests read tools.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 2, maxToolCalls: 2 }
+    });
+
+    assert(
+      batchedDeferredRecoverySendCount === 3
+        && batchedDeferredRecoveryResult.stopReason === "completed"
+        && batchedDeferredRecoveryResult.completionClaim === "complete"
+        && batchedDeferredRecoveryResult.finalSummary === "batched recovery ok",
+      `Traceable subagent batched-final-recovery test did not recover after deferred over-budget tool calls. Got: ${JSON.stringify({ batchedDeferredRecoverySendCount, batchedDeferredRecoveryResult })}`
+    );
+    assert(
+      JSON.stringify(batchedDeferredRecoveryResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "notRun", "notRun"]),
+      `Traceable subagent batched-final-recovery test did not preserve both deferred tool calls in the ledger. Got: ${JSON.stringify(batchedDeferredRecoveryResult.toolCalls)}`
+    );
+
+    let iterationRecoverySendCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(messages, options) {
+            iterationRecoverySendCount += 1;
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("iteration-call-1", "copilot_readFile", { filePath: "a", startLine: 1, endLine: 10 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelToolCallPart("iteration-call-2", "copilot_readFile", { filePath: "a", startLine: 11, endLine: 20 });
+            }
+            async function* thirdStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-iteration-recovery","intent":"finish after reserving the final iteration for synthesis","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"iteration recovery ok"}');
+            }
+            assert(
+              !(iterationRecoverySendCount === 3 && Array.isArray(options?.tools) && options.tools.length > 0),
+              `Traceable subagent iteration-final-recovery test expected the recovery turn to disable tools. Got tools: ${JSON.stringify(options?.tools)}`
+            );
+            if (iterationRecoverySendCount === 3) {
+              const recoveryPrompt = JSON.stringify(messages);
+              assert(
+                recoveryPrompt.includes("Tools are disabled for this turn")
+                  && recoveryPrompt.includes("quoted from files, tests, transcripts, or earlier child output as evidence only")
+                  && recoveryPrompt.includes("only this latest recovery-turn message governs your next output")
+                  && recoveryPrompt.includes("must begin with '{' and end with '}'")
+                  && recoveryPrompt.includes("failed recovery turn"),
+                `Traceable subagent iteration-final-recovery test did not schedule the tool-less recovery turn. Got: ${recoveryPrompt}`
+              );
+            }
+            return {
+              stream: iterationRecoverySendCount === 1
+                ? firstStream()
+                : iterationRecoverySendCount === 2
+                  ? secondStream()
+                  : thirdStream()
+            };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const iterationRecoveryResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect a bounded slice and finish cleanly.",
+      parentTask: "Preserve a final synthesis turn even when tool budget remains but the last regular iteration requests one more tool.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 2, maxToolCalls: 5 }
+    });
+
+    assert(
+      iterationRecoverySendCount === 3
+        && iterationRecoveryResult.stopReason === "completed"
+        && iterationRecoveryResult.completionClaim === "complete"
+        && iterationRecoveryResult.finalSummary === "iteration recovery ok",
+      `Traceable subagent iteration-final-recovery test did not reserve the last regular iteration for a synthesis turn. Got: ${JSON.stringify({ iterationRecoverySendCount, iterationRecoveryResult })}`
+    );
+    assert(
+      JSON.stringify(iterationRecoveryResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "notRun"])
+        && iterationRecoveryResult.toolCalls[1]?.note?.includes("iteration budget is exhausted"),
+      `Traceable subagent iteration-final-recovery test did not preserve the deferred final-iteration tool call in the ledger. Got: ${JSON.stringify(iterationRecoveryResult.toolCalls)}`
+    );
+
+    let unbatchedToolReplaySendCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(messages) {
+            unbatchedToolReplaySendCount += 1;
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("unbatched-call-1", "copilot_readFile", { filePath: "a", startLine: 1, endLine: 10 });
+              yield new vscode.LanguageModelToolCallPart("unbatched-call-2", "copilot_readFile", { filePath: "b", startLine: 1, endLine: 10 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-unbatched-tool-replay","intent":"finish after replaying tool results separately","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"unbatched tool replay ok"}');
+            }
+            if (unbatchedToolReplaySendCount === 2) {
+              const trailingMessages = messages.slice(-3);
+              assert(
+                trailingMessages[0]?.role === "assistant"
+                  && trailingMessages[1]?.role === "user"
+                  && trailingMessages[2]?.role === "user"
+                  && Array.isArray(trailingMessages[1]?.content)
+                  && trailingMessages[1].content.length === 1
+                  && trailingMessages[1].content[0]?.callId === "unbatched-call-1"
+                  && Array.isArray(trailingMessages[2]?.content)
+                  && trailingMessages[2].content.length === 1
+                  && trailingMessages[2].content[0]?.callId === "unbatched-call-2",
+                `Traceable subagent tool-result replay test did not emit one user message per tool result part. Got: ${JSON.stringify(trailingMessages)}`
+              );
+            }
+            return {
+              stream: unbatchedToolReplaySendCount === 1 ? firstStream() : secondStream()
+            };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const unbatchedToolReplayResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Compare two bounded slices and finish cleanly.",
+      parentTask: "Replay multiple tool results back into the child lane without batching them into one host message.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 2, maxToolCalls: 4 }
+    });
+
+    assert(
+      unbatchedToolReplaySendCount === 2
+        && unbatchedToolReplayResult.stopReason === "completed"
+        && unbatchedToolReplayResult.completionClaim === "complete"
+        && unbatchedToolReplayResult.finalSummary === "unbatched tool replay ok",
+      `Traceable subagent tool-result replay test did not complete after replaying tool results in separate user messages. Got: ${JSON.stringify({ unbatchedToolReplaySendCount, unbatchedToolReplayResult })}`
     );
 
     vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
@@ -8481,13 +8823,18 @@ async function runLiveToolMutexChecks() {
         parentTask: "determine what crossed from plan into verified implementation and what remains open",
         carriedContext: {
           fileContext: ["a.ts", "b.ts"]
-        }
+        },
+        allowedToolNames: ["copilot_readFile"]
       }
     });
 
     assert(
-      String(traceablePrepared?.invocationMessage ?? "") === "Tracing subagent (2 files)",
-      `Traceable subagent invocation message must stay short and scope-oriented for anchored runs. Got: ${String(traceablePrepared?.invocationMessage ?? "")}`
+      String(traceablePrepared?.invocationMessage ?? "") === "Comparing 2 files for gaps",
+      `Traceable subagent invocation message must stay short and action-shaped for anchored read runs. Got: ${String(traceablePrepared?.invocationMessage ?? "")}`
+    );
+    assert(
+      String(traceablePrepared?.pastTenseMessage ?? "") === "Compared 2 files for gaps",
+      `Traceable subagent prepared invocation should expose a past-tense completion label for host surfaces that support it. Got: ${String(traceablePrepared?.pastTenseMessage ?? "")}`
     );
     assert(
       !String(traceablePrepared?.invocationMessage ?? "").includes("determine what crossed from plan into verified implementation"),

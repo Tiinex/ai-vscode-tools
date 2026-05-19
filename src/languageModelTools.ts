@@ -373,16 +373,112 @@ function summarizeInvocationText(value: string | undefined, maxChars = 32): stri
     : `${trimmed.slice(0, Math.max(0, maxChars - 16))}... [truncated]`;
 }
 
+function formatFileCount(fileCount: number): string {
+  return `${fileCount} file${fileCount === 1 ? "" : "s"}`;
+}
+
+function traceableSubagentInvocationAction(input: TraceableSubagentInput): string | undefined {
+  const source = input.userInput?.trim() || input.parentTask?.trim();
+  if (!source) {
+    return undefined;
+  }
+
+  const normalized = source.toLowerCase();
+  if (/^(compare|contrast|cross-check)\b/.test(normalized)) {
+    return "Comparing";
+  }
+  if (/^(review|inspect|check|probe|audit|examine)\b/.test(normalized)) {
+    return "Reviewing";
+  }
+  if (/^(analy[sz]e|determine|classify|separate|validate|verify)\b/.test(normalized)) {
+    return "Analyzing";
+  }
+  if (/^(summari[sz]e)\b/.test(normalized)) {
+    return "Summarizing";
+  }
+  if (/^(trace|map)\b/.test(normalized)) {
+    return "Tracing";
+  }
+  return undefined;
+}
+
+function traceableSubagentInvocationSuffix(input: TraceableSubagentInput, action: string | undefined): string | undefined {
+  const source = `${input.userInput?.trim() ?? ""} ${input.parentTask?.trim() ?? ""}`.toLowerCase();
+  if (!source) {
+    return undefined;
+  }
+
+  if (action === "Comparing") {
+    if (/\b(gap|gaps|open|missing|claim|claims|prove|proof|validation)\b/.test(source)) {
+      return "for gaps";
+    }
+    return "for differences";
+  }
+
+  if (action === "Reviewing") {
+    if (/\b(validation|verify|proof|prove|host)\b/.test(source)) {
+      return "for validation";
+    }
+    if (/\b(behavior|implementation|runtime|contract)\b/.test(source)) {
+      return "for behavior";
+    }
+  }
+
+  if (action === "Analyzing") {
+    if (/\b(validation|verify|proof|prove|host)\b/.test(source)) {
+      return "for validation";
+    }
+    return "for evidence";
+  }
+
+  return undefined;
+}
+
 function traceableSubagentInvocationMessage(input: TraceableSubagentInput): string {
   const summary = summarizeInvocationText(input.parentTask) ?? summarizeInvocationText(input.userInput);
+  const action = traceableSubagentInvocationAction(input);
+  const suffix = traceableSubagentInvocationSuffix(input, action);
   const fileCount = Array.isArray(input.carriedContext?.fileContext) ? input.carriedContext.fileContext.length : 0;
-  const scope = fileCount > 0 ? ` (${fileCount} file${fileCount === 1 ? "" : "s"})` : "";
+  const normalizedAllowedTools = Array.isArray(input.allowedToolNames)
+    ? input.allowedToolNames.map((toolName) => toolName.trim()).filter(Boolean)
+    : [];
 
-  if (!summary || fileCount > 0) {
-    return `Tracing subagent${scope}`;
+  if (fileCount > 0 && normalizedAllowedTools.length === 1 && normalizedAllowedTools[0] === "copilot_readFile") {
+    return `${action ?? "Reading"} ${formatFileCount(fileCount)}${suffix ? ` ${suffix}` : ""}`;
+  }
+
+  if (fileCount > 0) {
+    return `${action ?? "Reviewing"} ${formatFileCount(fileCount)}${suffix ? ` ${suffix}` : ""}`;
+  }
+
+  if (!summary) {
+    return "Tracing subagent";
   }
 
   return `Tracing subagent: ${summary}`;
+}
+
+function traceableSubagentPastTenseMessage(input: TraceableSubagentInput): string {
+  const invocationMessage = traceableSubagentInvocationMessage(input);
+  if (/^Comparing\b/.test(invocationMessage)) {
+    return invocationMessage.replace(/^Comparing\b/, "Compared");
+  }
+  if (/^Reviewing\b/.test(invocationMessage)) {
+    return invocationMessage.replace(/^Reviewing\b/, "Reviewed");
+  }
+  if (/^Analyzing\b/.test(invocationMessage)) {
+    return invocationMessage.replace(/^Analyzing\b/, "Analyzed");
+  }
+  if (/^Summarizing\b/.test(invocationMessage)) {
+    return invocationMessage.replace(/^Summarizing\b/, "Summarized");
+  }
+  if (/^Tracing\b/.test(invocationMessage)) {
+    return invocationMessage.replace(/^Tracing\b/, "Traced");
+  }
+  if (/^Reading\b/.test(invocationMessage)) {
+    return invocationMessage.replace(/^Reading\b/, "Read");
+  }
+  return `Completed ${invocationMessage}`;
 }
 
 type DiscoveryScope = "all-local" | "current-workspace";
@@ -820,30 +916,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
             version: {
               type: "string",
               description: "Optional model version to pair with an exact model id for the child run."
-            }
-          }
-        },
-        allowedToolNames: {
-          type: "array",
-          description: "Optional tool allowlist for the child lane. Entries may use host runtime tool names or prompt-reference aliases such as tiinex.ai-vscode-tools/listAgentSessions. When omitted, the lane uses the host tool list minus its default blocked set.",
-          items: {
-            type: "string"
-          }
-        },
-        blockedToolNames: {
-          type: "array",
-          description: "Optional extra tool names to block for this run in addition to the default self/mutation blocklist. Entries may use host runtime tool names or prompt-reference aliases.",
-          items: {
-            type: "string"
-          }
-        }
-      },
-      required: ["userInput", "parentTask"]
-    }
-  },
-  {
-    name: "inspect_copilot_cli_session",
-    displayName: "Inspect Copilot CLI Session",
     userDescription: "Render a bounded inspection of one Copilot CLI session-state entry.",
     modelDescription: "Render a bounded inspection of one Copilot CLI session-state entry, including the latest persisted turn summary from events.jsonl. Use this when you need the latest worker-lane outcome without reading the raw log. The tool is read-only and returns markdown.",
     toolReferenceName: "copilot-cli-session-inspection",
@@ -1994,7 +2066,7 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
         async (input) => renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
           accessInformation: context.languageModelAccessInformation,
           debugLogDir: context.globalStorageUri.fsPath
-        }))
+          }))
       )
     ),
     vscode.lm.registerTool(

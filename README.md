@@ -23,6 +23,8 @@ As of the latest Windows host validation, `run_traceable_subagent` is now consid
 
 What is not yet claimed for `run_traceable_subagent` is native `runSubagent` UX parity inside Copilot Chat, or that the current repo files alone provide fully independent proof of every claimed manual Windows-host validation step without relying on the maintained status surfaces. Treat those as still-open or still-bounded claims rather than already-proven guarantees. The maintained scaffold for future repo-visible host-validation artifacts now lives in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
 
+The collapsed running row for `run_traceable_subagent` is still not considered meaningfully solved. Current code can shape a shorter task-facing invocation label and the completed result can carry stronger observability, but recent Windows-host reruns still did not justify claiming native-like live-row clarity or progress feel for the third-party tool surface.
+
 ## Why Install It
 
 - It makes stored Local chat state inspectable instead of opaque.
@@ -369,7 +371,7 @@ Each platform lane below is tracked as a checklist.
 - Preserve the current bounded read-only reliability bar; do not regress fail-closed grounding, synthesis reservation, or final-recovery formatting.
 - Expand follow-up validation beyond the now-passing same-file bounded pair so the traceable lane is not only trusted for the narrowest follow-up shape.
 - Preserve the now-passing broad non-leading multi-repo epistemic probe shape so repo-local reliability is not mistaken for wider evidence orchestration; the current bounded probe shape lives in `ai/.github/transitions/TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`.
-- Improve Copilot Chat rendering toward a more native expander experience by shaping the existing tool result surface rather than inventing a separate UI.
+- Improve Copilot Chat rendering toward a more native expander experience by shaping the existing tool result surface rather than inventing a separate UI; current host observation still shows a static collapsed invocation header with no user-perceived progress signal during third-party tool runs.
 - Keep README status, tests, and live validation aligned so the repo does not drift into claiming more than the host has actually proved.
 
 ## Validation Protocol

@@ -75,3 +75,120 @@ Open gap:
 - Supporting artifact paths or logs:
 	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
 	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\chatSessions\3b540cad-8542-4094-94a4-316162aab935.jsonl`
+
+## Entry 2026-05-19 Invocation Header Observability Probe
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: collapsed invocation-header observability for `run_traceable_subagent`
+- Probe or task: rerun the bounded five-file read-only traceable-subagent probe after shortening the invocation label and then again after changing the label to an action-shaped `Reading 5 files`; compare whether the collapsed running row feels more observable during execution without inventing a separate UI surface
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the `run_traceable_subagent` tool row
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\languageModelTools.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\tests\test.mjs`
+	- supporting chat-session resource artifacts for the rerun outputs
+- Expected pass bar: the collapsed running row should feel meaningfully more observable than the earlier wide label and should expose some user-perceivable sense of progress or completion while the tool is running
+- Observed result: partial improvement only. Shortening the label reduced width, and the later `Reading 5 files` phrasing read more clearly as an action, but the header remained static for the full run. Human observation on the current host reported no real feeling of progress or completion from the collapsed row even when the child lane completed correctly.
+- Limits or caveats: this entry records a host-observed UX limitation, not a correctness failure in the child lane itself. Current evidence suggests the remaining missing progress feel is tied to the static third-party LM-tool invocation header rather than to result correctness or fallback discipline.
+- API surface note: a follow-up check against the public VS Code API found that `LanguageModelTool.prepareInvocation` returns `PreparedToolInvocation`, whose documented public fields are `invocationMessage` and optional `confirmationMessages`. No public LM-tool API surface was found for streaming later updates into that collapsed invocation header during the same tool run.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_m8FQ5TT9mlquTkaff8foLpQe__vscode-1779189463777\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+	- `https://code.visualstudio.com/api/references/vscode-api`
+
+## Entry 2026-05-19 Post-Fix Live Rerun
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: same bounded five-file live rerun after the no-final-child-steps quick-summary fix
+- Probe or task: rerun the known-good five-file read-only traceable-subagent comparison on the minimal child tool lane after the `At a Glance` adjustment, so the real chat surface can be checked for both live stability and truthful post-run summary shape
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the completed `run_traceable_subagent` result
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\traceableSubagent.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai\.github\transitions\TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\README.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\tests\test.mjs`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\package.json`
+- Expected pass bar: the minimal `allowedToolNames=["copilot_readFile"]` child lane should complete the five-file probe again without exhausting budget, and the completed result should expose a compact `At a Glance` block that truthfully summarizes the finished trace
+- Observed result: pass on this rerun slice. The child lane returned `trace-supported`, `stopReason: completed`, `completionClaim: complete`, with `Completed Steps: 5/5`, `Successful Tool Calls: 5/5`, `Outstanding Gaps: 3`, and `Opaque Delegations: 0`. The earlier budget-exhausted run did not reproduce on this rerun after reload.
+- Limits or caveats: this entry records one successful post-fix live rerun on the same Windows host and minimal child lane. It does not yet explain why the earlier rerun temporarily exhausted budget before producing a final payload.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_ArLRpg2wLfeI7khtl2RN8fpP__vscode-1779193275889\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+
+## Entry 2026-05-19 Budget-Accounting And Final-Iteration Recovery Rerun
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: bounded five-file live rerun after fixing deferred-budget accounting and last-regular-iteration synthesis reservation
+- Probe or task: rerun the known-good five-file read-only traceable-subagent comparison on the minimal child tool lane after separating deferred `notRun` ledger entries from consumed tool budget and after reserving the last regular iteration for a tool-less synthesis turn when needed
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the completed `run_traceable_subagent` result
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\traceableSubagent.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\tests\test.mjs`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai\.github\transitions\TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\README.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\package.json`
+- Expected pass bar: the minimal `allowedToolNames=["copilot_readFile"]` child lane should stop exhausting budget on the same broad five-file probe and should return one explicit final payload instead of ending after a last read-only turn with no synthesis opportunity left
+- Observed result: pass on this rerun slice. The child lane returned `trace-supported`, `stopReason: completed`, `completionClaim: complete`, with `Completed Steps: 6/6`, `Successful Tool Calls: 5/5`, `Outstanding Gaps: 4`, and `Opaque Delegations: 0`. The result now lands with a final bounded payload instead of repeating the earlier `budget_exhausted` no-payload outcome.
+- Limits or caveats: this entry records one successful live rerun after the implementation fix on the same Windows host and minimal child lane. It does not claim that all future broad probes are immune to every host- or model-side variation.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_S3HfpNFnyacDBKmZu10VS8yA__vscode-1779193275911\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+
+## Entry 2026-05-19 Observed-Scope Reload Rerun
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: completed-result observability after reload, with observed read scope promoted into the renderer
+- Probe or task: rerun the known-good five-file read-only traceable-subagent comparison after a VS Code reload so the newly added observed-scope result surface can be checked in the real chat UI rather than only in focused renderer tests
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the completed `run_traceable_subagent` result
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\traceableSubagent.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\tests\test.mjs`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai\.github\transitions\TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\README.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\package.json`
+- Expected pass bar: the completed result should expose concrete observed read scope near the top of the output so the receiver can see what the child actually inspected, without relying only on abstract counts or the static invocation header
+- Observed result: pass on this rerun slice. The child lane returned `trace-supported`, `stopReason: completed`, `completionClaim: complete`, and the live completed result now surfaced both `Observed Read Targets: 5 unique` in `At a Glance` and an `Observed Scope` section listing the five inspected anchor files.
+- Limits or caveats: this improves completed-result observability, not the still-static collapsed invocation header during tool execution. It also does not by itself prove that every recovery-turn failure mode is gone under all future host/model variations.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_h5eB5itNVJfj8Lb4Z7OKdJ15__vscode-1779194591658\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+
+## Entry 2026-05-19 Quick-Read Reload Rerun
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: completed-result observability after reload, with `Quick Read` live in the renderer and the recovery-turn disambiguation fix present in the inspected implementation
+- Probe or task: rerun the known-good five-file read-only traceable-subagent comparison after a VS Code reload to check whether the new semantic `Quick Read` block appears in the real completed result and whether the lane still completes cleanly when `tests/test.mjs` is among the read anchors
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the completed `run_traceable_subagent` result
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\traceableSubagent.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\tests\test.mjs`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai\.github\transitions\TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\README.md`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\package.json`
+- Expected pass bar: the live completed result should expose a short semantic receiver-oriented summary near the top (`Read`, `Concluded`, `Missing`) rather than relying only on counts, and the lane should still land a final payload on the same bounded five-file probe
+- Observed result: pass on this rerun slice. The child lane returned `trace-supported`, `stopReason: completed`, `completionClaim: complete`, with `Quick Read` visible in the live result and `Observed Scope` listing the five inspected anchors. The lane also completed cleanly while reading `tests/test.mjs`, rather than falling back into the earlier "continue reading" failure shape.
+- Limits or caveats: this entry shows that the completed-result surface is more legible after reload and that this specific rerun completed. It does not prove that the collapsed running header is any less static, and it does not prove that every possible recovery-turn failure mode is exhausted.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_fej6EHSQCs5ug1hmybHULWPF__vscode-1779195008013\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+
+## Entry 2026-05-19 Reloaded Live-Row Equivalence Check
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: collapsed live-row observability after reload, using the same bounded five-file `run_traceable_subagent` probe
+- Probe or task: rerun the same broad five-file read-only probe after reload and compare whether the collapsed row now feels meaningfully more informative during execution, rather than merely showing the same generic volume label
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the running `run_traceable_subagent` tool row
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_RXqEe0DCOEpZhPPcdwpJIZwU__vscode-1779208068521\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+- Expected pass bar: the collapsed row should feel clearly more observable than the earlier static `Reading 5 files` experience and should justify claiming a meaningful UX lift during execution
+- Observed result: no pass on the UX bar. The reloaded host surface showed phase changes such as `Loading` and `Evaluating`, but the human receiver still judged `Reading 5 files` as effectively equivalent to the earlier experience. That means the code-side changes did not yet produce a meaningful user-perceived improvement in the collapsed running row.
+- Limits or caveats: this is a host-observed UX result, not a correctness failure in the traceable-subagent runtime itself. The completed result surface is stronger now, but the collapsed third-party live row still does not justify a native-parity claim.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_RXqEe0DCOEpZhPPcdwpJIZwU__vscode-1779208068521\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
