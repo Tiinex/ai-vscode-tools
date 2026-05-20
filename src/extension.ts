@@ -27,6 +27,18 @@ import {
 import { loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
 import { closeVisibleEditorChatTabsForSession } from "./chatInterop/editorTabLifecycle";
+import type { TraceableSubagentInput, TraceableSubagentRequestSummaryItem } from "./traceableSubagent";
+import { TraceableSubagentStatusBarController } from "./traceableSubagentStatusBar";
+import { TraceableSubagentStatusDetailController } from "./traceableSubagentStatusDetail";
+import {
+  TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID,
+  TraceableSubagentStatusPanelProvider,
+  TRACEABLE_SUBAGENT_PANEL_VIEW_ID
+} from "./traceableSubagentStatusPanel";
+
+const OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND = "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail";
+const TRACEABLE_PANEL_VISIBLE_CONTEXT = "tiinex.aiVscodeTools.traceablePanelVisible";
+const TRACEABLE_PANEL_FALLBACK_COMMAND = "workbench.action.terminal.focus";
 
 const MAX_DIRECT_SESSION_FILE_OPEN_BYTES = 45 * 1024 * 1024;
 const SESSION_FILE_PREVIEW_HEAD_LINES = 12;
@@ -40,6 +52,96 @@ interface ExtensionError extends Error {
 }
 
 type DiscoveryScope = "current-workspace" | "all-local";
+
+function compactTraceableSummaryText(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return `${compact.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableSubagentRequestSummaryItem[] {
+  const summary: TraceableSubagentRequestSummaryItem[] = [];
+  summary.push({
+    label: "Task",
+    value: compactTraceableSummaryText(input.parentTask, 54),
+    title: input.parentTask
+  });
+  if (input.agentRole?.name?.trim()) {
+    summary.push({
+      label: "Role",
+      value: input.agentRole.name.trim(),
+      title: input.agentRole.filePath?.trim() || input.agentRole.name.trim()
+    });
+  }
+  if (input.modelSelector?.id?.trim()) {
+    summary.push({
+      label: "Model",
+      value: compactTraceableSummaryText(input.modelSelector.id.trim(), 24),
+      title: input.modelSelector.id.trim()
+    });
+  }
+  if (input.budgetPolicy?.maxIterations || input.budgetPolicy?.maxToolCalls) {
+    summary.push({
+      label: "Budget",
+      value: `${input.budgetPolicy.maxIterations ?? "-"}i · ${input.budgetPolicy.maxToolCalls ?? "-"}t`,
+      title: "Requested iteration and tool-call budget"
+    });
+  }
+  if (Array.isArray(input.allowedToolNames) && input.allowedToolNames.length > 0) {
+    summary.push({
+      label: "Allowlist",
+      value: `${input.allowedToolNames.length} tool${input.allowedToolNames.length === 1 ? "" : "s"}`,
+      title: input.allowedToolNames.join(", ")
+    });
+  }
+  if (Array.isArray(input.blockedToolNames) && input.blockedToolNames.length > 0) {
+    summary.push({
+      label: "Blocklist",
+      value: `${input.blockedToolNames.length} tool${input.blockedToolNames.length === 1 ? "" : "s"}`,
+      title: input.blockedToolNames.join(", ")
+    });
+  }
+  if (input.reveal) {
+    summary.push({
+      label: "Reveal",
+      value: "Panel",
+      title: "TRACEABLE panel requested at invocation start"
+    });
+  }
+  return summary;
+}
+
+function toTraceablePanelRestoreCommand(activePanel: unknown): string | undefined {
+  if (typeof activePanel !== "string" || !activePanel.trim()) {
+    return undefined;
+  }
+  const trimmed = activePanel.trim();
+  if (trimmed === TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID || trimmed === `workbench.view.extension.${TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID}`) {
+    return undefined;
+  }
+  if (trimmed.startsWith("workbench.view.extension.")) {
+    return trimmed;
+  }
+  switch (trimmed) {
+    case "terminal":
+      return "workbench.action.terminal.focus";
+    case "workbench.panel.markers":
+      return "workbench.action.problems.focus";
+    default:
+      return undefined;
+  }
+}
+
+async function getTraceablePanelRestoreCommand(): Promise<string | undefined> {
+  try {
+    const activePanel = await vscode.commands.executeCommand("getContextKeyValue", "activePanel");
+    return toTraceablePanelRestoreCommand(activePanel);
+  } catch {
+    return undefined;
+  }
+}
 
 async function openMarkdownDocument(content: string): Promise<void> {
   const document = await vscode.workspace.openTextDocument({
@@ -679,12 +781,54 @@ async function syncLiveChatInteropContext(chatInterop: ChatInteropApi): Promise<
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await maybeReportOfflineLocalChatCleanup(context);
+  await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
   const adapter = new SessionToolsAdapter();
+  let traceablePanelRestoreCommand: string | undefined;
+  const traceableStatusDetail = new TraceableSubagentStatusDetailController();
+  const traceableStatusPanel = new TraceableSubagentStatusPanelProvider(
+    context.extensionUri,
+    async () => {
+      await traceableStatusDetail.exportToDocument();
+    },
+    async (filePath, startLine, endLine) => {
+      const targetLine = Number.isInteger(startLine) ? Math.max(0, (startLine ?? 1) - 1) : 0;
+      const targetEndLine = Number.isInteger(endLine) ? Math.max(targetLine, (endLine ?? startLine ?? 1) - 1) : targetLine;
+      await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath), {
+        preview: false,
+        preserveFocus: false,
+        selection: new vscode.Range(targetLine, 0, targetEndLine, 0)
+      });
+    },
+    async () => {
+      await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
+      await vscode.commands.executeCommand(traceablePanelRestoreCommand ?? TRACEABLE_PANEL_FALLBACK_COMMAND);
+      traceablePanelRestoreCommand = undefined;
+    }
+  );
+  const traceableStatusBar = new TraceableSubagentStatusBarController({
+    detailCommandId: OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND,
+    updateDetailView: (snapshot) => {
+      traceableStatusDetail.update(snapshot);
+      traceableStatusPanel.update(snapshot);
+    }
+  });
   const tree = new SessionInspectorTreeDataProvider(
     adapter,
     () => scopedSessionStorageRoots(context)
   );
   context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider("tiinex-traceable-subagent-status", traceableStatusDetail),
+    vscode.commands.registerCommand(OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND, async () => {
+      traceablePanelRestoreCommand = await getTraceablePanelRestoreCommand();
+      await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, true);
+      await traceableStatusPanel.open();
+    }),
+    vscode.window.registerWebviewViewProvider(TRACEABLE_SUBAGENT_PANEL_VIEW_ID, traceableStatusPanel, {
+      webviewOptions: { retainContextWhenHidden: true }
+    }),
+    traceableStatusDetail,
+    traceableStatusPanel,
+    traceableStatusBar,
     tree,
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("tiinex.aiVscodeTools.sessionDiscoveryScope")) {
@@ -710,7 +854,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await syncLiveChatInteropContext(chatInterop);
   }
 
-  registerLanguageModelTools(context, adapter, chatInterop);
+  registerLanguageModelTools(context, adapter, chatInterop, (input) => {
+    if (input.reveal) {
+      void (async () => {
+        traceablePanelRestoreCommand = await getTraceablePanelRestoreCommand();
+        await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, true);
+        await traceableStatusPanel.open();
+      })();
+    }
+    const reporter = traceableStatusBar.startRun({
+      agentName: input.agentRole?.name,
+      modelLabel: input.modelSelector?.id
+    });
+    reporter.setRequestSummary?.(buildTraceableRequestSummary(input));
+    return reporter;
+  });
   registerCommands(context, adapter, tree, chatInterop);
 }
 

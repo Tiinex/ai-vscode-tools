@@ -17,13 +17,36 @@ As of May 2026, the persisted inspection and cleanup lanes are in active use and
 
 An experimental `run_traceable_subagent` LM tool is now included for a bounded trace-first child lane. It is intentionally v1: it keeps `userInput` separate from `parentTask`, blocks self-reentry, and values explicit runtime trace over native `runSubagent` UX parity.
 
+For bounded preflight on the current traceable surface, use `list_traceable_agents` to inspect the workspace-supported traceable agent catalog and `list_traceable_models` to inspect the runtime-discoverable model catalog before calling `run_traceable_subagent`. These helper surfaces are intentionally bounded and truthful: they improve recoverability for role/model selection, but they do not claim native Copilot Chat dropdown parity.
+
+Recommended bounded call order:
+
+1. Call `list_traceable_agents` when you need an exact traceable role name that the current workspace runtime can resolve.
+2. Call `list_traceable_models` when you need an exact model id that the current runtime can see or send to.
+3. Call `run_traceable_subagent` only after the role/model choice is grounded enough for the current bounded lane.
+
+Minimal example shape:
+
+```text
+1. list_traceable_agents { "query": "anchor", "limit": 5 }
+2. list_traceable_models { "query": "gpt-5", "sendableOnly": true, "limit": 10 }
+3. run_traceable_subagent {
+		 "userInput": "Compare the current traceable runtime behavior against the README claims.",
+		 "parentTask": "Do a bounded read-only comparison and separate verified implementation from still-open claims.",
+		 "agentRole": { "name": "Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)" },
+		 "modelSelector": { "vendor": "copilot", "id": "gpt-5-mini" }
+	 }
+```
+
+Compatibility notes for future agent-source broadening now live in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md` so that candidate parity work stays separate from the current bounded runtime claim.
+
 For `run_traceable_subagent`, prefer non-leading parent input. Treat `userInput` as source material or the original user wording to inspect, not as the desired answer shape, and do not let raw user wording outweigh the child lane's bounded investigative contract carried by `parentTask`.
 
-As of the latest Windows host validation, `run_traceable_subagent` is now considered reliable for bounded read-only analysis work. The traceable lane has repo-test coverage plus repeated live validation for role/model grounding, fail-closed tool selection, task-file anchoring, synthesis-slot reservation, a tool-less final recovery turn, recovery-output format discipline, anchored multi-file read-budget coverage, and a bounded same-lane follow-up pair on the same file.
+As of the latest Windows host validation, `run_traceable_subagent` is now considered reliable for bounded read-only analysis work on the current Windows host. The traceable lane has repo-test coverage plus repeated live validation for role/model grounding, fail-closed tool selection, task-file anchoring, synthesis-slot reservation, a tool-less final recovery turn, recovery-output format discipline, anchored multi-file read-budget coverage, a bounded same-lane follow-up pair on the same file, and a four-anchor code-inspection probe that now completes after repeated-read deferral and bounded retry-credit logic stopped sterile reread turns from consuming the regular iteration budget.
 
 What is not yet claimed for `run_traceable_subagent` is native `runSubagent` UX parity inside Copilot Chat, or that the current repo files alone provide fully independent proof of every claimed manual Windows-host validation step without relying on the maintained status surfaces. Treat those as still-open or still-bounded claims rather than already-proven guarantees. The maintained scaffold for future repo-visible host-validation artifacts now lives in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
 
-The collapsed running row for `run_traceable_subagent` is still not considered meaningfully solved. Current code can shape a shorter task-facing invocation label and the completed result can carry stronger observability, but recent Windows-host reruns still did not justify claiming native-like live-row clarity or progress feel for the third-party tool surface.
+The collapsed running row for `run_traceable_subagent` is still not considered meaningfully solved. Current code can shape the initial task-facing invocation label, including neutral lane-style variants such as `Trace lane: 5 files`, and the completed result can carry stronger observability, but recent Windows-host reruns still did not justify claiming native-like live-row clarity or progress feel for the third-party tool surface because the label remains static while only the host-owned phase row changes.
 
 ## Why Install It
 
@@ -360,8 +383,10 @@ Each platform lane below is tracked as a checklist.
 		- [x] Use Case: a child run that would otherwise spend its full tool budget can defer excess tool calls, preserve a synthesis slot, and still produce a final bounded payload.
 		- [x] Use Case: the final regular iteration may schedule one tool-less recovery turn, and that recovery turn emits one final JSON object rather than raw tool-request text.
 		- [x] Use Case: when multiple anchored task files are provided, the child lane can cover each anchored file and reach grounded completion in a live Windows probe.
+		- [x] Use Case: when repeated anchored rereads are deferred before unread anchors are covered, the runtime can grant one bounded retry credit so a pure-defer turn does not consume the regular iteration budget and the child can still finish the anchored probe.
 		- [x] Unit Test: `traceable-subagent` passes with synthesis-reservation and final-recovery regressions in `tests/test.mjs`.
 		- [x] Manual Test: host validation confirmed bounded single-file and harder multi-file read-only probes reached correct final payloads on the current Windows surface.
+		- [x] Manual Test: after the repeated-read deferral and retry-credit fix, a four-anchor wiring probe completed on the current Windows surface and read `extension.ts`, `languageModelTools.ts`, `traceableSubagent.ts`, and `traceableSubagentStatusBar.ts` within budget.
 		- [x] Manual Test: same-lane follow-up behavior has been explicitly validated on the current Windows surface with a bounded same-file follow-up pair.
 		- [x] Manual Test: a broad non-leading multi-repo epistemic question has been validated on the current Windows surface and the child kept verified, open, and unsupported-claim buckets separate.
 		- [ ] UX: Copilot Chat rendering has reached near-native `runSubagent` observability without inventing a separate custom surface.
@@ -371,6 +396,7 @@ Each platform lane below is tracked as a checklist.
 - Preserve the current bounded read-only reliability bar; do not regress fail-closed grounding, synthesis reservation, or final-recovery formatting.
 - Expand follow-up validation beyond the now-passing same-file bounded pair so the traceable lane is not only trusted for the narrowest follow-up shape.
 - Preserve the now-passing broad non-leading multi-repo epistemic probe shape so repo-local reliability is not mistaken for wider evidence orchestration; the current bounded probe shape lives in `ai/.github/transitions/TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`.
+- Keep future agent-source compatibility work explicit and candidate-marked rather than silently broadening the current traceable catalog; the maintained note lives in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md`.
 - Improve Copilot Chat rendering toward a more native expander experience by shaping the existing tool result surface rather than inventing a separate UI; current host observation still shows a static collapsed invocation header with no user-perceived progress signal during third-party tool runs.
 - Keep README status, tests, and live validation aligned so the repo does not drift into claiming more than the host has actually proved.
 
@@ -379,6 +405,7 @@ Each platform lane below is tracked as a checklist.
 - Maintained tooling validation protocol lives in `.github/instructions/tooling-validation.instructions.md`.
 - Use that file for Phase 1 and Phase 2 structure, live-pass criteria, and tooling definition-of-done expectations.
 - Maintained repo-visible host-validation evidence for the traceable lane, when carried independently of this README, belongs in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
+- Candidate source-compatibility notes for future traceable agent discovery broadening belong in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md`.
 
 ## Known Limits
 

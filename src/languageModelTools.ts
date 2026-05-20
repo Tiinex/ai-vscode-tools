@@ -36,9 +36,12 @@ import {
   queueOfflineLocalChatCleanupRequest
 } from "./offlineLocalChatCleanup";
 import {
+  listTraceableAgentCatalogEntries,
+  listTraceableModelCatalogEntries,
   renderTraceableSubagentMarkdown,
   runTraceableSubagent,
   TRACEABLE_SUBAGENT_TOOL_NAME,
+  type TraceableSubagentStatusReporter,
   type TraceableSubagentInput
 } from "./traceableSubagent";
 
@@ -114,6 +117,17 @@ interface SurveyInput {
 interface ListCopilotCliSessionsInput {
   sessionStateRoot?: string;
   limit?: number;
+}
+
+interface ListTraceableAgentsInput {
+  query?: string;
+  limit?: number;
+}
+
+interface ListTraceableModelsInput {
+  query?: string;
+  limit?: number;
+  sendableOnly?: boolean;
 }
 
 interface InspectCopilotCliSessionInput {
@@ -444,41 +458,18 @@ function traceableSubagentInvocationMessage(input: TraceableSubagentInput): stri
     : [];
 
   if (fileCount > 0 && normalizedAllowedTools.length === 1 && normalizedAllowedTools[0] === "copilot_readFile") {
-    return `${action ?? "Reading"} ${formatFileCount(fileCount)}${suffix ? ` ${suffix}` : ""}`;
+    return `Trace lane: ${formatFileCount(fileCount)}${suffix ? ` ${suffix}` : ""}`;
   }
 
   if (fileCount > 0) {
-    return `${action ?? "Reviewing"} ${formatFileCount(fileCount)}${suffix ? ` ${suffix}` : ""}`;
+    return `Trace lane: ${formatFileCount(fileCount)}${suffix ? ` ${suffix}` : ""}`;
   }
 
   if (!summary) {
-    return "Tracing subagent";
+    return "Trace lane";
   }
 
-  return `Tracing subagent: ${summary}`;
-}
-
-function traceableSubagentPastTenseMessage(input: TraceableSubagentInput): string {
-  const invocationMessage = traceableSubagentInvocationMessage(input);
-  if (/^Comparing\b/.test(invocationMessage)) {
-    return invocationMessage.replace(/^Comparing\b/, "Compared");
-  }
-  if (/^Reviewing\b/.test(invocationMessage)) {
-    return invocationMessage.replace(/^Reviewing\b/, "Reviewed");
-  }
-  if (/^Analyzing\b/.test(invocationMessage)) {
-    return invocationMessage.replace(/^Analyzing\b/, "Analyzed");
-  }
-  if (/^Summarizing\b/.test(invocationMessage)) {
-    return invocationMessage.replace(/^Summarizing\b/, "Summarized");
-  }
-  if (/^Tracing\b/.test(invocationMessage)) {
-    return invocationMessage.replace(/^Tracing\b/, "Traced");
-  }
-  if (/^Reading\b/.test(invocationMessage)) {
-    return invocationMessage.replace(/^Reading\b/, "Read");
-  }
-  return `Completed ${invocationMessage}`;
+  return `Trace lane: ${summary}`;
 }
 
 type DiscoveryScope = "all-local" | "current-workspace";
@@ -796,6 +787,50 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: "list_traceable_agents",
+    displayName: "List Traceable Agents",
+    userDescription: "List workspace-supported traceable agent display names and basic metadata.",
+    modelDescription: "List the currently supported traceable agent artifacts discoverable from workspace .github/agents folders. Use this before run_traceable_subagent when you need the exact display names the current workspace runtime can resolve without traversing repo files manually. This is read-only and returns a bounded markdown list. It reflects the current traceable runtime surface, not every host-private custom agent source that the native dropdown may know about.",
+    toolReferenceName: "listTraceableAgents",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional display-name or stem filter for narrowing the returned traceable agents."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of traceable agents to include."
+        }
+      }
+    }
+  },
+  {
+    name: "list_traceable_models",
+    displayName: "List Traceable Models",
+    userDescription: "List runtime-discoverable models that traceable subagent selection can currently see.",
+    modelDescription: "List the language models visible to the current VS Code language-model runtime using the same broad model discovery surface that traceable-subagent recovery uses. This is read-only and bounded. Use it to preflight exact model ids before calling run_traceable_subagent instead of waiting for a model-selection failure.",
+    toolReferenceName: "listTraceableModels",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional filter against model id, vendor, family, or version."
+        },
+        limit: {
+          type: "number",
+          description: "Maximum number of models to include."
+        },
+        sendableOnly: {
+          type: "boolean",
+          description: "When true, only include models that the current access information permits sending requests to."
+        }
+      }
+    }
+  },
+  {
     name: TRACEABLE_SUBAGENT_TOOL_NAME,
     displayName: "Run Traceable Subagent",
     userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
@@ -811,6 +846,10 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         parentTask: {
           type: "string",
           description: "The exact bounded investigative task that the parent wants the child lane to perform. Prefer non-leading wording that preserves inquiry without baking in the target conclusion."
+        },
+        reveal: {
+          type: "boolean",
+          description: "When true, reveal the TRACEABLE panel at invocation start so the current lane becomes visible immediately in the UI."
         },
         agentRole: {
           type: "object",
@@ -916,6 +955,30 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
             version: {
               type: "string",
               description: "Optional model version to pair with an exact model id for the child run."
+            }
+          }
+        },
+        allowedToolNames: {
+          type: "array",
+          description: "Optional tool allowlist for the child lane. Entries may use host runtime tool names or prompt-reference aliases such as tiinex.ai-vscode-tools/listAgentSessions. When omitted, the lane uses the host tool list minus its default blocked set.",
+          items: {
+            type: "string"
+          }
+        },
+        blockedToolNames: {
+          type: "array",
+          description: "Optional extra tool names to block for this run in addition to the default self/mutation blocklist. Entries may use host runtime tool names or prompt-reference aliases.",
+          items: {
+            type: "string"
+          }
+        }
+      },
+      required: ["userInput", "parentTask"]
+    }
+  },
+  {
+    name: "inspect_copilot_cli_session",
+    displayName: "Inspect Copilot CLI Session",
     userDescription: "Render a bounded inspection of one Copilot CLI session-state entry.",
     modelDescription: "Render a bounded inspection of one Copilot CLI session-state entry, including the latest persisted turn summary from events.jsonl. Use this when you need the latest worker-lane outcome without reading the raw log. The tool is read-only and returns markdown.",
     toolReferenceName: "copilot-cli-session-inspection",
@@ -1295,11 +1358,99 @@ const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
 
 function isEnabledToolContribution(toolName: string): boolean {
   return isFirstSliceSessionTool(toolName)
+    || toolName === "list_traceable_agents"
+    || toolName === "list_traceable_models"
     || toolName === TRACEABLE_SUBAGENT_TOOL_NAME
     || (LOCAL_CHAT_CONTROL_SURFACES_ENABLED && LOCAL_CHAT_CONTROL_TOOL_NAMES.has(toolName))
     || (LOCAL_CHAT_MUTATION_SURFACES_ENABLED && LOCAL_CHAT_MUTATION_TOOL_NAMES.has(toolName));
 }
 
+function renderTraceableAgentCatalogMarkdown(entries: Awaited<ReturnType<typeof listTraceableAgentCatalogEntries>>, input: ListTraceableAgentsInput): string {
+  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
+  const filteredEntries = normalizedQuery
+    ? entries.filter((entry) => entry.displayName.toLowerCase().includes(normalizedQuery) || entry.artifactStem.toLowerCase().includes(normalizedQuery))
+    : entries;
+  const limitedEntries = filteredEntries.slice(0, input.limit ?? 20);
+  const lines = [
+    "# Traceable Agent Catalog",
+    "",
+    "- Scope: workspace-supported `.github/agents/*.agent.md` runtime artifacts.",
+    "- Purpose: provide exact display names for `run_traceable_subagent` without manual workspace traversal.",
+    `- Total matching agents: ${filteredEntries.length}`
+  ];
+  if (normalizedQuery) {
+    lines.push(`- Query: ${input.query?.trim()}`);
+  }
+  if (limitedEntries.length === 0) {
+    lines.push("", "No matching traceable agents found in the current workspace runtime surface.");
+    return `${lines.join("\n")}\n`;
+  }
+  lines.push("");
+  for (const entry of limitedEntries) {
+    const tags = [
+      entry.workspaceFolderName,
+      entry.candidate ? "candidate" : undefined,
+      entry.experimental ? "experimental" : undefined,
+      entry.humanRole ? "human-role" : undefined,
+      entry.modelDeclaration ? `model=${entry.modelDeclaration}` : undefined
+    ].filter(Boolean);
+    lines.push(`- ${entry.displayName}`);
+    lines.push(`  - Stem: ${entry.artifactStem}`);
+    lines.push(`  - File: ${entry.filePath}`);
+    lines.push(`  - Tags: ${tags.join(", ") || "-"}`);
+  }
+  if (limitedEntries.length < filteredEntries.length) {
+    lines.push("", `Showing ${limitedEntries.length}/${filteredEntries.length} matching agents.`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableModelCatalogMarkdown(entries: Awaited<ReturnType<typeof listTraceableModelCatalogEntries>>, input: ListTraceableModelsInput): string {
+  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
+  const filteredEntries = entries.filter((entry) => {
+    if (input.sendableOnly && !entry.sendable) {
+      return false;
+    }
+    if (!normalizedQuery) {
+      return true;
+    }
+    const haystack = [entry.id, entry.vendor, entry.family, entry.version]
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+  const limitedEntries = filteredEntries.slice(0, input.limit ?? 20);
+  const lines = [
+    "# Traceable Model Catalog",
+    "",
+    "- Scope: runtime-discoverable models from `selectChatModels({})`.",
+    "- Purpose: preflight exact model ids for `run_traceable_subagent` without waiting for model-selection failure.",
+    `- Total matching models: ${filteredEntries.length}`
+  ];
+  if (normalizedQuery) {
+    lines.push(`- Query: ${input.query?.trim()}`);
+  }
+  if (input.sendableOnly) {
+    lines.push("- Filter: sendable-only");
+  }
+  if (limitedEntries.length === 0) {
+    lines.push("", "No matching traceable models found in the current runtime surface.");
+    return `${lines.join("\n")}\n`;
+  }
+  lines.push("");
+  for (const entry of limitedEntries) {
+    lines.push(`- ${entry.id ?? "(missing id)"}`);
+    lines.push(`  - Vendor: ${entry.vendor ?? "-"}`);
+    lines.push(`  - Family: ${entry.family ?? "-"}`);
+    lines.push(`  - Version: ${entry.version ?? "-"}`);
+    lines.push(`  - Sendable: ${entry.sendable ? "yes" : "no"}`);
+  }
+  if (limitedEntries.length < filteredEntries.length) {
+    lines.push("", `Showing ${limitedEntries.length}/${filteredEntries.length} matching models.`);
+  }
+  return `${lines.join("\n")}\n`;
+}
 export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED
   ? ALL_TOOL_CONTRIBUTIONS
   : ALL_TOOL_CONTRIBUTIONS.filter((tool) => isEnabledToolContribution(tool.name));
@@ -1717,7 +1868,12 @@ class LocalChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 }
 
-export function registerLanguageModelTools(context: vscode.ExtensionContext, adapter: SessionToolsAdapter, chatInterop?: ChatInteropApi): void {
+export function registerLanguageModelTools(
+  context: vscode.ExtensionContext,
+  adapter: SessionToolsAdapter,
+  chatInterop?: ChatInteropApi,
+  createTraceableStatusReporter?: (input: TraceableSubagentInput) => TraceableSubagentStatusReporter | undefined
+): void {
   const currentWorkspaceStorageRoots = (() => {
     if (!context.storageUri) {
       return undefined;
@@ -2059,14 +2215,37 @@ export function registerLanguageModelTools(context: vscode.ExtensionContext, ada
 
   context.subscriptions.push(
     vscode.lm.registerTool(
+      "list_traceable_agents",
+      new ReadOnlyTool<ListTraceableAgentsInput>(
+        "List Traceable Agents",
+        (input) => `List traceable agents${input.query ? ` matching ${JSON.stringify(input.query)}` : ""}`,
+        async (input) => renderTraceableAgentCatalogMarkdown(await listTraceableAgentCatalogEntries(), input)
+      )
+    ),
+    vscode.lm.registerTool(
+      "list_traceable_models",
+      new ReadOnlyTool<ListTraceableModelsInput>(
+        "List Traceable Models",
+        (input) => `List traceable models${input.query ? ` matching ${JSON.stringify(input.query)}` : ""}`,
+        async (input) => renderTraceableModelCatalogMarkdown(
+          await listTraceableModelCatalogEntries(context.languageModelAccessInformation),
+          input
+        )
+      )
+    ),
+    vscode.lm.registerTool(
       TRACEABLE_SUBAGENT_TOOL_NAME,
       new ReadOnlyTool<TraceableSubagentInput>(
         "Run Traceable Subagent",
         (input) => traceableSubagentInvocationMessage(input),
-        async (input) => renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
-          accessInformation: context.languageModelAccessInformation,
-          debugLogDir: context.globalStorageUri.fsPath
-          }))
+        async (input) => {
+          const statusReporter = createTraceableStatusReporter?.(input);
+          return renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
+            accessInformation: context.languageModelAccessInformation,
+            debugLogDir: context.globalStorageUri.fsPath,
+            statusReporter
+          }));
+        }
       )
     ),
     vscode.lm.registerTool(

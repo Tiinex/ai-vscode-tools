@@ -192,3 +192,37 @@ Open gap:
 - Supporting artifact paths or logs:
 	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_RXqEe0DCOEpZhPPcdwpJIZwU__vscode-1779208068521\content.txt`
 	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+
+## Entry 2026-05-19 Neutral Lane-Label Rerun
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: collapsed live-row observability after reload, using a noun-phrase lane label rather than an action verb
+- Probe or task: rerun the same broad five-file read-only probe after rebuilding and reloading the extension so the collapsed row uses `Trace lane: 5 files`, then compare whether that more neutral static label lands better alongside host phase text such as `Loading`
+- Files or runtime surfaces inspected:
+	- current VS Code local chat rendering for the running `run_traceable_subagent` tool row
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+- Expected pass bar: the static lane label should coexist more cleanly with host phase text and produce a clearly better receiver experience than the earlier verb-shaped label, even if the row itself still does not stream dynamic progress
+- Observed result: no pass on the UX bar. The host displayed `Trace lane: 5 files`, which confirms that code-side control of the initial collapsed label works, but the label remained static for the full run and still did not create a meaningful sense of progress. The only dynamic behavior remained the host-owned phase row.
+- Limits or caveats: this rerun also re-exposed a live `400 invalid_request_body` regression (`No tool call found for function call output with call_id ...`) after all five read calls succeeded, so this entry should not be read as a clean runtime pass. The UX conclusion is still valid because the receiver observed the running row before the late protocol failure.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+
+## Entry 2026-05-19 Four-Anchor Wiring Probe After Retry Credit
+
+- Date: 2026-05-19
+- Host surface: Windows VS Code local chat host
+- Validation slice: bounded four-anchor code-inspection probe for status-bar wiring after repeated-read deferral and pure-defer retry-credit changes
+- Probe or task: inspect the activation, tool-registration, runtime-status, and status-bar-controller files for `run_traceable_subagent` and determine whether the end-to-end status-bar wiring is present from code evidence alone, while staying within the bounded child-lane tool and iteration budget
+- Files or runtime surfaces inspected:
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\extension.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\languageModelTools.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\traceableSubagent.ts`
+	- `c:\Users\micro\Documents\Repos\Tiinex\ai-vscode-tools\src\traceableSubagentStatusBar.ts`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`
+- Expected pass bar: the child should avoid stalling on repeated rereads of already-covered anchors, should cover all four carried anchors within budget, and should land a completed final JSON payload that can confirm the wiring from code evidence without reopening the broader UX claim
+- Observed result: pass on this bounded slice. After reload, the live child lane read all four anchored files, returned `trace-supported`, `stopReason: completed`, and `completionClaim: complete`, and concluded that activation constructs the status-bar controller, tool registration supplies a created `statusReporter` into `runTraceableSubagent`, the runtime calls `statusReporter.update/finish`, and the status-bar controller implements those methods. This replaced the earlier three-file `insufficient_grounding` pattern that had been caused by repeated-read deferral turns still consuming the regular iteration budget.
+- Limits or caveats: this entry proves the bounded four-anchor code-inspection slice on the current Windows host. It does not by itself prove native `runSubagent` UX parity, and it does not replace a separate human observation pass for the actual live status-bar UI updates during execution.
+- Supporting artifact paths or logs:
+	- `c:\Users\micro\AppData\Roaming\Code\User\workspaceStorage\d3793a5981dcc1e53c6a5b0ccdb89c35\GitHub.copilot-chat\chat-session-resources\3b540cad-8542-4094-94a4-316162aab935\call_MtUsXLxx4OeRdz6jUIvXNPzn__vscode-1779218452816\content.txt`
+	- `c:\Users\micro\AppData\Roaming\Code\User\globalStorage\tiinex.ai-vscode-tools\traceable-subagent-debug.jsonl`

@@ -1,0 +1,2198 @@
+import * as vscode from "vscode";
+import path from "node:path";
+import type { TraceableSubagentDetailSnapshot } from "./traceableSubagentStatusDetail";
+import { expandToolReferenceKeys, normalizeToolReferenceKey } from "./toolNameNormalization";
+
+export const TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID = "tiinexAiVscodeToolsTraceablePanel";
+export const TRACEABLE_SUBAGENT_PANEL_VIEW_ID = "tiinex.aiVscodeTools.traceableStatus";
+const TRACEABLE_PANEL_CODICON_PATH = ["node_modules", "@vscode", "codicons", "dist", "codicon.css"] as const;
+
+type PanelEventKind = "Read" | "Search" | "Deferred" | "Failed" | "Tool";
+type PanelToolEvent = TraceableSubagentDetailSnapshot["recentTools"][number];
+type PanelStatusEvent = TraceableSubagentDetailSnapshot["statusHistory"][number];
+type PanelRequestSummaryItem = TraceableSubagentDetailSnapshot["requestSummary"][number];
+
+interface PanelDisplayEvent {
+  event: PanelToolEvent;
+  kind: PanelEventKind;
+  count: number;
+  occurredAt?: string;
+  baseElapsedMs: number;
+  running: boolean;
+  filePath?: string;
+  startLine?: number;
+  endLine?: number;
+  ranges: Array<{ startLine: number; endLine: number }>;
+  note?: string;
+}
+
+type PanelActivityEntry =
+  | {
+    kind: "request";
+    id: string;
+    occurredAt: string;
+    requestSummary: PanelRequestSummaryItem[];
+  }
+  | {
+    kind: "status";
+    id: string;
+    occurredAt: string;
+    phase: PanelStatusEvent["phase"];
+    message: string;
+    detail?: string;
+    baseElapsedMs: number;
+    running: boolean;
+    durationLabel?: string;
+    durationTitle?: string;
+  }
+  | {
+    kind: "output";
+    id: string;
+    occurredAt: string;
+    text: string;
+  }
+  | {
+    kind: "tool";
+    id: string;
+    occurredAt: string;
+    displayEvent: PanelDisplayEvent;
+  };
+
+interface ToolsetListItem {
+  rawName: string;
+  displayName: string;
+  iconName: string;
+  matchKeys: string[];
+}
+
+interface ToolsetNamespaceGroup {
+  namespace: string;
+  childGroups: ToolsetNamespaceGroup[];
+  items: ToolsetListItem[];
+}
+
+type ToolRuntimeStatus = "idle" | "inactive" | "running" | "success" | "warning" | "failure";
+
+interface ToolRuntimeSummary {
+  status: ToolRuntimeStatus;
+  callCount: number;
+  successCount: number;
+  deferredCount: number;
+  failureCount: number;
+  totalElapsedMs: number;
+}
+
+function mergeMinLine(left: number | undefined, right: number | undefined): number | undefined {
+  if (!Number.isInteger(left)) {
+    return Number.isInteger(right) ? right : undefined;
+  }
+  if (!Number.isInteger(right)) {
+    return left;
+  }
+  const safeLeft = left as number;
+  const safeRight = right as number;
+  return Math.min(safeLeft, safeRight);
+}
+
+function mergeMaxLine(left: number | undefined, right: number | undefined): number | undefined {
+  if (!Number.isInteger(left)) {
+    return Number.isInteger(right) ? right : undefined;
+  }
+  if (!Number.isInteger(right)) {
+    return left;
+  }
+  const safeLeft = left as number;
+  const safeRight = right as number;
+  return Math.max(safeLeft, safeRight);
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function formatPanelUpdatedAt(updatedAt: string): string {
+  const parsed = new Date(updatedAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return updatedAt;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(parsed);
+}
+
+function formatPanelElapsedClock(startedAt: string, updatedAt: string): string | undefined {
+  const startedAtMs = new Date(startedAt).getTime();
+  const updatedAtMs = new Date(updatedAt).getTime();
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(updatedAtMs)) {
+    return undefined;
+  }
+  const elapsedSeconds = Math.max(0, Math.floor((updatedAtMs - startedAtMs) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = elapsedSeconds % 60;
+  if (minutes <= 0) {
+    return `${seconds}s`;
+  }
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function parsePanelTimestampMs(value: string | undefined): number | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function formatPanelClockTime(value: string | undefined): string | undefined {
+  const parsed = parsePanelTimestampMs(value);
+  if (parsed === undefined) {
+    return undefined;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(parsed));
+}
+
+function panelStatusIcon(phase: TraceableSubagentDetailSnapshot["status"]["phase"]): string {
+  switch (phase) {
+    case "running":
+      return "↻";
+    case "completed":
+      return "✓";
+    case "warning":
+      return "⚠";
+    case "error":
+      return "✕";
+    case "idle":
+      return "○";
+  }
+}
+
+function detectEventKind(event: PanelToolEvent): PanelEventKind {
+  if (event.phase === "deferred") {
+    return "Deferred";
+  }
+  if (event.phase === "failure") {
+    return "Failed";
+  }
+  if (event.toolName === "copilot_readFile") {
+    return "Read";
+  }
+  if (event.toolName === "copilot_findTextInFiles") {
+    return "Search";
+  }
+  return "Tool";
+}
+
+function eventIcon(kind: PanelEventKind): string {
+  switch (kind) {
+    case "Read":
+      return "✓";
+    case "Search":
+      return "⌕";
+    case "Deferred":
+      return "⚠";
+    case "Failed":
+      return "✕";
+    case "Tool":
+      return "•";
+  }
+}
+
+function humanizeToolName(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (!trimmed) {
+    return "tool";
+  }
+  if (trimmed === "copilot_readFile") {
+    return "readFile";
+  }
+  if (trimmed.startsWith("copilot_")) {
+    return trimmed.slice("copilot_".length);
+  }
+  return trimmed;
+}
+
+function normalizeToolBadgeKey(toolName: string): string {
+  const trimmed = toolName.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const withoutCopilotPrefix = trimmed.startsWith("copilot_") ? trimmed.slice("copilot_".length) : trimmed;
+  return withoutCopilotPrefix
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[-\s]+/g, "_")
+    .toLowerCase();
+}
+
+function renderCodicon(iconName: string, extraClasses?: string): string {
+  const classes = ["codicon", `codicon-${iconName}`, extraClasses].filter(Boolean).join(" ");
+  return `<span class="${classes}" aria-hidden="true"></span>`;
+}
+
+function toolBadgeIcon(toolName: string): string | undefined {
+  switch (normalizeToolBadgeKey(toolName)) {
+    case "read_file":
+      return "file";
+    case "find_text_in_files":
+    case "text_search":
+      return "search";
+    case "find_files":
+    case "file_search":
+      return "files";
+    case "list_directory":
+      return "folder-opened";
+    case "run_in_terminal":
+    case "run_in_terminal_command":
+      return "terminal";
+    case "run_traceable_subagent":
+    case "run_subagent":
+      return "hubot";
+    default:
+      return undefined;
+  }
+}
+
+function toolRuntimeSeverity(status: ToolRuntimeStatus): number {
+  switch (status) {
+    case "failure":
+      return 5;
+    case "warning":
+      return 4;
+    case "running":
+      return 3;
+    case "success":
+      return 2;
+    case "idle":
+      return 1;
+    case "inactive":
+      return 0;
+  }
+}
+
+function formatToolElapsedMs(elapsedMs: number): string {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
+    return "0ms";
+  }
+  if (elapsedMs < 1000) {
+    return `${Math.round(elapsedMs)}ms`;
+  }
+  if (elapsedMs < 10_000) {
+    return `${(elapsedMs / 1000).toFixed(1)}s`;
+  }
+  return `${Math.round(elapsedMs / 1000)}s`;
+}
+
+function activeToolElapsedMs(snapshot: TraceableSubagentDetailSnapshot, referenceAt: string): number {
+  const referenceAtMs = parsePanelTimestampMs(referenceAt);
+  if (referenceAtMs === undefined) {
+    return 0;
+  }
+  let totalElapsedMs = 0;
+  for (const event of snapshot.recentTools) {
+    if (event.phase !== "running") {
+      continue;
+    }
+    const startedAtMs = parsePanelTimestampMs(event.occurredAt);
+    if (startedAtMs === undefined) {
+      continue;
+    }
+    totalElapsedMs += Math.max(0, referenceAtMs - startedAtMs);
+  }
+  return totalElapsedMs;
+}
+
+function totalToolElapsedMs(snapshot: TraceableSubagentDetailSnapshot, referenceAt = snapshot.updatedAt): number {
+  let totalElapsedMs = 0;
+  for (const event of snapshot.recentTools) {
+    if (event.phase === "running") {
+      continue;
+    }
+    if (typeof event.elapsedMs === "number" && Number.isFinite(event.elapsedMs) && event.elapsedMs > 0) {
+      totalElapsedMs += event.elapsedMs;
+    }
+  }
+  totalElapsedMs += activeToolElapsedMs(snapshot, referenceAt);
+  return totalElapsedMs;
+}
+
+function totalTraceElapsedMs(snapshot: TraceableSubagentDetailSnapshot, referenceAt = snapshot.updatedAt): number {
+  const startedAtMs = parsePanelTimestampMs(snapshot.startedAt);
+  const referenceAtMs = parsePanelTimestampMs(referenceAt);
+  if (startedAtMs === undefined || referenceAtMs === undefined) {
+    return 0;
+  }
+  return Math.max(0, referenceAtMs - startedAtMs);
+}
+
+function runningToolStartTimes(snapshot: TraceableSubagentDetailSnapshot): string[] {
+  return snapshot.recentTools
+    .filter((event) => event.phase === "running" && typeof event.occurredAt === "string" && event.occurredAt.trim())
+    .map((event) => event.occurredAt!.trim());
+}
+
+function isFinishedSnapshot(snapshot: TraceableSubagentDetailSnapshot): boolean {
+  return snapshot.status.phase !== "running" && snapshot.status.phase !== "idle";
+}
+
+function summarizeToolRuntime(item: ToolsetListItem, snapshot: TraceableSubagentDetailSnapshot): ToolRuntimeSummary {
+  const matchKeys = new Set(item.matchKeys);
+  let callCount = 0;
+  let successCount = 0;
+  let deferredCount = 0;
+  let failureCount = 0;
+  let totalElapsedMs = 0;
+  let hasFailure = false;
+  let hasDeferred = false;
+  let hasSuccess = false;
+  let hasRunning = false;
+  for (const event of snapshot.recentTools) {
+    const eventKey = normalizeToolReferenceKey(event.toolName);
+    if (!matchKeys.has(eventKey)) {
+      continue;
+    }
+    callCount += 1;
+    if (typeof event.elapsedMs === "number" && Number.isFinite(event.elapsedMs) && event.elapsedMs > 0) {
+      totalElapsedMs += event.elapsedMs;
+    }
+    if (event.phase === "failure") {
+      failureCount += 1;
+      hasFailure = true;
+    } else if (event.phase === "deferred") {
+      deferredCount += 1;
+      hasDeferred = true;
+    } else if (event.phase === "success") {
+      successCount += 1;
+      hasSuccess = true;
+    } else if (event.phase === "running") {
+      hasRunning = true;
+    }
+  }
+  if (hasFailure) {
+    return { status: "failure", callCount, successCount, deferredCount, failureCount, totalElapsedMs };
+  }
+  if (hasDeferred) {
+    return { status: "warning", callCount, successCount, deferredCount, failureCount, totalElapsedMs };
+  }
+  if (hasRunning) {
+    return { status: "running", callCount, successCount, deferredCount, failureCount, totalElapsedMs };
+  }
+  if (hasSuccess) {
+    return { status: "success", callCount, successCount, deferredCount, failureCount, totalElapsedMs };
+  }
+  return {
+    status: isFinishedSnapshot(snapshot) ? "inactive" : "idle",
+    callCount: 0,
+    successCount: 0,
+    deferredCount: 0,
+    failureCount: 0,
+    totalElapsedMs: 0
+  };
+}
+
+function combineRuntimeSummaries(summaries: ToolRuntimeSummary[], snapshot: TraceableSubagentDetailSnapshot): ToolRuntimeSummary {
+  if (summaries.length === 0) {
+    return {
+      status: isFinishedSnapshot(snapshot) ? "inactive" : "idle",
+      callCount: 0,
+      successCount: 0,
+      deferredCount: 0,
+      failureCount: 0,
+      totalElapsedMs: 0
+    };
+  }
+  let combined = summaries[0];
+  let callCount = 0;
+  let successCount = 0;
+  let deferredCount = 0;
+  let failureCount = 0;
+  let totalElapsedMs = 0;
+  for (const summary of summaries) {
+    callCount += summary.callCount;
+    successCount += summary.successCount;
+    deferredCount += summary.deferredCount;
+    failureCount += summary.failureCount;
+    totalElapsedMs += summary.totalElapsedMs;
+    if (toolRuntimeSeverity(summary.status) > toolRuntimeSeverity(combined.status)) {
+      combined = summary;
+    }
+  }
+  return {
+    status: callCount === 0
+      ? (isFinishedSnapshot(snapshot) ? "inactive" : "idle")
+      : combined.status,
+    callCount,
+    successCount,
+    deferredCount,
+    failureCount,
+    totalElapsedMs
+  };
+}
+
+function renderToolRuntimeBadges(runtime: ToolRuntimeSummary): string {
+  const badges: string[] = [];
+  if (runtime.failureCount > 0) {
+    badges.push(`<span class="tool-runtime-badge tool-runtime-badge-failure" title="${escapeHtml(String(runtime.failureCount))} failed tool call${runtime.failureCount === 1 ? "" : "s"} in this run">${escapeHtml(eventCountChipLabel(runtime.failureCount))}</span>`);
+  }
+  if (runtime.deferredCount > 0) {
+    badges.push(`<span class="tool-runtime-badge tool-runtime-badge-warning" title="${escapeHtml(String(runtime.deferredCount))} deferred tool call${runtime.deferredCount === 1 ? "" : "s"} in this run">${escapeHtml(eventCountChipLabel(runtime.deferredCount))}</span>`);
+  }
+  if (runtime.successCount > 0) {
+    badges.push(`<span class="tool-runtime-badge tool-runtime-badge-success" title="${escapeHtml(String(runtime.successCount))} successful tool call${runtime.successCount === 1 ? "" : "s"} in this run">${escapeHtml(eventCountChipLabel(runtime.successCount))}</span>`);
+  }
+  if (runtime.totalElapsedMs > 0) {
+    badges.push(`<span class="tool-runtime-badge tool-runtime-badge-time" title="Total tool time ${escapeHtml(formatToolElapsedMs(runtime.totalElapsedMs))}"><span class="tool-runtime-badge-icon">${renderCodicon("history")}</span><span class="tool-runtime-badge-value">${escapeHtml(formatToolElapsedMs(runtime.totalElapsedMs))}</span></span>`);
+  }
+  return badges.join("");
+}
+
+function eventLabel(event: PanelDisplayEvent): string {
+  const kind = event.kind;
+  if (kind === "Read") {
+    const filePath = event.filePath ?? "";
+    return filePath ? `Read ${path.basename(filePath)}` : "Read file";
+  }
+  if (kind === "Search") {
+    return "Searched text";
+  }
+  if (kind === "Deferred") {
+    const filePath = event.filePath ?? "";
+    return filePath ? `Deferred ${path.basename(filePath)}` : "Deferred tool";
+  }
+  if (kind === "Failed") {
+    return "Tool failed";
+  }
+  return event.event.toolName.startsWith("copilot_") ? event.event.toolName.slice("copilot_".length) : event.event.toolName;
+}
+
+function eventCountChipLabel(count: number): string {
+  return `${count}x`;
+}
+
+function mergeContiguousRanges(
+  ranges: Array<{ startLine: number; endLine: number }>,
+  startLine: number,
+  endLine: number
+): Array<{ startLine: number; endLine: number }> {
+  const nextRanges = [...ranges, { startLine, endLine }]
+    .sort((left, right) => left.startLine - right.startLine);
+  const merged: Array<{ startLine: number; endLine: number }> = [];
+  for (const range of nextRanges) {
+    const previous = merged.at(-1);
+    if (!previous || range.startLine > previous.endLine + 1) {
+      merged.push({ ...range });
+      continue;
+    }
+    previous.endLine = Math.max(previous.endLine, range.endLine);
+  }
+  return merged;
+}
+
+function buildEventChips(event: PanelDisplayEvent): string[] {
+  const chips: string[] = [];
+  const toolIcon = toolBadgeIcon(event.event.toolName);
+  const toolLabel = humanizeToolName(event.event.toolName);
+  const toolChipClasses = ["chip", "chip-tool", toolIcon ? "chip-collapsible" : ""].filter(Boolean).join(" ");
+  chips.push([
+    `<span class="${toolChipClasses}" title="Tool: ${escapeHtml(toolLabel)}">`,
+    toolIcon ? `<span class="chip-icon">${renderCodicon(toolIcon)}</span>` : "",
+    toolIcon
+      ? `<span class="chip-hover-label">${escapeHtml(toolLabel)}</span>`
+      : `<span class="chip-label">${escapeHtml(toolLabel)}</span>`,
+    `</span>`
+  ].join(""));
+  if (event.count > 1) {
+    chips.push(`<span class="chip" title="Merged ${escapeHtml(String(event.count))} tool calls">${escapeHtml(eventCountChipLabel(event.count))}</span>`);
+  }
+  for (const range of event.ranges) {
+    chips.push([
+      `<span class="chip chip-range chip-collapsible" title="Lines ${range.startLine}-${range.endLine}">`,
+      `<span class="chip-hover-label">lines</span>`,
+      `<span class="chip-value">${range.startLine}-${range.endLine}</span>`,
+      `</span>`
+    ].join(""));
+  }
+  const filePath = event.filePath ?? "";
+  if (filePath) {
+    const fileName = path.basename(filePath);
+    const hasSingleRange = event.ranges.length === 1;
+    const startLine = hasSingleRange ? event.ranges[0]?.startLine : undefined;
+    const endLine = hasSingleRange ? event.ranges[0]?.endLine : undefined;
+    const payload = escapeHtml(JSON.stringify({ type: "openFile", filePath, startLine, endLine }));
+    chips.push(`<button class="chip chip-button" data-message="${payload}" title="${escapeHtml(filePath)}">${escapeHtml(fileName)}</button>`);
+  }
+  return chips;
+}
+
+function buildDisplayEvents(events: PanelToolEvent[]): PanelDisplayEvent[] {
+  const displayEvents: PanelDisplayEvent[] = [];
+  const sortedEvents = events.slice().sort((left, right) => {
+    const leftOccurredAtMs = parsePanelTimestampMs(left.occurredAt) ?? Number.MAX_SAFE_INTEGER;
+    const rightOccurredAtMs = parsePanelTimestampMs(right.occurredAt) ?? Number.MAX_SAFE_INTEGER;
+    return leftOccurredAtMs - rightOccurredAtMs;
+  });
+  for (const event of sortedEvents) {
+    const filePath = typeof event.input?.filePath === "string" ? event.input.filePath.trim() : "";
+    const startLine = typeof event.input?.startLine === "number" ? event.input.startLine : undefined;
+    const endLine = typeof event.input?.endLine === "number" ? event.input.endLine : undefined;
+    const note = typeof event.note === "string" ? event.note.trim() : "";
+    const kind = detectEventKind(event);
+    const previous = displayEvents.at(-1);
+    const canMerge = previous
+      && previous.event.toolName === event.toolName
+      && previous.event.phase === event.phase
+      && previous.kind === kind
+      && Boolean(previous.filePath)
+      && previous.filePath === filePath;
+
+    if (canMerge) {
+      previous.count += 1;
+      previous.baseElapsedMs += typeof event.elapsedMs === "number" && Number.isFinite(event.elapsedMs) && event.elapsedMs > 0 ? event.elapsedMs : 0;
+      previous.running = previous.running || event.phase === "running";
+      previous.startLine = mergeMinLine(previous.startLine, startLine);
+      previous.endLine = mergeMaxLine(previous.endLine, endLine);
+      if (typeof startLine === "number" && typeof endLine === "number") {
+        previous.ranges = mergeContiguousRanges(previous.ranges, startLine, endLine);
+      }
+      if (previous.note !== note) {
+        previous.note = "";
+      }
+      continue;
+    }
+
+    const ranges = typeof startLine === "number" && typeof endLine === "number"
+      ? [{ startLine, endLine }]
+      : [];
+
+    displayEvents.push({
+      event,
+      kind,
+      count: 1,
+      occurredAt: event.occurredAt,
+      baseElapsedMs: typeof event.elapsedMs === "number" && Number.isFinite(event.elapsedMs) && event.elapsedMs > 0 ? event.elapsedMs : 0,
+      running: event.phase === "running",
+      filePath: filePath || undefined,
+      startLine,
+      endLine,
+      ranges,
+      note
+    });
+  }
+  return displayEvents;
+}
+
+function renderTimingChip(
+  label: string,
+  value: string,
+  className: string,
+  partClassName: string,
+  dataset: Record<string, string | undefined> = {},
+  title?: string
+): string {
+  const toDataAttributeName = (key: string): string => key.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
+  const dataAttributes = Object.entries(dataset)
+    .filter(([, rawValue]) => typeof rawValue === "string" && rawValue.length > 0)
+    .map(([key, rawValue]) => ` data-${toDataAttributeName(key)}="${escapeHtml(rawValue!)}"`)
+    .join("");
+  const titleAttribute = title ? ` title="${escapeHtml(title)}"` : "";
+  return `<span class="${className}"${dataAttributes}${titleAttribute}><span class="${partClassName}-label">${escapeHtml(label)}</span><span class="${partClassName}-value">${escapeHtml(value)}</span></span>`;
+}
+
+function renderRequestSummaryBadge(item: PanelRequestSummaryItem): string {
+  const titleAttribute = item.title ? ` title="${escapeHtml(item.title)}"` : "";
+  return [
+    `<span class="header-badge activity-request-badge"${titleAttribute}>`,
+    `<span class="header-badge-label">${escapeHtml(item.label)}</span>`,
+    `<span class="header-badge-value">${escapeHtml(item.value)}</span>`,
+    `</span>`
+  ].join("");
+}
+
+function splitRequestSummary(summary: PanelRequestSummaryItem[]): {
+  task?: PanelRequestSummaryItem;
+  metadata: PanelRequestSummaryItem[];
+} {
+  const hiddenLabels = new Set(["role", "model", "track"]);
+  const metadata: PanelRequestSummaryItem[] = [];
+  let task: PanelRequestSummaryItem | undefined;
+  for (const item of summary) {
+    const normalizedLabel = item.label.trim().toLowerCase();
+    if (!task && normalizedLabel === "task") {
+      task = item;
+      continue;
+    }
+    if (hiddenLabels.has(normalizedLabel)) {
+      continue;
+    }
+    metadata.push(item);
+  }
+  return { task, metadata };
+}
+
+function renderRequestSummaryChips(summary: PanelRequestSummaryItem[]): string {
+  return summary
+    .map((item) => renderRequestSummaryBadge(item))
+    .join("");
+}
+
+function buildActivityEntries(snapshot: TraceableSubagentDetailSnapshot): PanelActivityEntry[] {
+  const activities: PanelActivityEntry[] = [];
+  if (snapshot.requestSummary.length > 0) {
+    activities.push({
+      kind: "request",
+      id: "request-summary",
+      occurredAt: snapshot.startedAt,
+      requestSummary: snapshot.requestSummary
+    });
+  }
+
+  const sortedStatusHistory = snapshot.statusHistory.slice().sort((left, right) => {
+    const leftOccurredAtMs = parsePanelTimestampMs(left.occurredAt) ?? Number.MAX_SAFE_INTEGER;
+    const rightOccurredAtMs = parsePanelTimestampMs(right.occurredAt) ?? Number.MAX_SAFE_INTEGER;
+    return leftOccurredAtMs - rightOccurredAtMs;
+  });
+  for (let index = 0; index < sortedStatusHistory.length; index += 1) {
+    const event = sortedStatusHistory[index];
+    const nextEvent = sortedStatusHistory[index + 1];
+    const occurredAtMs = parsePanelTimestampMs(event.occurredAt);
+    const nextOccurredAtMs = parsePanelTimestampMs(nextEvent?.occurredAt);
+    const running = index === sortedStatusHistory.length - 1 && snapshot.status.phase === "running";
+    const baseElapsedMs = !running && Number.isFinite(occurredAtMs) && Number.isFinite(nextOccurredAtMs)
+      ? Math.max(0, (nextOccurredAtMs as number) - (occurredAtMs as number))
+      : 0;
+    activities.push({
+      kind: "status",
+      id: event.id,
+      occurredAt: event.occurredAt,
+      phase: event.phase,
+      message: event.message,
+      detail: event.detail,
+      baseElapsedMs: event.phase === "completed" ? totalTraceElapsedMs(snapshot, event.occurredAt) : baseElapsedMs,
+      running,
+      durationLabel: event.phase === "completed" ? "Total" : undefined,
+      durationTitle: event.phase === "completed" ? "Total trace duration" : undefined
+    });
+  }
+
+  for (const event of buildDisplayEvents(snapshot.recentTools)) {
+    activities.push({
+      kind: "tool",
+      id: `${event.event.callId}:${event.kind}`,
+      occurredAt: event.occurredAt || snapshot.updatedAt,
+      displayEvent: event
+    });
+  }
+
+  const completedOutput = snapshot.status.phase === "completed"
+    ? snapshot.status.detail?.trim()
+    : "";
+  if (completedOutput) {
+    activities.push({
+      kind: "output",
+      id: "final-output",
+      occurredAt: snapshot.updatedAt,
+      text: completedOutput
+    });
+  }
+
+  return activities.sort((left, right) => {
+    const leftOccurredAtMs = parsePanelTimestampMs(left.occurredAt) ?? Number.MAX_SAFE_INTEGER;
+    const rightOccurredAtMs = parsePanelTimestampMs(right.occurredAt) ?? Number.MAX_SAFE_INTEGER;
+    if (leftOccurredAtMs !== rightOccurredAtMs) {
+      return leftOccurredAtMs - rightOccurredAtMs;
+    }
+    const order = { request: 0, status: 1, tool: 2, output: 3 } as const;
+    return order[left.kind] - order[right.kind];
+  });
+}
+
+function renderActivityDuration(
+  label: string,
+  baseElapsedMs: number,
+  startedAt: string | undefined,
+  running: boolean,
+  title: string
+): string {
+  const elapsedLabel = formatToolElapsedMs(baseElapsedMs);
+  return renderTimingChip(
+    label,
+    elapsedLabel,
+    "chip activity-duration",
+    "activity-duration",
+    {
+      timerKind: "event",
+      startedAt,
+      baseElapsedMs: String(baseElapsedMs),
+      running: running ? "true" : "false"
+    },
+    title
+  );
+}
+
+function renderActivityMeta(
+  occurredAt: string | undefined,
+  durationMarkup: string,
+  extraChips: string[]
+): string {
+  const chips = [...extraChips];
+  const clockLabel = formatPanelClockTime(occurredAt);
+  if (clockLabel) {
+    chips.push(`<span class="chip chip-time" title="Started ${escapeHtml(clockLabel)}">${escapeHtml(clockLabel)}</span>`);
+  }
+  if (durationMarkup) {
+    chips.push(durationMarkup);
+  }
+  return `<div class="event-chips">${chips.join("")}</div>`;
+}
+
+function renderStatusActivity(entry: Extract<PanelActivityEntry, { kind: "status" }>): string {
+  const suppressNoteRow = entry.phase === "completed" && entry.message === "completed";
+  const noteRow = entry.detail && !suppressNoteRow ? `<div class="event-note">${escapeHtml(entry.detail)}</div>` : "";
+  const phaseChips = entry.phase === "running" ? [] : [`<span class="chip chip-status-phase">${escapeHtml(entry.phase)}</span>`];
+  const rowClasses = ["event-row", "event-status", `event-status-${entry.phase}`, entry.running ? "event-status-live" : "event-status-settled"].join(" ");
+  const durationMarkup = entry.running || entry.baseElapsedMs >= 0
+    ? renderActivityDuration(
+      entry.durationLabel ?? (entry.running ? "Live" : "For"),
+      entry.baseElapsedMs,
+      entry.occurredAt,
+      entry.running,
+      entry.durationTitle ?? (entry.running ? "Current status duration" : "Status duration")
+    )
+    : "";
+  return [
+    `<li class="${rowClasses}" title="${escapeHtml(entry.message)}">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(panelStatusIcon(entry.phase))}</span><span class="event-label">${escapeHtml(entry.message)}</span></div>${noteRow}</div>`,
+    renderActivityMeta(entry.occurredAt, durationMarkup, phaseChips),
+    `</li>`
+  ].join("");
+}
+
+function renderRequestActivity(entry: Extract<PanelActivityEntry, { kind: "request" }>): string {
+  const { task, metadata } = splitRequestSummary(entry.requestSummary);
+  const noteText = task?.value?.trim() || "Compact launch parameters for this trace lane.";
+  const noteTitleAttribute = task?.title ? ` title="${escapeHtml(task.title)}"` : "";
+  return [
+    `<li class="event-row event-request" title="Traceable input summary">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">◦</span><span class="event-label">Request</span></div><div class="event-note"${noteTitleAttribute}>${escapeHtml(noteText)}</div></div>`,
+    renderActivityMeta(entry.occurredAt, "", metadata.length > 0 ? [renderRequestSummaryChips(metadata)] : []),
+    `</li>`
+  ].join("");
+}
+
+function renderOutputActivity(entry: Extract<PanelActivityEntry, { kind: "output" }>): string {
+  return [
+    `<li class="event-row event-output" title="Final output returned to the parent lane">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">↩</span><span class="event-label">Output</span></div><div class="event-note">${escapeHtml(entry.text)}</div></div>`,
+    renderActivityMeta(undefined, "", []),
+    `</li>`
+  ].join("");
+}
+
+function renderToolActivity(entry: Extract<PanelActivityEntry, { kind: "tool" }>): string {
+  const event = entry.displayEvent;
+  const title = (event.note ?? "") || event.event.toolName;
+  const noteRow = event.note ? `<div class="event-note">${escapeHtml(event.note)}</div>` : "";
+  const durationMarkup = renderActivityDuration(
+    event.running ? "Live" : "For",
+    event.baseElapsedMs,
+    event.occurredAt,
+    event.running,
+    event.running ? "Current tool duration" : "Recorded tool duration"
+  );
+  return [
+    `<li class="event-row event-${event.kind.toLowerCase()}" title="${escapeHtml(title)}">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(eventIcon(event.kind))}</span><span class="event-label">${escapeHtml(eventLabel(event))}</span></div>${noteRow}</div>`,
+    renderActivityMeta(event.occurredAt, durationMarkup, buildEventChips(event)),
+    "</li>"
+  ].join("");
+}
+
+function renderActivityRow(entry: PanelActivityEntry): string {
+  if (entry.kind === "request") {
+    return renderRequestActivity(entry);
+  }
+  if (entry.kind === "status") {
+    return renderStatusActivity(entry);
+  }
+  if (entry.kind === "output") {
+    return renderOutputActivity(entry);
+  }
+  return renderToolActivity(entry);
+}
+
+function normalizeHeaderToolsetNames(toolsetNames: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const value of toolsetNames) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalizedValue = normalizeToolReferenceKey(trimmed);
+    if (!normalized.includes(normalizedValue)) {
+      normalized.push(normalizedValue);
+    }
+  }
+  return normalized;
+}
+
+function isCustomToolReference(toolName: string): boolean {
+  return /^tiinex\.ai-vscode-tools\//iu.test(toolName.trim());
+}
+
+function renderHeaderBadgeIcon(icon: string | undefined): string {
+  return icon ? `<span class="header-badge-icon">${renderCodicon(icon)}</span>` : "";
+}
+
+function renderHeaderBadge(label: string, value: string, className?: string, title?: string, icon?: string, messagePayload?: Record<string, unknown>): string {
+  const classes = ["header-badge", className].filter(Boolean).join(" ");
+  const resolvedTitle = title ?? `${label}: ${value}`;
+  const titleAttribute = resolvedTitle ? ` title="${escapeHtml(resolvedTitle)}"` : "";
+  const dataMessageAttribute = messagePayload ? ` data-message="${escapeHtml(JSON.stringify(messagePayload))}"` : "";
+  const tagName = messagePayload ? "button" : "span";
+  const typeAttribute = messagePayload ? ` type="button"` : "";
+  return [
+    `<${tagName} class="${classes}"${typeAttribute}${titleAttribute}${dataMessageAttribute}>`,
+    `<span class="header-badge-label">${escapeHtml(label)}</span>`,
+    `<span class="header-badge-value">${renderHeaderBadgeIcon(icon)}${escapeHtml(value)}</span>`,
+    `</${tagName}>`
+  ].join("");
+}
+
+function renderHeaderMetadataBadges(snapshot: TraceableSubagentDetailSnapshot): string {
+  const badges: string[] = [];
+  if (snapshot.header.candidate) {
+    badges.push(renderHeaderBadge("Track", "Candidate", "header-badge-track-candidate"));
+  }
+  if (snapshot.header.experimental) {
+    badges.push(renderHeaderBadge("Track", "Experimental", "header-badge-track-experimental"));
+  }
+  return badges.join("");
+}
+
+function renderRoleBadge(snapshot: TraceableSubagentDetailSnapshot): string {
+  const isHuman = snapshot.header.humanRole;
+  const isResolved = snapshot.header.agentResolved;
+  const title = isResolved
+    ? snapshot.header.agentFilePath
+      ? `${isHuman ? "Human role" : "AI role"}\n${snapshot.header.agentFilePath}`
+      : (isHuman ? "Human role" : "AI role")
+    : `Requested ${isHuman ? "human" : "AI"} role\nNot yet resolved to a workspace .agent.md artifact.`;
+  const className = `${isHuman ? "header-badge-role-human" : "header-badge-role-ai"} ${isResolved ? "header-badge-role-resolved" : "header-badge-role-pending"}`;
+  const value = isResolved ? snapshot.header.agentName : `${snapshot.header.agentName} (requested)`;
+  return renderHeaderBadge(
+    "Role",
+    value,
+    className,
+    title,
+    isHuman ? "account" : "hubot",
+    isResolved && snapshot.header.agentFilePath ? { type: "openFile", filePath: snapshot.header.agentFilePath } : undefined
+  );
+}
+
+function metaStatusClass(phase: TraceableSubagentDetailSnapshot["status"]["phase"]): string {
+  return `meta-status meta-status-${phase}`;
+}
+
+function renderMetaStatus(snapshot: TraceableSubagentDetailSnapshot): string {
+  return `<span class="${metaStatusClass(snapshot.status.phase)}" title="${escapeHtml(snapshot.status.message)}">${escapeHtml(panelStatusIcon(snapshot.status.phase))} ${escapeHtml(snapshot.status.message)}</span>`;
+}
+
+function builtInToolNamespace(toolName: string): string {
+  switch (normalizeToolBadgeKey(toolName)) {
+    case "run_subagent":
+    case "run_traceable_subagent":
+      return "agent";
+    case "fetch_webpage":
+      return "web";
+    case "manage_todo_list":
+      return "todo";
+    case "read_file":
+    case "list_directory":
+    case "view_image":
+      return "read";
+    case "find_text_in_files":
+    case "text_search":
+    case "find_files":
+    case "file_search":
+    case "semantic_search":
+    case "vscode_list_code_usages":
+      return "search";
+    case "apply_patch":
+    case "create_file":
+    case "vscode_rename_symbol":
+      return "edit";
+    case "run_in_terminal":
+    case "run_in_terminal_command":
+    case "send_to_terminal":
+    case "get_terminal_output":
+    case "kill_terminal":
+      return "execute";
+    case "vscode_ask_questions":
+    case "get_errors":
+      return "vscode";
+    default:
+      return "other";
+  }
+}
+
+function toolsetNamespaceParts(rawName: string, isCustom: boolean): { namespacePath: string[]; displayName: string } {
+  const trimmed = rawName.trim();
+  const slashIndex = trimmed.lastIndexOf("/");
+  if (slashIndex >= 0) {
+    const displayName = normalizeToolReferenceKey(trimmed);
+    const namespace = trimmed.slice(0, slashIndex).trim();
+    if (namespace) {
+      return {
+        namespacePath: isCustom ? namespace.split(".").map((part) => part.trim()).filter(Boolean) : [namespace],
+        displayName
+      };
+    }
+  }
+  const displayName = normalizeToolBadgeKey(trimmed) || normalizeToolReferenceKey(trimmed);
+  return {
+    namespacePath: [isCustom ? "custom" : builtInToolNamespace(displayName)],
+    displayName
+  };
+}
+
+function buildToolsetNamespaceGroups(rawItems: string[], isCustom: boolean): ToolsetNamespaceGroup[] {
+  const groups: ToolsetNamespaceGroup[] = [];
+  const getOrCreateGroup = (collection: ToolsetNamespaceGroup[], namespace: string): ToolsetNamespaceGroup => {
+    let group = collection.find((entry) => entry.namespace === namespace);
+    if (!group) {
+      group = { namespace, childGroups: [], items: [] };
+      collection.push(group);
+    }
+    return group;
+  };
+  for (const rawItem of rawItems) {
+    const trimmed = rawItem.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const parts = toolsetNamespaceParts(trimmed, isCustom);
+    const iconName = toolBadgeIcon(parts.displayName) ?? (isCustom ? "tools" : "gear");
+    let level = groups;
+    let group: ToolsetNamespaceGroup | undefined;
+    for (const namespacePart of parts.namespacePath) {
+      group = getOrCreateGroup(level, namespacePart);
+      level = group.childGroups;
+    }
+    if (!group) {
+      continue;
+    }
+    if (!group.items.some((item) => item.rawName === trimmed)) {
+      group.items.push({
+        rawName: trimmed,
+        displayName: parts.displayName,
+        iconName,
+        matchKeys: expandToolReferenceKeys(trimmed)
+      });
+    }
+  }
+  return groups;
+}
+
+function countToolsetGroupItems(group: ToolsetNamespaceGroup): number {
+  return group.items.length + group.childGroups.reduce((total, childGroup) => total + countToolsetGroupItems(childGroup), 0);
+}
+
+function summarizeNamespaceRuntime(group: ToolsetNamespaceGroup, snapshot: TraceableSubagentDetailSnapshot): ToolRuntimeSummary {
+  return combineRuntimeSummaries([
+    ...group.items.map((item) => summarizeToolRuntime(item, snapshot)),
+    ...group.childGroups.map((childGroup) => summarizeNamespaceRuntime(childGroup, snapshot))
+  ], snapshot);
+}
+
+function renderToolsetItem(item: ToolsetListItem, snapshot: TraceableSubagentDetailSnapshot): string {
+  const runtime = summarizeToolRuntime(item, snapshot);
+  const runtimeBadges = renderToolRuntimeBadges(runtime);
+  return [
+    `<li class="toolset-item toolset-runtime-${runtime.status}" title="${escapeHtml(item.rawName)}">`,
+    `<span class="toolset-item-branch" aria-hidden="true"></span>`,
+    `<span class="toolset-item-icon">${renderCodicon(item.iconName)}</span>`,
+    `<span class="toolset-item-label">${escapeHtml(item.displayName)}</span>`,
+    runtimeBadges ? `<span class="toolset-item-runtime">${runtimeBadges}</span>` : "",
+    `</li>`
+  ].join("");
+}
+
+function renderToolsetNamespaceGroup(group: ToolsetNamespaceGroup, snapshot: TraceableSubagentDetailSnapshot): string {
+  const runtime = summarizeNamespaceRuntime(group, snapshot);
+  const childContent = [
+    ...group.childGroups.map((childGroup) => renderToolsetNamespaceGroup(childGroup, snapshot)),
+    group.items.length > 0 ? `<ul class="toolset-list toolset-list-nested">${group.items.map((item) => renderToolsetItem(item, snapshot)).join("")}</ul>` : ""
+  ].join("");
+  return [
+    `<details class="toolset-namespace-group toolset-runtime-${runtime.status}">`,
+    `<summary class="toolset-namespace-heading"><span class="toolset-namespace-heading-main"><span class="toolset-namespace-twistie">${renderCodicon("chevron-right")}</span><span class="toolset-namespace-icon-spacer" aria-hidden="true"></span><span class="toolset-namespace-label">${escapeHtml(group.namespace)}</span></span><span class="toolset-namespace-metrics">${renderToolRuntimeBadges(runtime)}<span class="toolset-count" title="${escapeHtml(String(countToolsetGroupItems(group)))} selected tools">${countToolsetGroupItems(group)}</span></span></summary>`,
+    `<div class="toolset-tree-children">${childContent}</div>`,
+    `</details>`
+  ].join("");
+}
+
+function renderToolsetDisclosure(snapshot: TraceableSubagentDetailSnapshot): string {
+  const declaredToolset = snapshot.header.toolsetNames.filter((value) => value.trim().length > 0);
+  const observedToolset: string[] = [];
+  for (const event of snapshot.recentTools) {
+    const trimmed = event.toolName.trim();
+    if (!trimmed || observedToolset.includes(trimmed)) {
+      continue;
+    }
+    observedToolset.push(trimmed);
+  }
+  const rawToolset = declaredToolset.length > 0 ? declaredToolset : observedToolset;
+  if (rawToolset.length === 0) {
+    return "";
+  }
+  const nativeTools = rawToolset.filter((value) => !isCustomToolReference(value));
+  const customTools = rawToolset.filter((value) => isCustomToolReference(value));
+  const nativeGroups = buildToolsetNamespaceGroups(nativeTools, false);
+  const customGroups = buildToolsetNamespaceGroups(customTools, true);
+  const renderToolsetList = (groups: ToolsetNamespaceGroup[]): string => groups.length > 0
+    ? `<div class="toolset-tree-children toolset-tree-children-root">${groups.map((group) => renderToolsetNamespaceGroup(group, snapshot)).join("")}</div>`
+    : `<div class="toolset-empty">None</div>`;
+  const summaryLabel = declaredToolset.length > 0 ? "Tool access" : "Observed tools";
+  const summary = `${summaryLabel} ${rawToolset.length} total${customTools.length > 0 ? ` · ${customTools.length} custom` : ""}`;
+  return [
+    `<details class="toolset-disclosure">`,
+    `<summary class="toolset-summary">${escapeHtml(summary)}</summary>`,
+    `<div class="toolset-grid">`,
+    `<section class="toolset-column"><div class="toolset-heading">Native Tools <span class="toolset-count">${nativeTools.length}</span></div>${renderToolsetList(nativeGroups)}</section>`,
+    `<section class="toolset-column"><div class="toolset-heading">Extension Tools <span class="toolset-count">${customTools.length}</span></div>${renderToolsetList(customGroups)}</section>`,
+    `</div>`,
+    `</details>`
+  ].join("");
+}
+
+function renderEventRow(event: PanelDisplayEvent): string {
+  const kind = event.kind;
+  const note = event.note ?? "";
+  const chips = buildEventChips(event).join("");
+  const title = note || event.event.toolName;
+  const noteRow = note ? `<div class="event-note">${escapeHtml(note)}</div>` : "";
+  return [
+    `<li class="event-row event-${kind.toLowerCase()}" title="${escapeHtml(title)}">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(eventIcon(kind))}</span><span class="event-label">${escapeHtml(eventLabel(event))}</span></div>${noteRow}</div>`,
+    `<div class="event-chips">${chips}</div>`,
+    "</li>"
+  ].join("");
+}
+
+function renderMetaStopwatch(
+  label: string,
+  value: string,
+  dataset: Record<string, string | undefined>,
+  title: string
+): string {
+  const toDataAttributeName = (key: string): string => key.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`);
+  const dataAttributes = Object.entries(dataset)
+    .filter(([, rawValue]) => typeof rawValue === "string" && rawValue.length > 0)
+    .map(([key, rawValue]) => ` data-${toDataAttributeName(key)}="${escapeHtml(rawValue!)}"`)
+    .join("");
+  return `<span class="meta-stopwatch"${dataAttributes} title="${escapeHtml(title)}"><span class="meta-stopwatch-label">${escapeHtml(label)}</span><span class="meta-stopwatch-value">${escapeHtml(value)}</span></span>`;
+}
+
+export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDetailSnapshot, codiconCssHref?: string): string {
+  const activities = buildActivityEntries(snapshot);
+  const eventRows = activities.length > 0
+    ? activities.map((event) => renderActivityRow(event)).join("")
+    : `<div class="empty-state">No activity yet.</div>`;
+  const updatedLabel = formatPanelUpdatedAt(snapshot.updatedAt);
+  const runningState = snapshot.status.phase === "running" ? "true" : "false";
+  const totalElapsedMs = totalTraceElapsedMs(snapshot);
+  const toolElapsedMs = totalToolElapsedMs(snapshot);
+  const thinkElapsedMs = Math.max(0, totalElapsedMs - toolElapsedMs);
+  const runningToolStarts = runningToolStartTimes(snapshot).join("|");
+  const totalStopwatch = renderMetaStopwatch(
+    "Total",
+    formatToolElapsedMs(totalElapsedMs),
+    {
+      timerKind: "total",
+      startedAt: snapshot.startedAt,
+      updatedAt: snapshot.updatedAt,
+      running: runningState
+    },
+    "Total elapsed wall-clock time for this trace"
+  );
+  const toolStopwatch = renderMetaStopwatch(
+    "Tools",
+    formatToolElapsedMs(toolElapsedMs),
+    {
+      timerKind: "tools",
+      baseElapsedMs: String(totalToolElapsedMs(snapshot, snapshot.updatedAt) - activeToolElapsedMs(snapshot, snapshot.updatedAt)),
+      activeStarts: runningToolStarts,
+      updatedAt: snapshot.updatedAt,
+      running: runningState
+    },
+    "Accumulated runtime tool time recorded in this trace"
+  );
+  const thinkStopwatch = renderMetaStopwatch(
+    "Think",
+    formatToolElapsedMs(thinkElapsedMs),
+    {
+      timerKind: "think",
+      startedAt: snapshot.startedAt,
+      updatedAt: snapshot.updatedAt,
+      baseElapsedMs: String(totalToolElapsedMs(snapshot, snapshot.updatedAt) - activeToolElapsedMs(snapshot, snapshot.updatedAt)),
+      activeStarts: runningToolStarts,
+      running: runningState
+    },
+    "Derived time: total wall-clock minus recorded tool time"
+  );
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  ${codiconCssHref ? `<link rel="stylesheet" href="${escapeHtml(codiconCssHref)}" />` : ""}
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: var(--vscode-editor-background);
+      --fg: var(--vscode-editor-foreground);
+      --muted: var(--vscode-descriptionForeground);
+      --border: var(--vscode-panel-border);
+      --chip-bg: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
+      --chip-border: color-mix(in srgb, var(--vscode-focusBorder) 44%, transparent);
+      --accent: var(--vscode-textLink-foreground);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 8px 10px 10px;
+      background: var(--bg);
+      color: var(--fg);
+      font: 12px/1.35 var(--vscode-font-family);
+    }
+    .panel-root {
+      display: grid;
+      gap: 8px;
+    }
+    .header {
+      display: grid;
+      gap: 6px;
+      position: sticky;
+      top: 8px;
+      z-index: 2;
+      background: var(--bg);
+      box-shadow: 0 -8px 0 0 var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 0 0 8px;
+    }
+    .header-top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .title {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      max-width: 100%;
+      border: 1px solid var(--chip-border);
+      background: var(--chip-bg);
+      border-radius: 999px;
+      padding: 1px 7px;
+      min-height: 22px;
+    }
+    .header-badge[type="button"] {
+      appearance: none;
+      cursor: pointer;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+    }
+    .header-badge[type="button"]:hover {
+      background: color-mix(in srgb, var(--chip-bg) 82%, transparent);
+      border-color: color-mix(in srgb, var(--accent) 28%, var(--chip-border));
+    }
+    .header-badge-label {
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 10px;
+    }
+    .header-badge-value {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 600;
+    }
+    .header-badge-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .header-badge-role-human .header-badge-icon {
+      color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 82%, var(--muted));
+    }
+    .header-badge-role-ai .header-badge-icon {
+      color: color-mix(in srgb, var(--accent) 72%, var(--muted));
+    }
+    .header-badge-role-human,
+    .header-badge-role-ai {
+      padding-inline: 8px;
+      border-color: color-mix(in srgb, var(--accent) 16%, var(--chip-border));
+    }
+    .header-badge-role-pending {
+      border-style: dashed;
+      opacity: 0.9;
+    }
+    .header-badge-role-pending .header-badge-value {
+      color: color-mix(in srgb, var(--fg) 78%, var(--muted));
+    }
+    .header-badge-track-candidate {
+      min-height: 20px;
+      padding: 0 6px;
+      gap: 3px;
+      border-color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 26%, var(--chip-border));
+      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 8%, var(--chip-bg));
+    }
+    .header-badge-track-candidate .header-badge-label,
+    .header-badge-track-experimental .header-badge-label {
+      color: color-mix(in srgb, var(--muted) 92%, transparent);
+    }
+    .header-badge-track-candidate .header-badge-value {
+      color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 74%, var(--fg));
+    }
+    .header-badge-track-experimental {
+      min-height: 20px;
+      padding: 0 6px;
+      gap: 3px;
+      border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 24%, var(--chip-border));
+      background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 7%, var(--chip-bg));
+    }
+    .header-badge-track-experimental .header-badge-value {
+      color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 72%, var(--fg));
+    }
+    .header-badge-model {
+      border-color: color-mix(in srgb, var(--border) 74%, var(--chip-border));
+      background: color-mix(in srgb, var(--chip-bg) 54%, transparent);
+    }
+    .header-badge-model .header-badge-label {
+      color: color-mix(in srgb, var(--muted) 88%, transparent);
+    }
+    .header-badge-model .header-badge-value {
+      color: color-mix(in srgb, var(--fg) 78%, var(--muted));
+      font-weight: 500;
+    }
+    .header-badge-icon .codicon {
+      font-size: 12px;
+    }
+    .toolbar {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .toolbar-button {
+      border: 1px solid var(--chip-border);
+      background: transparent;
+      color: var(--fg);
+      border-radius: 999px;
+      padding: 2px 8px;
+      cursor: pointer;
+      font: inherit;
+    }
+    .toolbar-button:hover { background: var(--chip-bg); }
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      align-items: center;
+    }
+    .meta-stopwatch {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 1px 7px;
+      min-height: 20px;
+      border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--chip-bg) 38%, transparent);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    .meta-stopwatch-label {
+      color: color-mix(in srgb, var(--muted) 92%, transparent);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .meta-stopwatch-value {
+      color: color-mix(in srgb, var(--fg) 84%, var(--muted));
+      font-weight: 600;
+    }
+    .activity-request-badge {
+      min-height: 18px;
+      padding: 0 5px;
+      gap: 4px;
+      background: color-mix(in srgb, var(--chip-bg) 52%, transparent);
+      border-color: color-mix(in srgb, var(--border) 68%, var(--chip-border));
+    }
+    .activity-request-badge .header-badge-label {
+      color: color-mix(in srgb, var(--muted) 90%, transparent);
+    }
+    .activity-request-badge .header-badge-value {
+      color: color-mix(in srgb, var(--fg) 84%, var(--muted));
+      font-weight: 600;
+    }
+    .chip-request {
+      gap: 5px;
+    }
+    .chip-request-label {
+      color: color-mix(in srgb, var(--muted) 90%, transparent);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .chip-request-value {
+      color: color-mix(in srgb, var(--fg) 88%, var(--muted));
+      font-weight: 600;
+    }
+    .meta-status {
+      margin-left: auto;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .meta-status-running {
+      color: var(--vscode-progressBar-background);
+    }
+    .meta-status-completed {
+      color: var(--vscode-terminal-ansiGreen);
+    }
+    .meta-status-warning {
+      color: var(--vscode-editorWarning-foreground);
+    }
+    .meta-status-error {
+      color: var(--vscode-errorForeground);
+    }
+    .meta-status-idle {
+      color: var(--muted);
+    }
+    .toolset-disclosure {
+      border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--chip-bg) 62%, transparent);
+      padding: 0;
+      overflow: hidden;
+    }
+    .toolset-summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 7px 10px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .toolset-summary::-webkit-details-marker {
+      display: none;
+    }
+    .toolset-disclosure[open] .toolset-summary {
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+    }
+    .toolset-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 10px;
+      align-items: start;
+    }
+    .toolset-column {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+      align-content: start;
+      align-self: start;
+      position: relative;
+    }
+    .toolset-namespace-group {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .toolset-tree-children {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+      padding-left: 8px;
+      margin-left: 0;
+      border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+    }
+    .toolset-tree-children-root {
+      position: relative;
+      margin-top: 2px;
+    }
+    .toolset-tree-children-root::before {
+      content: "";
+      position: absolute;
+      left: -1px;
+      top: -6px;
+      width: 0;
+      height: 6px;
+      border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      pointer-events: none;
+    }
+    .toolset-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--fg);
+      font-weight: 600;
+    }
+    .toolset-namespace-metrics,
+    .toolset-item-runtime {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    .toolset-namespace-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: none;
+      list-style: none;
+      cursor: default;
+      padding: 0;
+    }
+    .toolset-namespace-heading::-webkit-details-marker {
+      display: none;
+    }
+    .toolset-namespace-heading-main {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
+    .toolset-namespace-twistie {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--muted);
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .toolset-namespace-twistie .codicon {
+      font-size: 11px;
+      transition: transform 120ms ease;
+    }
+    .toolset-namespace-group[open] .toolset-namespace-twistie .codicon {
+      transform: rotate(90deg);
+    }
+    .toolset-namespace-icon-spacer {
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
+    }
+    .toolset-namespace-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 600;
+    }
+    .toolset-count {
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .tool-runtime-badge {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      border-radius: 999px;
+      padding: 0 6px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.6;
+    }
+    .tool-runtime-badge-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .tool-runtime-badge-icon .codicon {
+      font-size: 11px;
+    }
+    .tool-runtime-badge-value {
+      font-variant-numeric: tabular-nums;
+    }
+    .tool-runtime-badge-success {
+      color: var(--vscode-terminal-ansiGreen);
+    }
+    .tool-runtime-badge-warning {
+      color: var(--vscode-editorWarning-foreground);
+    }
+    .tool-runtime-badge-failure {
+      color: var(--vscode-errorForeground);
+    }
+    .tool-runtime-badge-time {
+      gap: 4px;
+      color: color-mix(in srgb, var(--muted) 88%, transparent);
+      border-color: color-mix(in srgb, var(--border) 60%, transparent);
+      background: color-mix(in srgb, var(--chip-bg) 38%, transparent);
+    }
+    .toolset-list {
+      list-style: none;
+      display: grid;
+      gap: 6px;
+      margin: 0;
+      padding: 0;
+    }
+    .toolset-list-nested {
+      padding-left: 0;
+      margin-left: 0;
+      border-left: 0;
+    }
+    .toolset-item {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 2px 0;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+    .toolset-item:hover {
+      color: var(--fg);
+    }
+    .toolset-item-branch {
+      width: 6px;
+      height: 9px;
+      flex: 0 0 auto;
+      border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+      margin-top: -1px;
+    }
+    .toolset-item-icon {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      line-height: 1;
+    }
+    .toolset-item-icon .codicon {
+      font-size: 12px;
+    }
+    .toolset-item-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .toolset-item.toolset-runtime-running .toolset-item-label,
+    .toolset-item.toolset-runtime-running .toolset-item-icon,
+    .toolset-namespace-group.toolset-runtime-running > .toolset-namespace-heading .toolset-namespace-label,
+    .toolset-namespace-group.toolset-runtime-running > .toolset-namespace-heading .toolset-namespace-twistie {
+      color: var(--accent);
+    }
+    .toolset-item.toolset-runtime-success .toolset-item-label,
+    .toolset-item.toolset-runtime-success .toolset-item-icon,
+    .toolset-namespace-group.toolset-runtime-success > .toolset-namespace-heading .toolset-namespace-label,
+    .toolset-namespace-group.toolset-runtime-success > .toolset-namespace-heading .toolset-namespace-twistie {
+      color: var(--vscode-terminal-ansiGreen);
+    }
+    .toolset-item.toolset-runtime-warning .toolset-item-label,
+    .toolset-item.toolset-runtime-warning .toolset-item-icon,
+    .toolset-namespace-group.toolset-runtime-warning > .toolset-namespace-heading .toolset-namespace-label,
+    .toolset-namespace-group.toolset-runtime-warning > .toolset-namespace-heading .toolset-namespace-twistie {
+      color: var(--vscode-editorWarning-foreground);
+    }
+    .toolset-item.toolset-runtime-failure .toolset-item-label,
+    .toolset-item.toolset-runtime-failure .toolset-item-icon,
+    .toolset-namespace-group.toolset-runtime-failure > .toolset-namespace-heading .toolset-namespace-label,
+    .toolset-namespace-group.toolset-runtime-failure > .toolset-namespace-heading .toolset-namespace-twistie {
+      color: var(--vscode-errorForeground);
+    }
+    .toolset-item.toolset-runtime-inactive .toolset-item-label,
+    .toolset-item.toolset-runtime-inactive .toolset-item-icon,
+    .toolset-namespace-group.toolset-runtime-inactive > .toolset-namespace-heading .toolset-namespace-label,
+    .toolset-namespace-group.toolset-runtime-inactive > .toolset-namespace-heading .toolset-namespace-twistie {
+      color: color-mix(in srgb, var(--muted) 72%, transparent);
+    }
+    .toolset-empty {
+      color: var(--muted);
+    }
+    .events {
+      list-style: none;
+      display: grid;
+      gap: 0;
+      align-content: start;
+      margin: 0;
+      padding: 0;
+    }
+    .event-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 2px;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+    }
+    .event-main {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .event-body {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .event-icon {
+      width: 12px;
+      text-align: center;
+      flex: 0 0 auto;
+    }
+    .event-label {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .event-note {
+      color: var(--muted);
+      padding-left: 20px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 11px;
+    }
+    .event-request .event-note {
+      color: color-mix(in srgb, var(--fg) 84%, var(--muted));
+      font-size: 12px;
+      white-space: normal;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .event-request {
+      align-items: start;
+    }
+    .event-chips {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid var(--chip-border);
+      background: var(--chip-bg);
+      border-radius: 999px;
+      padding: 2px 7px;
+      color: var(--muted);
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chip-tool {
+      gap: 5px;
+    }
+    .chip-collapsible {
+      justify-content: center;
+    }
+    .chip-tool.chip-collapsible,
+    .chip-range.chip-collapsible {
+      gap: 0;
+    }
+    .chip-collapsible .chip-hover-label {
+      max-width: 0;
+      opacity: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      transition: max-width 140ms ease, opacity 120ms ease;
+    }
+    .chip-tool.chip-collapsible:hover,
+    .chip-tool.chip-collapsible:focus-within {
+      gap: 5px;
+    }
+    .chip-range.chip-collapsible:hover,
+    .chip-range.chip-collapsible:focus-within {
+      gap: 4px;
+    }
+    .chip-collapsible:hover .chip-hover-label,
+    .chip-collapsible:focus-within .chip-hover-label {
+      max-width: 120px;
+      opacity: 1;
+    }
+    .chip-icon {
+      flex: 0 0 auto;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chip-icon .codicon {
+      font-size: 12px;
+    }
+    .chip-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chip-time,
+    .chip-status-phase,
+    .activity-duration {
+      font-variant-numeric: tabular-nums;
+    }
+    .activity-duration {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .activity-duration-label {
+      color: color-mix(in srgb, var(--muted) 90%, transparent);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .activity-duration-value {
+      color: color-mix(in srgb, var(--fg) 86%, var(--muted));
+      font-weight: 600;
+    }
+    .chip-button {
+      cursor: pointer;
+      color: var(--accent);
+      font: inherit;
+    }
+    .chip-button:hover { text-decoration: underline; }
+    .event-request .event-icon,
+    .event-status .event-icon {
+      color: color-mix(in srgb, var(--accent) 74%, var(--muted));
+    }
+    .event-status-running.event-status-live .event-icon {
+      color: var(--vscode-progressBar-background);
+    }
+    .event-status-running.event-status-settled .event-icon {
+      color: var(--vscode-terminal-ansiGreen);
+    }
+    .event-status-warning .event-icon {
+      color: var(--vscode-editorWarning-foreground);
+    }
+    .event-status-error .event-icon {
+      color: var(--vscode-errorForeground);
+    }
+    .event-status-completed .event-icon {
+      color: var(--vscode-terminal-ansiGreen);
+    }
+    .event-deferred .event-icon { color: var(--vscode-editorWarning-foreground); }
+    .event-failed .event-icon { color: var(--vscode-errorForeground); }
+    .event-read .event-icon,
+    .event-search .event-icon { color: var(--vscode-terminal-ansiGreen); }
+    .empty-state {
+      color: var(--muted);
+      padding: 10px 2px;
+    }
+    @media (max-width: 640px) {
+      .toolset-grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .event-row {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 5px;
+      }
+      .event-chips {
+        justify-content: flex-start;
+      }
+      .meta-status {
+        width: 100%;
+        margin-left: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="panel-root">
+    <section class="header">
+      <div class="header-top">
+        <div class="title">
+          ${renderRoleBadge(snapshot)}
+          ${renderHeaderBadge("Model", snapshot.header.modelLabel, "header-badge-model")}
+          ${renderHeaderMetadataBadges(snapshot)}
+        </div>
+        <div class="toolbar">
+          <button class="toolbar-button" data-message='{"type":"closePanel"}' title="Hide the traceable panel until it is reopened from the status bar">Close</button>
+          <button class="toolbar-button" data-message='{"type":"exportMarkdown"}' title="Export full evidence as markdown">Export Markdown</button>
+        </div>
+      </div>
+      <div class="meta">
+        <span>${activities.length} activit${activities.length === 1 ? "y" : "ies"}</span>
+        <span>Updated ${escapeHtml(updatedLabel)}</span>
+        ${totalStopwatch}
+        ${toolStopwatch}
+        ${thinkStopwatch}
+        ${renderMetaStatus(snapshot)}
+      </div>
+    </section>
+    ${renderToolsetDisclosure(snapshot)}
+    <ul class="events">${eventRows}</ul>
+  </div>
+  <script>
+    const vscodeApi = acquireVsCodeApi();
+    const BOTTOM_FOLLOW_THRESHOLD_PX = 24;
+    const defaultPanelState = {
+      followLatest: true,
+      scrollTop: 0,
+      toolsetDisclosureOpen: false
+    };
+
+    const readPanelState = () => {
+      const state = vscodeApi.getState();
+      return state && typeof state === 'object'
+        ? {
+            followLatest: state.followLatest !== false,
+            scrollTop: typeof state.scrollTop === 'number' ? state.scrollTop : 0,
+            toolsetDisclosureOpen: state.toolsetDisclosureOpen === true
+          }
+        : defaultPanelState;
+    };
+
+    let panelState = readPanelState();
+    const toolsetDisclosure = document.querySelector('.toolset-disclosure');
+    const timerNodes = Array.from(document.querySelectorAll('[data-timer-kind]'));
+
+    const parseTimestampMs = (value) => {
+      const parsed = new Date(value || '').getTime();
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+
+    const parseActiveStarts = (value) => typeof value === 'string' && value
+      ? value.split('|').map((entry) => entry.trim()).filter(Boolean)
+      : [];
+
+    const formatElapsedMs = (elapsedMs) => {
+      if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+        return '';
+      }
+      if (elapsedMs < 1000) {
+        return String(Math.round(elapsedMs)) + 'ms';
+      }
+      if (elapsedMs < 60000) {
+        const seconds = elapsedMs / 1000;
+        return Number.isInteger(seconds) ? String(seconds) + 's' : seconds.toFixed(1) + 's';
+      }
+      const totalSeconds = Math.round(elapsedMs / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return String(minutes) + 'm ' + String(seconds).padStart(2, '0') + 's';
+    };
+
+    const computeActiveToolElapsedMs = (activeStarts, referenceIso) => {
+      const referenceAtMs = parseTimestampMs(referenceIso);
+      if (!Number.isFinite(referenceAtMs)) {
+        return 0;
+      }
+      return activeStarts.reduce((total, startedAt) => {
+        const startedAtMs = parseTimestampMs(startedAt);
+        return total + (Number.isFinite(startedAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0);
+      }, 0);
+    };
+
+    const computeTimerElapsedMs = (timerNode, referenceIso) => {
+      const timerKind = timerNode.dataset.timerKind || '';
+      const startedAt = timerNode.dataset.startedAt || '';
+      const updatedAt = timerNode.dataset.updatedAt || referenceIso;
+      const baseElapsedMs = Number(timerNode.dataset.baseElapsedMs || '0');
+      const activeStarts = parseActiveStarts(timerNode.dataset.activeStarts || '');
+      if (timerKind === 'total') {
+        const startedAtMs = parseTimestampMs(startedAt);
+        const referenceAtMs = parseTimestampMs(referenceIso);
+        return Number.isFinite(startedAtMs) && Number.isFinite(referenceAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0;
+      }
+      if (timerKind === 'tools') {
+        return Math.max(0, baseElapsedMs + computeActiveToolElapsedMs(activeStarts, referenceIso));
+      }
+      if (timerKind === 'think') {
+        const startedAtMs = parseTimestampMs(startedAt);
+        const referenceAtMs = parseTimestampMs(referenceIso);
+        const totalElapsedMs = Number.isFinite(startedAtMs) && Number.isFinite(referenceAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0;
+        const toolElapsedMs = Math.max(0, baseElapsedMs + computeActiveToolElapsedMs(activeStarts, referenceIso));
+        return Math.max(0, totalElapsedMs - toolElapsedMs);
+      }
+      if (timerKind === 'event') {
+        if (timerNode.dataset.running === 'true') {
+          const startedAtMs = parseTimestampMs(startedAt);
+          const referenceAtMs = parseTimestampMs(referenceIso);
+          return Number.isFinite(startedAtMs) && Number.isFinite(referenceAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0;
+        }
+        return Math.max(0, baseElapsedMs);
+      }
+      return 0;
+    };
+
+    const applyTimers = (referenceIso) => {
+      for (const timerNode of timerNodes) {
+        if (!(timerNode instanceof HTMLElement)) {
+          continue;
+        }
+        const valueNode = timerNode.querySelector('.meta-stopwatch-value, .activity-duration-value');
+        const nextValue = formatElapsedMs(computeTimerElapsedMs(timerNode, referenceIso || timerNode.dataset.updatedAt || new Date().toISOString()));
+        if (valueNode instanceof HTMLElement && nextValue) {
+          valueNode.textContent = nextValue;
+        }
+      }
+    };
+
+    applyTimers(new Date().toISOString());
+
+    let timerInterval;
+    if (timerNodes.some((timerNode) => timerNode instanceof HTMLElement && timerNode.dataset.running === 'true')) {
+      timerInterval = window.setInterval(() => {
+        applyTimers(new Date().toISOString());
+      }, 1000);
+      window.addEventListener('beforeunload', () => {
+        window.clearInterval(timerInterval);
+      }, { once: true });
+    }
+
+    if (toolsetDisclosure instanceof HTMLDetailsElement) {
+      toolsetDisclosure.open = panelState.toolsetDisclosureOpen;
+      toolsetDisclosure.addEventListener('toggle', () => {
+        persistPanelState({ toolsetDisclosureOpen: toolsetDisclosure.open });
+      });
+    }
+
+    const persistPanelState = (nextState) => {
+      panelState = { ...panelState, ...nextState };
+      vscodeApi.setState(panelState);
+    };
+
+    const getScrollingRoot = () => document.scrollingElement || document.documentElement || document.body;
+
+    const isNearBottom = () => {
+      const scrollingRoot = getScrollingRoot();
+      if (!scrollingRoot) {
+        return true;
+      }
+      return scrollingRoot.scrollHeight - scrollingRoot.clientHeight - scrollingRoot.scrollTop <= BOTTOM_FOLLOW_THRESHOLD_PX;
+    };
+
+    const scrollToLatestEvent = () => {
+      const scrollingRoot = getScrollingRoot();
+      if (scrollingRoot) {
+        scrollingRoot.scrollTop = scrollingRoot.scrollHeight;
+        scrollingRoot.scrollLeft = 0;
+      }
+      window.scrollTo({ top: document.body.scrollHeight, left: 0, behavior: 'auto' });
+    };
+
+    const restoreScrollPosition = () => {
+      const scrollingRoot = getScrollingRoot();
+      if (!scrollingRoot) {
+        return;
+      }
+      if (panelState.followLatest) {
+        scrollToLatestEvent();
+        return;
+      }
+      const maxScrollTop = Math.max(0, scrollingRoot.scrollHeight - scrollingRoot.clientHeight);
+      const restoredScrollTop = Math.max(0, Math.min(panelState.scrollTop, maxScrollTop));
+      scrollingRoot.scrollTop = restoredScrollTop;
+      scrollingRoot.scrollLeft = 0;
+      window.scrollTo({ top: restoredScrollTop, left: 0, behavior: 'auto' });
+    };
+
+    const scheduleScrollToLatestEvent = () => {
+      const applyScroll = () => {
+        if (panelState.followLatest) {
+          scrollToLatestEvent();
+          persistPanelState({ scrollTop: getScrollingRoot()?.scrollTop ?? panelState.scrollTop });
+          return;
+        }
+        restoreScrollPosition();
+      };
+      applyScroll();
+      requestAnimationFrame(() => applyScroll());
+      requestAnimationFrame(() => requestAnimationFrame(() => applyScroll()));
+      setTimeout(applyScroll, 0);
+      setTimeout(applyScroll, 32);
+      setTimeout(applyScroll, 120);
+    };
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', scheduleScrollToLatestEvent, { once: true });
+    } else {
+      scheduleScrollToLatestEvent();
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && panelState.followLatest) {
+        scheduleScrollToLatestEvent();
+      }
+    });
+
+    window.addEventListener('focus', () => {
+      if (panelState.followLatest) {
+        scheduleScrollToLatestEvent();
+      }
+    });
+
+    window.addEventListener('scroll', () => {
+      const scrollingRoot = getScrollingRoot();
+      persistPanelState({
+        followLatest: isNearBottom(),
+        scrollTop: scrollingRoot?.scrollTop ?? panelState.scrollTop
+      });
+    }, { passive: true });
+
+    window.addEventListener('message', (event) => {
+      if (event?.data?.type === 'revealLatest') {
+        persistPanelState({ followLatest: true });
+        scheduleScrollToLatestEvent();
+      }
+    });
+
+    document.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const clickTarget = target.closest('[data-message]');
+      if (!(clickTarget instanceof HTMLElement)) {
+        return;
+      }
+      const message = clickTarget.getAttribute('data-message');
+      if (!message) {
+        return;
+      }
+      try {
+        vscodeApi.postMessage(JSON.parse(message));
+      } catch {
+        // ignore malformed payloads in the view layer
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+  private view: vscode.WebviewView | undefined;
+  private codiconCssHref: string | undefined;
+  private snapshot: TraceableSubagentDetailSnapshot = {
+    header: {
+      agentName: "Trace lane",
+      agentFilePath: "",
+      agentResolved: false,
+      modelLabel: "model",
+      candidate: false,
+      experimental: false,
+      humanRole: false,
+      toolsetNames: []
+    },
+    status: { phase: "idle", message: "idle" },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [],
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString()
+  };
+
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly onExportMarkdown: () => Promise<void>,
+    private readonly onOpenFile: (filePath: string, startLine?: number, endLine?: number) => Promise<void>,
+    private readonly onClosePanel: () => Promise<void>
+  ) {}
+
+  async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
+    this.view = webviewView;
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, ...TRACEABLE_PANEL_CODICON_PATH.slice(0, -1))]
+    };
+    this.codiconCssHref = webviewView.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, ...TRACEABLE_PANEL_CODICON_PATH)).toString();
+    webviewView.onDidDispose(() => {
+      if (this.view === webviewView) {
+        this.view = undefined;
+      }
+    });
+    webviewView.webview.onDidReceiveMessage(async (message) => {
+      if (!message || typeof message.type !== "string") {
+        return;
+      }
+      if (message.type === "exportMarkdown") {
+        await this.onExportMarkdown();
+        return;
+      }
+      if (message.type === "closePanel") {
+        await this.onClosePanel();
+        return;
+      }
+      if (message.type === "openFile" && typeof message.filePath === "string") {
+        const startLine = typeof message.startLine === "number" ? message.startLine : undefined;
+        const endLine = typeof message.endLine === "number" ? message.endLine : undefined;
+        await this.onOpenFile(message.filePath, startLine, endLine);
+      }
+    });
+    await this.render();
+  }
+
+  update(snapshot: TraceableSubagentDetailSnapshot): void {
+    this.snapshot = snapshot;
+    void this.render();
+  }
+
+  async open(): Promise<void> {
+    await vscode.commands.executeCommand(`workbench.view.extension.${TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID}`);
+    this.view?.show?.(true);
+    await this.view?.webview.postMessage({ type: "revealLatest" });
+  }
+
+  dispose(): void {
+    this.view = undefined;
+  }
+
+  private async render(): Promise<void> {
+    if (!this.view) {
+      return;
+    }
+    this.view.title = "Traceable";
+    this.view.description = this.snapshot.status.message;
+    this.view.webview.html = renderTraceableSubagentPanelHtml(this.snapshot, this.codiconCssHref);
+  }
+}

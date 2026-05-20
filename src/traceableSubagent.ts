@@ -2,9 +2,44 @@ import { existsSync, promises as fs } from "node:fs";
 import path from "node:path";
 import * as vscode from "vscode";
 import { isRuntimeAgentArtifactPath, normalizeArtifactPath } from "./tools/runtimeAgentArtifactStructure";
-import { normalizeToolReferenceKey } from "./toolNameNormalization";
+import { expandToolReferenceKeys, normalizeToolReferenceKey } from "./toolNameNormalization";
 
 export const TRACEABLE_SUBAGENT_TOOL_NAME = "run_traceable_subagent";
+
+export interface TraceableSubagentStatusHeader {
+  agentName?: string;
+  agentFilePath?: string;
+  agentResolved?: boolean;
+  modelLabel?: string;
+  candidate?: boolean;
+  experimental?: boolean;
+  humanRole?: boolean;
+  toolsetNames?: string[];
+}
+
+export interface TraceableSubagentRequestSummaryItem {
+  label: string;
+  value: string;
+  title?: string;
+}
+
+export interface TraceableSubagentToolStatusEvent {
+  callId: string;
+  toolName: string;
+  phase: "running" | "success" | "deferred" | "failure";
+  input?: Record<string, unknown>;
+  note?: string;
+  elapsedMs?: number;
+  occurredAt?: string;
+}
+
+export interface TraceableSubagentStatusReporter {
+  update(message: string): void;
+  finish(message: string, options?: { error?: boolean; warning?: boolean; keepMs?: number; detail?: string }): void;
+  setHeader?(header: TraceableSubagentStatusHeader): void;
+  setRequestSummary?(summary: TraceableSubagentRequestSummaryItem[]): void;
+  recordToolCall?(event: TraceableSubagentToolStatusEvent): void;
+}
 
 const DEFAULT_MAX_ITERATIONS = 4;
 const DEFAULT_MAX_TOOL_CALLS = 6;
@@ -83,6 +118,7 @@ function hasExactModelSelector(selector: TraceableModelSelector | undefined): se
 export interface TraceableSubagentInput {
   userInput: string;
   parentTask: string;
+  reveal?: boolean;
   agentRole?: TraceableAgentRole;
   parentExpectations?: TraceableRequestExpectations;
   carriedContext?: TraceableCarriedContext;
@@ -145,6 +181,7 @@ export interface TraceableSubagentIterationMetric {
   requestedToolCallCount?: number;
   executedToolCallCount?: number;
   deferredToolCallCount?: number;
+  nonConsumingRetryGranted?: boolean;
   remainingToolCalls?: number;
   usage?: TraceableSubagentUsageSummary;
 }
@@ -173,6 +210,62 @@ export interface TraceableSubagentRunResult {
   elapsedMs?: number;
 }
 
+function summarizeMessageContentParts(content: unknown): { partKinds: string[]; toolCallIds: string[]; toolResultCallIds: string[] } {
+  if (!Array.isArray(content)) {
+    return {
+      partKinds: typeof content === "string" ? ["text"] : [],
+      toolCallIds: [],
+      toolResultCallIds: []
+    };
+  }
+
+  const partKinds: string[] = [];
+  const toolCallIds: string[] = [];
+  const toolResultCallIds: string[] = [];
+  for (const part of content) {
+    if (part instanceof vscode.LanguageModelToolCallPart) {
+      partKinds.push("toolCall");
+      toolCallIds.push(part.callId);
+      continue;
+    }
+    if (part instanceof vscode.LanguageModelToolResultPart) {
+      partKinds.push("toolResult");
+      toolResultCallIds.push(part.callId);
+      continue;
+    }
+    if (part instanceof vscode.LanguageModelTextPart) {
+      partKinds.push("text");
+      continue;
+    }
+    if (part instanceof vscode.LanguageModelDataPart) {
+      partKinds.push("data");
+      continue;
+    }
+    partKinds.push("unknown");
+  }
+
+  return {
+    partKinds,
+    toolCallIds,
+    toolResultCallIds
+  };
+}
+
+function summarizeRecentMessages(messages: readonly vscode.LanguageModelChatMessage[], maxMessages = 8): Array<Record<string, unknown>> {
+  const offset = Math.max(messages.length - maxMessages, 0);
+  return messages.slice(offset).map((message, index) => {
+    const contentSummary = summarizeMessageContentParts(message.content);
+    return {
+      relativeIndex: offset + index,
+      role: String(message.role),
+      name: message.name,
+      partKinds: contentSummary.partKinds,
+      toolCallIds: contentSummary.toolCallIds,
+      toolResultCallIds: contentSummary.toolResultCallIds
+    };
+  });
+}
+
 interface ResolvedTraceableAgentArtifact {
   requestedName: string;
   resolvedName: string;
@@ -182,7 +275,30 @@ interface ResolvedTraceableAgentArtifact {
   modelDeclaration?: string;
   modelSelector?: TraceableModelSelector;
   toolDeclarations: string[];
+  candidate: boolean;
+  experimental: boolean;
+  humanRole: boolean;
   disableModelInvocation: boolean;
+}
+
+export interface TraceableAgentCatalogEntry {
+  displayName: string;
+  artifactStem: string;
+  filePath: string;
+  workspaceFolderName: string;
+  modelDeclaration?: string;
+  toolDeclarations: string[];
+  candidate: boolean;
+  experimental: boolean;
+  humanRole: boolean;
+}
+
+export interface TraceableModelCatalogEntry {
+  vendor?: string;
+  family?: string;
+  id?: string;
+  version?: string;
+  sendable: boolean;
 }
 
 type ToolLike = Pick<vscode.LanguageModelToolInformation, "name"> & Partial<Pick<vscode.LanguageModelToolInformation, "description" | "inputSchema">>;
@@ -291,6 +407,184 @@ function buildAgentArtifactStemCandidates(roleName: string): string[] {
   }
 
   return candidates;
+}
+
+function normalizeTraceableAgentDisplayName(value: string): string {
+  return value.trim().normalize("NFKC").toLowerCase();
+}
+
+function sameTraceableAgentDisplayName(left: string, right: string): boolean {
+  return normalizeTraceableAgentDisplayName(left) === normalizeTraceableAgentDisplayName(right);
+}
+
+async function readTraceableAgentCatalogEntry(filePath: string, workspaceFolderName: string): Promise<TraceableAgentCatalogEntry | undefined> {
+  if (!isRuntimeAgentArtifactPath(filePath)) {
+    return undefined;
+  }
+  let raw: string;
+  try {
+    raw = await fs.readFile(filePath, "utf8");
+  } catch {
+    return undefined;
+  }
+  let parsed: ReturnType<typeof extractAgentFrontmatter>;
+  try {
+    parsed = extractAgentFrontmatter(raw, filePath);
+  } catch {
+    return undefined;
+  }
+  const displayName = parseFrontmatterScalar(parsed.fields.get("name")) || path.basename(filePath, ".agent.md");
+  const description = parseFrontmatterScalar(parsed.fields.get("description"));
+  if (!description) {
+    return undefined;
+  }
+  return {
+    displayName,
+    artifactStem: path.basename(filePath, ".agent.md"),
+    filePath,
+    workspaceFolderName,
+    modelDeclaration: parseFrontmatterScalar(parsed.fields.get("model")),
+    toolDeclarations: parseFrontmatterStringList(parsed.fields.get("tools")),
+    candidate: parseFrontmatterBoolean(parsed.fields.get("candidate")),
+    experimental: parseFrontmatterBoolean(parsed.fields.get("experimental")),
+    humanRole: parseFrontmatterBoolean(parsed.fields.get("human-role"))
+  };
+}
+
+export async function listTraceableAgentCatalogEntries(): Promise<TraceableAgentCatalogEntry[]> {
+  const entries: TraceableAgentCatalogEntry[] = [];
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    const agentDir = path.join(folder.uri.fsPath, ".github", "agents");
+    let dirEntries: string[];
+    try {
+      dirEntries = await fs.readdir(agentDir);
+    } catch {
+      continue;
+    }
+    for (const entry of dirEntries) {
+      if (!entry.endsWith(".agent.md")) {
+        continue;
+      }
+      const candidate = path.join(agentDir, entry);
+      const catalogEntry = await readTraceableAgentCatalogEntry(candidate, folder.name);
+      if (!catalogEntry) {
+        continue;
+      }
+      if (!entries.some((item) => item.filePath === catalogEntry.filePath)) {
+        entries.push(catalogEntry);
+      }
+    }
+  }
+  return entries.sort((left, right) => {
+    const displayNameComparison = left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" });
+    if (displayNameComparison !== 0) {
+      return displayNameComparison;
+    }
+    return left.filePath.localeCompare(right.filePath, undefined, { sensitivity: "base" });
+  });
+}
+
+function findSuggestedTraceableAgents(roleName: string, catalog: readonly TraceableAgentCatalogEntry[], maxResults = 8): TraceableAgentCatalogEntry[] {
+  const normalizedName = normalizeRoleStemToken(roleName);
+  const normalizedDisplayName = normalizeTraceableAgentDisplayName(roleName);
+  const suggestions = catalog.filter((entry) => {
+    const normalizedEntryStem = normalizeRoleStemToken(entry.artifactStem);
+    const normalizedEntryDisplayName = normalizeTraceableAgentDisplayName(entry.displayName);
+    return normalizedEntryDisplayName.includes(normalizedDisplayName)
+      || normalizedEntryStem.includes(normalizedName)
+      || normalizedName.includes(normalizedEntryStem);
+  });
+  return suggestions.slice(0, maxResults);
+}
+
+function summarizeTraceableAgentDisplayNames(entries: readonly TraceableAgentCatalogEntry[], maxResults = 12): string {
+  if (entries.length === 0) {
+    return "[]";
+  }
+  return summarizeJson(entries.slice(0, maxResults).map((entry) => entry.displayName), 320);
+}
+
+function formatTraceableAgentResolutionHelp(roleName: string, catalog: readonly TraceableAgentCatalogEntry[], matches?: readonly string[]): string {
+  const suggestions = findSuggestedTraceableAgents(roleName, catalog);
+  const parts = [
+    `availableDisplayNames=${summarizeTraceableAgentDisplayNames(catalog)}`
+  ];
+  if (suggestions.length > 0) {
+    parts.push(`suggestedDisplayNames=${summarizeJson(suggestions.map((entry) => entry.displayName), 220)}`);
+  }
+  if (matches && matches.length > 0) {
+    parts.push(`matches=${summarizeJson(matches, 320)}`);
+  }
+  return parts.join("; ");
+}
+
+async function listBroadRuntimeModelCandidates(
+  accessInformation?: vscode.LanguageModelAccessInformation
+): Promise<{ available: vscode.LanguageModelChat[]; sendable: vscode.LanguageModelChat[] }> {
+  try {
+    const available = await vscode.lm.selectChatModels({});
+    return {
+      available,
+      sendable: accessInformation ? available.filter((candidate) => accessInformation.canSendRequest(candidate)) : available
+    };
+  } catch {
+    return {
+      available: [],
+      sendable: []
+    };
+  }
+}
+
+export async function listTraceableModelCatalogEntries(
+  accessInformation?: vscode.LanguageModelAccessInformation
+): Promise<TraceableModelCatalogEntry[]> {
+  const candidates = await listBroadRuntimeModelCandidates(accessInformation);
+  const sendableKeys = new Set(candidates.sendable.map((model) => JSON.stringify({
+    vendor: model.vendor,
+    family: model.family,
+    id: model.id,
+    version: model.version
+  })));
+  const entries = candidates.available.map((model) => ({
+    vendor: model.vendor,
+    family: model.family,
+    id: model.id,
+    version: model.version,
+    sendable: sendableKeys.has(JSON.stringify({
+      vendor: model.vendor,
+      family: model.family,
+      id: model.id,
+      version: model.version
+    }))
+  }));
+  const uniqueEntries = new Map<string, TraceableModelCatalogEntry>();
+  for (const entry of entries) {
+    const key = JSON.stringify({
+      vendor: entry.vendor,
+      family: entry.family,
+      id: entry.id,
+      version: entry.version
+    });
+    const existing = uniqueEntries.get(key);
+    uniqueEntries.set(key, existing ? { ...existing, sendable: existing.sendable || entry.sendable } : entry);
+  }
+  return [...uniqueEntries.values()].sort((left, right) => {
+    const leftId = left.id ?? "";
+    const rightId = right.id ?? "";
+    const idComparison = leftId.localeCompare(rightId, undefined, { sensitivity: "base" });
+    if (idComparison !== 0) {
+      return idComparison;
+    }
+    const leftVendor = left.vendor ?? "";
+    const rightVendor = right.vendor ?? "";
+    const vendorComparison = leftVendor.localeCompare(rightVendor, undefined, { sensitivity: "base" });
+    if (vendorComparison !== 0) {
+      return vendorComparison;
+    }
+    const leftVersion = left.version ?? "";
+    const rightVersion = right.version ?? "";
+    return leftVersion.localeCompare(rightVersion, undefined, { sensitivity: "base" });
+  });
 }
 
 function parseFrontmatterFields(rawFrontmatter: string): Map<string, string> {
@@ -406,67 +700,27 @@ async function resolveExplicitAgentArtifactPath(filePath: string): Promise<strin
 }
 
 async function resolveAgentArtifactPathByName(roleName: string): Promise<string | undefined> {
+  const catalog = await listTraceableAgentCatalogEntries();
   const stemCandidates = buildAgentArtifactStemCandidates(roleName);
-  const directMatches: string[] = [];
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    for (const stem of stemCandidates) {
-      const candidate = path.join(folder.uri.fsPath, ".github", "agents", `${stem}.agent.md`);
-      try {
-        await fs.access(candidate);
-        if (!directMatches.includes(candidate)) {
-          directMatches.push(candidate);
-        }
-      } catch {
-        // Keep searching.
-      }
-    }
-  }
+  const directMatches = catalog
+    .filter((entry) => stemCandidates.includes(entry.artifactStem))
+    .map((entry) => entry.filePath);
 
   if (directMatches.length > 1) {
-    throw new Error(`Traceable agent role ${JSON.stringify(roleName)} matched multiple direct workspace agent artifacts. Use agentRole.filePath or a more specific role name. matches=${summarizeJson(directMatches, 320)}`);
+    throw new Error(`Traceable agent role ${JSON.stringify(roleName)} matched multiple direct workspace agent artifacts. Use agentRole.filePath or a more specific role name. ${formatTraceableAgentResolutionHelp(roleName, catalog, directMatches)}`);
   }
 
   if (directMatches[0]) {
     return directMatches[0];
   }
 
-  const namedMatches: string[] = [];
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    const agentDir = path.join(folder.uri.fsPath, ".github", "agents");
-    let entries: string[];
-    try {
-      entries = await fs.readdir(agentDir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.endsWith(".agent.md")) {
-        continue;
-      }
-      const candidate = path.join(agentDir, entry);
-      let raw: string;
-      try {
-        raw = await fs.readFile(candidate, "utf8");
-      } catch {
-        continue;
-      }
-      let resolvedName: string | undefined;
-      try {
-        const parsed = extractAgentFrontmatter(raw, candidate);
-        resolvedName = parseFrontmatterScalar(parsed.fields.get("name"));
-      } catch {
-        continue;
-      }
-      if (resolvedName === roleName.trim()) {
-        if (!namedMatches.includes(candidate)) {
-          namedMatches.push(candidate);
-        }
-      }
-    }
-  }
+  const trimmedRoleName = roleName.trim();
+  const namedMatches = catalog
+    .filter((entry) => sameTraceableAgentDisplayName(entry.displayName, trimmedRoleName))
+    .map((entry) => entry.filePath);
 
   if (namedMatches.length > 1) {
-    throw new Error(`Traceable agent role ${JSON.stringify(roleName)} matched multiple agent artifacts by frontmatter name. Use agentRole.filePath or a more specific role name. matches=${summarizeJson(namedMatches, 320)}`);
+    throw new Error(`Traceable agent role ${JSON.stringify(roleName)} matched multiple agent artifacts by frontmatter name. Use agentRole.filePath or a more specific role name. ${formatTraceableAgentResolutionHelp(roleName, catalog, namedMatches)}`);
   }
 
   if (namedMatches[0]) {
@@ -482,12 +736,14 @@ async function resolveTraceableAgentArtifact(agentRole: TraceableAgentRole | und
     return undefined;
   }
 
+  const catalog = await listTraceableAgentCatalogEntries();
+
   const explicitPath = normalizedRole.filePath
     ? await resolveExplicitAgentArtifactPath(normalizedRole.filePath)
     : undefined;
   const resolvedPath = explicitPath ?? await resolveAgentArtifactPathByName(normalizedRole.name);
   if (!resolvedPath) {
-    throw new Error(`Traceable agent role ${JSON.stringify(normalizedRole.name)} could not be resolved to a workspace .agent.md artifact.`);
+    throw new Error(`Traceable agent role ${JSON.stringify(normalizedRole.name)} could not be resolved to a workspace .agent.md artifact. ${formatTraceableAgentResolutionHelp(normalizedRole.name, catalog)}`);
   }
 
   if (!isRuntimeAgentArtifactPath(resolvedPath)) {
@@ -515,6 +771,9 @@ async function resolveTraceableAgentArtifact(agentRole: TraceableAgentRole | und
     modelDeclaration,
     modelSelector: inferModelSelectorFromDeclaration(modelDeclaration),
     toolDeclarations: parseFrontmatterStringList(frontmatterFields.get("tools")),
+    candidate: parseFrontmatterBoolean(frontmatterFields.get("candidate")),
+    experimental: parseFrontmatterBoolean(frontmatterFields.get("experimental")),
+    humanRole: parseFrontmatterBoolean(frontmatterFields.get("human-role")),
     disableModelInvocation: parseFrontmatterBoolean(frontmatterFields.get("disable-model-invocation"))
   };
 }
@@ -669,6 +928,12 @@ export function buildTraceableSubagentPromptSections(
       fileContextAnchors.length > 1
         ? "- If multiple task file anchors are provided, try to cover each anchored file at least once before drilling deeper into one file, unless one file alone clearly determines the answer."
         : "- Avoid repeated rereads when one grounded read is enough to answer the bounded question.",
+      fileContextAnchors.length > 1
+        ? "- Do not spend a second top-of-file read on one anchored file while another anchored file remains unread unless the already-read file alone clearly controls the answer."
+        : "- Prefer one bounded grounded read over multiple broad rereads of the same file when possible.",
+      fileContextAnchors.length > 1
+        ? "- If the remaining unread anchored files are as many as or more than the remaining practical read budget, stop broad rereads and emit the best partial or unresolved JSON object you can from the evidence already gathered."
+        : "- If budget gets tight, emit the best bounded partial or unresolved JSON object you can from the evidence already gathered rather than rereading broad file slices.",
       "- Use tools only when they materially improve grounding.",
       `- Do not call ${TRACEABLE_SUBAGENT_TOOL_NAME} from inside this lane.`,
       "- If you rely materially on native runSubagent, report that as opaque delegation.",
@@ -701,12 +966,27 @@ function normalizeMissingItems(value: unknown): TraceableSubagentMissingItem[] {
     return [];
   }
   return value
-    .filter(isRecord)
-    .map((item) => ({
-      kind: item.kind === "toolCall" ? "toolCall" : "step",
-      label: typeof item.label === "string" ? item.label : "unknown",
-      reason: typeof item.reason === "string" ? item.reason : "No reason provided."
-    }));
+    .flatMap((item) => {
+      if (typeof item === "string") {
+        const trimmed = item.trim();
+        if (!trimmed) {
+          return [];
+        }
+        return [{
+          kind: "step" as const,
+          label: trimmed,
+          reason: "Reported as a plain-text missing item by the child lane."
+        }];
+      }
+      if (!isRecord(item)) {
+        return [];
+      }
+      return [{
+        kind: item.kind === "toolCall" ? "toolCall" : "step",
+        label: typeof item.label === "string" ? item.label : "unknown",
+        reason: typeof item.reason === "string" ? item.reason : "No reason provided."
+      }];
+    });
 }
 
 function normalizeSteps(value: unknown): TraceableSubagentStep[] {
@@ -714,19 +994,35 @@ function normalizeSteps(value: unknown): TraceableSubagentStep[] {
     return [];
   }
   return value
-    .filter(isRecord)
-    .map((item, index) => ({
-      id: typeof item.id === "string" ? item.id : `step-${index + 1}`,
-      intent: typeof item.intent === "string" ? item.intent : "unspecified",
-      status: item.status === "planned"
-        || item.status === "attempted"
-        || item.status === "completed"
-        || item.status === "failed"
-        || item.status === "skipped"
-        ? item.status
-        : "attempted",
-      note: typeof item.note === "string" ? item.note : undefined
-    }));
+    .flatMap((item, index) => {
+      if (typeof item === "string") {
+        const trimmed = item.trim();
+        if (!trimmed) {
+          return [];
+        }
+        return [{
+          id: `step-${index + 1}`,
+          intent: trimmed,
+          status: "attempted" as const,
+          note: undefined
+        }];
+      }
+      if (!isRecord(item)) {
+        return [];
+      }
+      return [{
+        id: typeof item.id === "string" ? item.id : `step-${index + 1}`,
+        intent: typeof item.intent === "string" ? item.intent : "unspecified",
+        status: item.status === "planned"
+          || item.status === "attempted"
+          || item.status === "completed"
+          || item.status === "failed"
+          || item.status === "skipped"
+          ? item.status
+          : "attempted",
+        note: typeof item.note === "string" ? item.note : undefined
+      }];
+    });
 }
 
 function normalizeOpaqueDelegations(value: unknown): TraceableOpaqueDelegation[] {
@@ -741,23 +1037,74 @@ function normalizeOpaqueDelegations(value: unknown): TraceableOpaqueDelegation[]
     }));
 }
 
+function normalizeStopReasonValue(value: unknown): TraceableStopReason | undefined {
+  if (value === "completed"
+    || value === "budget_exhausted"
+    || value === "insufficient_grounding"
+    || value === "tool_blocked"
+    || value === "awaiting_input"
+    || value === "policy_stop") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (/\bcompleted\b|\bsummary produced\b|\bfinished\b/u.test(normalized)) {
+    return "completed";
+  }
+  if (/\bbudget\b|\bexhausted\b/u.test(normalized)) {
+    return "budget_exhausted";
+  }
+  if (/\btool\b.*\bblocked\b|\bblocked\b.*\btool\b/u.test(normalized)) {
+    return "tool_blocked";
+  }
+  if (/\bawaiting input\b|\bneeds input\b|\binput required\b/u.test(normalized)) {
+    return "awaiting_input";
+  }
+  if (/\bpolicy\b.*\bstop\b|\bstopped by policy\b/u.test(normalized)) {
+    return "policy_stop";
+  }
+  if (/\binsufficient\b|\bnot enough\b|\bpartial evidence\b|\bunresolved\b/u.test(normalized)) {
+    return "insufficient_grounding";
+  }
+  return undefined;
+}
+
+function normalizeCompletionClaimValue(value: unknown, stopReason: TraceableStopReason | undefined): TraceableCompletionClaim | undefined {
+  const rawCompletionClaim = typeof value === "string" ? value.trim() : "";
+  if (rawCompletionClaim === "complete"
+    || rawCompletionClaim === "partial"
+    || rawCompletionClaim === "unresolved") {
+    return rawCompletionClaim;
+  }
+  if (!rawCompletionClaim) {
+    return undefined;
+  }
+  const normalized = rawCompletionClaim.toLowerCase();
+  if (normalized === "partial_evidence_only" || /\bpartial\b|\bpartial evidence\b/u.test(normalized)) {
+    return "partial";
+  }
+  if (/\bunresolved\b|\bnot verified\b|\bnot confirmed\b|\binsufficient\b/u.test(normalized)) {
+    return "unresolved";
+  }
+  if (/\bconfirmed\b|\bcomplete\b|\bcompleted\b|\bgrounded\b|\bderived\b|\bverified\b/u.test(normalized)) {
+    return "complete";
+  }
+  return stopReason === "completed"
+    ? "partial"
+    : "unresolved";
+}
+
 function normalizeParsedPayload(value: unknown): TraceableSubagentChildPayload | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  const stopReason = value.stopReason === "completed"
-    || value.stopReason === "budget_exhausted"
-    || value.stopReason === "insufficient_grounding"
-    || value.stopReason === "tool_blocked"
-    || value.stopReason === "awaiting_input"
-    || value.stopReason === "policy_stop"
-    ? value.stopReason
-    : undefined;
-  const completionClaim = value.completionClaim === "complete"
-    || value.completionClaim === "partial"
-    || value.completionClaim === "unresolved"
-    ? value.completionClaim
-    : undefined;
+  const stopReason = normalizeStopReasonValue(value.stopReason);
+  const completionClaim = normalizeCompletionClaimValue(value.completionClaim, stopReason);
   const finalSummary = typeof value.finalSummary === "string" ? value.finalSummary.trim() : "";
   if (!stopReason || !completionClaim || !finalSummary) {
     return undefined;
@@ -772,6 +1119,58 @@ function normalizeParsedPayload(value: unknown): TraceableSubagentChildPayload |
   };
 }
 
+function extractBalancedJsonObjectCandidates(rawText: string): string[] {
+  const candidates: string[] = [];
+  let startIndex = -1;
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let index = 0; index < rawText.length; index += 1) {
+    const char = rawText[index];
+
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      if (depth === 0) {
+        startIndex = index;
+      }
+      depth += 1;
+      continue;
+    }
+
+    if (char !== "}" || depth === 0) {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0 && startIndex >= 0) {
+      candidates.push(rawText.slice(startIndex, index + 1).trim());
+      startIndex = -1;
+    }
+  }
+
+  return candidates;
+}
+
 export function extractTraceableSubagentPayload(rawText: string): TraceableSubagentChildPayload | undefined {
   const candidates = [rawText.trim()];
   const fencedMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
@@ -783,8 +1182,9 @@ export function extractTraceableSubagentPayload(rawText: string): TraceableSubag
   if (firstBrace >= 0 && lastBrace > firstBrace) {
     candidates.push(rawText.slice(firstBrace, lastBrace + 1).trim());
   }
+  candidates.push(...extractBalancedJsonObjectCandidates(rawText));
 
-  for (const candidate of candidates) {
+  for (const candidate of [...new Set(candidates)]) {
     if (!candidate) {
       continue;
     }
@@ -826,6 +1226,63 @@ function isOpaqueNativeDelegationTool(toolName: string): boolean {
 
 function countConsumedToolBudget(toolCalls: TraceableSubagentToolCallRecord[]): number {
   return toolCalls.filter((entry) => entry.result !== "notRun").length;
+}
+
+function extractReadFilePath(input: unknown): string | undefined {
+  if (!isRecord(input) || typeof input.filePath !== "string") {
+    return undefined;
+  }
+  const normalized = input.filePath.trim();
+  return normalized || undefined;
+}
+
+function shouldDeferRepeatedAnchoredRead(
+  call: vscode.LanguageModelToolCallPart,
+  toolCalls: TraceableSubagentToolCallRecord[],
+  fileContextAnchors: readonly string[]
+): { shouldDefer: boolean; note?: string } {
+  if (call.name !== "copilot_readFile" || fileContextAnchors.length <= 1) {
+    return { shouldDefer: false };
+  }
+
+  const requestedFilePath = extractReadFilePath(call.input);
+  if (!requestedFilePath || !fileContextAnchors.includes(requestedFilePath)) {
+    return { shouldDefer: false };
+  }
+
+  const successfullyReadAnchors = new Set(
+    toolCalls
+      .filter((entry) => entry.toolName === "copilot_readFile" && entry.result === "success")
+      .flatMap((entry) => {
+        try {
+          const parsed = JSON.parse(entry.argsSummary);
+          const filePath = extractReadFilePath(parsed);
+          return filePath && fileContextAnchors.includes(filePath) ? [filePath] : [];
+        } catch {
+          return [];
+        }
+      })
+  );
+
+  if (!successfullyReadAnchors.has(requestedFilePath)) {
+    return { shouldDefer: false };
+  }
+
+  const unreadAnchors = fileContextAnchors.filter((anchor) => !successfullyReadAnchors.has(anchor));
+  if (unreadAnchors.length === 0) {
+    return { shouldDefer: false };
+  }
+
+  const unreadAnchorList = unreadAnchors.map((anchor) => `- ${anchor}`).join("\n");
+
+  return {
+    shouldDefer: true,
+    note: [
+      `Deferred repeated read of ${path.basename(requestedFilePath)} until the remaining anchored files are covered once.`,
+      "Next action: read one of these unread anchored files now, or synthesize an unresolved/partial JSON object if the remaining budget is too tight:",
+      unreadAnchorList
+    ].join("\n")
+  };
 }
 
 function extractObservedReadTargets(toolCalls: TraceableSubagentToolCallRecord[]): string[] {
@@ -1081,6 +1538,33 @@ function buildUnparseableChildPayloadFallback(
   );
 }
 
+function buildEmptyChildResponseFallback(
+  input: TraceableSubagentInput,
+  toolCalls: TraceableSubagentToolCallRecord[],
+  model: TraceableSubagentRunResult["model"],
+  allowedToolNames: string[]
+): TraceableSubagentRunResult {
+  return fallbackResult(
+    input,
+    toolCalls,
+    "Child lane returned an empty response stream and no final trace payload. Host may have surfaced a no-choices response before any text or tool calls were emitted.",
+    "tool_blocked",
+    "unresolved",
+    {
+      model,
+      allowedToolNames,
+      rawModelText: "",
+      expectedButMissing: [
+        {
+          kind: "step",
+          label: "Final JSON payload",
+          reason: "The child response stream ended before any text, tool calls, or parseable final JSON payload were emitted."
+        }
+      ]
+    }
+  );
+}
+
 function summarizeModelCandidates(models: readonly vscode.LanguageModelChat[]): string {
   if (models.length === 0) {
     return "[]";
@@ -1151,7 +1635,9 @@ function buildTraceableSubagentModelSelectorsFromSources(
 }
 
 export function selectTraceableSubagentTools<T extends ToolLike>(availableTools: readonly T[], input: TraceableToolSelectionInput): T[] {
-  const blocked = new Set([...DEFAULT_BLOCKED_TOOL_NAMES, ...uniqueStrings(input.blockedToolNames)].map(normalizeToolReferenceKey));
+  const blocked = new Set(
+    [...DEFAULT_BLOCKED_TOOL_NAMES, ...uniqueStrings(input.blockedToolNames)].flatMap((toolName) => expandToolReferenceKeys(toolName))
+  );
   const explicitAllowed = uniqueStrings(input.allowedToolNames);
   const inheritedAllowed = explicitAllowed.length === 0 ? uniqueStrings(input.defaultAllowedToolNames) : [];
   const allowed = explicitAllowed.length > 0 ? explicitAllowed : inheritedAllowed;
@@ -1159,7 +1645,7 @@ export function selectTraceableSubagentTools<T extends ToolLike>(availableTools:
   if (allowed.length === 0) {
     return [...filtered];
   }
-  const allowedSet = new Set(allowed.map(normalizeToolReferenceKey));
+  const allowedSet = new Set(allowed.flatMap((toolName) => expandToolReferenceKeys(toolName)));
   return filtered.filter((tool) => allowedSet.has(normalizeToolReferenceKey(tool.name)));
 }
 
@@ -1169,10 +1655,42 @@ export async function runTraceableSubagent(
     accessInformation?: vscode.LanguageModelAccessInformation;
     debugLogDir?: string;
     token?: vscode.CancellationToken;
+    statusReporter?: TraceableSubagentStatusReporter;
   } = {}
 ): Promise<TraceableSubagentRunResult> {
   const startedAtMs = Date.now();
   const debugLogPath = options.debugLogDir ? path.join(options.debugLogDir, "traceable-subagent-debug.jsonl") : undefined;
+  const fileContextAnchors = resolveTraceableFileContextAnchors(input.carriedContext?.fileContext);
+  const targetFileCount = fileContextAnchors.length;
+  const setStatus = (message: string): void => {
+    try {
+      options.statusReporter?.update(message);
+    } catch {
+      // Best-effort UI status only; runtime correctness should not depend on it.
+    }
+  };
+  const finishStatus = (result: TraceableSubagentRunResult): void => {
+    const compactSummary = result.finalSummary.replace(/\s+/g, " ").trim();
+    const isHardFailure = result.stopReason === "tool_blocked" || result.stopReason === "policy_stop";
+    const isIncomplete = !isHardFailure && result.stopReason !== "completed";
+    const message = result.stopReason === "completed"
+      ? "completed"
+      : isIncomplete
+        ? "incomplete"
+        : "failed";
+    const detail = compactSummary || result.stopReason;
+    try {
+      options.statusReporter?.finish(message, {
+        error: isHardFailure,
+        warning: isIncomplete,
+        detail
+      });
+    } catch {
+      // Best-effort UI status only; runtime correctness should not depend on it.
+    }
+  };
+
+  setStatus("starting");
   const finalizeResult = async (
     result: TraceableSubagentRunResult,
     phase: string,
@@ -1195,13 +1713,40 @@ export async function runTraceableSubagent(
       elapsedMs,
       ...extra
     });
+    finishStatus(resultWithDebugPath);
     return resultWithDebugPath;
   };
 
   let resolvedAgentArtifact: ResolvedTraceableAgentArtifact | undefined;
   if (input.agentRole) {
     try {
-      resolvedAgentArtifact = await resolveTraceableAgentArtifact(input.agentRole);
+      options.statusReporter?.setHeader?.({
+        agentName: input.agentRole.name,
+        agentResolved: false
+      });
+    } catch {
+      // Best-effort UI status only; runtime correctness should not depend on it.
+    }
+    setStatus("resolving role");
+    try {
+      const resolvedArtifact = await resolveTraceableAgentArtifact(input.agentRole);
+      resolvedAgentArtifact = resolvedArtifact;
+      if (resolvedArtifact?.resolvedName) {
+        try {
+          options.statusReporter?.setHeader?.({
+            agentName: resolvedArtifact.resolvedName,
+            agentFilePath: resolvedArtifact.filePath,
+            agentResolved: true,
+            modelLabel: resolvedArtifact.modelDeclaration,
+            candidate: resolvedArtifact.candidate,
+            experimental: resolvedArtifact.experimental,
+            humanRole: resolvedArtifact.humanRole,
+            toolsetNames: resolvedArtifact.toolDeclarations
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
+      }
     } catch (error) {
       return finalizeResult(fallbackResult(
         input,
@@ -1227,6 +1772,11 @@ export async function runTraceableSubagent(
     defaultAllowedToolNames: inheritedAllowedToolNames
   });
   const selectedToolNames = selectedTools.map((tool) => tool.name);
+  let broadRuntimeModelsPromise: Promise<{ available: vscode.LanguageModelChat[]; sendable: vscode.LanguageModelChat[] }> | undefined;
+  const loadBroadRuntimeModels = () => {
+    broadRuntimeModelsPromise ??= listBroadRuntimeModelCandidates(options.accessInformation);
+    return broadRuntimeModelsPromise;
+  };
 
   await appendTraceableSubagentDebugEvent(debugLogPath, {
     phase: "tool_surface_snapshot",
@@ -1268,12 +1818,13 @@ export async function runTraceableSubagent(
   let matchedSelector: vscode.LanguageModelChatSelector | undefined;
 
   if (selectors.length === 0) {
+    const broadRuntimeModels = await loadBroadRuntimeModels();
     return finalizeResult(fallbackResult(
       input,
       toolCalls,
       resolvedAgentArtifact?.modelDeclaration
-        ? `Resolved traceable agent artifact ${JSON.stringify(resolvedAgentArtifact.resolvedName)} declared model ${JSON.stringify(resolvedAgentArtifact.modelDeclaration)}, but the runtime could not translate it into an exact model selector safely.`
-        : "Traceable subagent model selection is not configured safely. Provide modelSelector.id explicitly. The runtime refuses implicit auto-selection to avoid hidden model-cost drift, and the current LM tool invocation API does not expose the parent chat model to this tool.",
+        ? `Resolved traceable agent artifact ${JSON.stringify(resolvedAgentArtifact.resolvedName)} declared model ${JSON.stringify(resolvedAgentArtifact.modelDeclaration)}, but the runtime could not translate it into an exact model selector safely. availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`
+        : `Traceable subagent model selection is not configured safely. Provide modelSelector.id explicitly. The runtime refuses implicit auto-selection to avoid hidden model-cost drift, and the current LM tool invocation API does not expose the parent chat model to this tool. availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`,
       "tool_blocked",
       "unresolved",
       {
@@ -1308,6 +1859,7 @@ export async function runTraceableSubagent(
   }
 
   let model: vscode.LanguageModelChat | undefined;
+  setStatus("selecting model");
   try {
     for (const selector of selectors) {
       const availableForSelector = await vscode.lm.selectChatModels(selector);
@@ -1328,10 +1880,11 @@ export async function runTraceableSubagent(
       }
     }
   } catch (error) {
+    const broadRuntimeModels = await loadBroadRuntimeModels();
     return finalizeResult(fallbackResult(
       input,
       toolCalls,
-      error instanceof Error ? error.message : String(error),
+      `${error instanceof Error ? error.message : String(error)} availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`,
       "tool_blocked",
       "unresolved",
       {
@@ -1348,15 +1901,18 @@ export async function runTraceableSubagent(
   }
 
   if (!model) {
+    const broadRuntimeModels = await loadBroadRuntimeModels();
     const selectorSummary = summarizeJson(matchedSelector ?? selectors[selectors.length - 1] ?? {}, 180);
     const selectorAttempts = summarizeJson(selectors, 260);
     const availableSummary = summarizeModelCandidates(availableModels);
     const sendableSummary = summarizeModelCandidates(sendableModels);
+    const broadAvailableSummary = summarizeModelCandidates(broadRuntimeModels.available);
+    const broadSendableSummary = summarizeModelCandidates(broadRuntimeModels.sendable);
     const accessMode = options.accessInformation ? "access-filtered" : "unfiltered";
     return finalizeResult(fallbackResult(
       input,
       toolCalls,
-      `No accessible language model matched the requested traceable-subagent selector. selector=${selectorSummary}; selectorAttempts=${selectorAttempts}; mode=${accessMode}; available=${availableModels.length}; sendable=${sendableModels.length}; availableCandidates=${availableSummary}; sendableCandidates=${sendableSummary}`,
+      `No accessible language model matched the requested traceable-subagent selector. selector=${selectorSummary}; selectorAttempts=${selectorAttempts}; mode=${accessMode}; available=${availableModels.length}; sendable=${sendableModels.length}; availableCandidates=${availableSummary}; sendableCandidates=${sendableSummary}; availableRuntimeModels=${broadAvailableSummary}; sendableRuntimeModels=${broadSendableSummary}`,
       "tool_blocked",
       "unresolved",
       {
@@ -1377,12 +1933,22 @@ export async function runTraceableSubagent(
     version: model.version
   };
 
+  try {
+    options.statusReporter?.setHeader?.({
+      modelLabel: model.id
+    });
+  } catch {
+    // Best-effort UI status only; runtime correctness should not depend on it.
+  }
+
   const messages = buildTraceableSubagentMessages(input, selectedToolNames, resolvedAgentArtifact);
   let lastRawModelText = "";
   let completedIterations = 0;
   let lastIterationSummary: Record<string, unknown> | undefined;
   let allowOneFinalRecoveryTurn = false;
+  let extraPureDeferRetryTurns = 0;
   const iterationMetrics: TraceableSubagentIterationMetric[] = [];
+  const maxPureDeferRetryTurns = Math.min(Math.max(fileContextAnchors.length - 1, 0), budgetPolicy.maxIterations);
 
   await appendTraceableSubagentDebugEvent(debugLogPath, {
     phase: "model_selected",
@@ -1400,12 +1966,22 @@ export async function runTraceableSubagent(
     allowedToolCount: selectedToolNames.length,
     allowedToolNames: selectedToolNames
   });
+  setStatus("model ready");
 
-  for (let iteration = 0; iteration < budgetPolicy.maxIterations + (allowOneFinalRecoveryTurn ? 1 : 0); iteration += 1) {
+  for (let iteration = 0; iteration < budgetPolicy.maxIterations + (allowOneFinalRecoveryTurn ? 1 : 0) + extraPureDeferRetryTurns; iteration += 1) {
     completedIterations = iteration + 1;
     const isFinalRecoveryIteration = iteration >= budgetPolicy.maxIterations;
+    setStatus(isFinalRecoveryIteration ? "final recovery" : iteration === 0 ? "requesting analysis" : "continuing analysis");
     const toolsForIteration = isFinalRecoveryIteration ? [] : selectedTools;
     const iterationStartedAtMs = Date.now();
+    await appendTraceableSubagentDebugEvent(debugLogPath, {
+      phase: "pre_send_request",
+      iteration,
+      isFinalRecoveryIteration,
+      toolCountForIteration: toolsForIteration.length,
+      messageCount: messages.length,
+      recentMessages: summarizeRecentMessages(messages)
+    });
     let response: vscode.LanguageModelChatResponse;
     try {
       response = await model.sendRequest(
@@ -1515,6 +2091,18 @@ export async function runTraceableSubagent(
       toolCallNames: toolCallParts.map((part) => part.name)
     };
     if (toolCallParts.length === 0) {
+      setStatus(isFinalRecoveryIteration ? "finalizing" : "synthesizing");
+      if (lastRawModelText.length === 0) {
+        return finalizeResult(buildEmptyChildResponseFallback(
+          input,
+          toolCalls,
+          modelInfo,
+          selectedToolNames
+        ), "child_response_empty", {
+          matchedSelector,
+          selectedModel: modelInfo
+        });
+      }
       const parsedPayload = extractTraceableSubagentPayload(lastRawModelText);
       if (!parsedPayload) {
         return finalizeResult(buildUnparseableChildPayloadFallback(
@@ -1572,7 +2160,65 @@ export async function runTraceableSubagent(
         : remainingToolBudget;
     let runnableToolCallsThisIteration = 0;
     let deferredToolCallsThisIteration = 0;
+    let repeatedAnchoredReadDeferralsThisIteration = 0;
     for (const call of toolCallParts) {
+      const toolStartedAtMs = Date.now();
+      const toolOccurredAt = new Date(toolStartedAtMs).toISOString();
+      if (call.name === "copilot_readFile") {
+        const completedReadCalls = toolCalls.filter((entry) => entry.toolName === "copilot_readFile" && entry.result === "success").length;
+        const nextReadIndex = completedReadCalls + 1;
+        setStatus(
+          targetFileCount > 0
+            ? `reading ${Math.min(nextReadIndex, targetFileCount)}/${targetFileCount}`
+            : `reading file ${nextReadIndex}`
+        );
+      } else {
+        setStatus(`running ${call.name}`);
+      }
+
+      try {
+        options.statusReporter?.recordToolCall?.({
+          callId: call.callId,
+          toolName: call.name,
+          phase: "running",
+          input: isRecord(call.input) ? call.input : undefined,
+          occurredAt: toolOccurredAt
+        });
+      } catch {
+        // Best-effort UI status only; runtime correctness should not depend on it.
+      }
+
+      const repeatedAnchoredReadDecision = shouldDeferRepeatedAnchoredRead(call, toolCalls, fileContextAnchors);
+      if (repeatedAnchoredReadDecision.shouldDefer) {
+        const note = repeatedAnchoredReadDecision.note ?? `Deferred repeated read of ${call.name}.`;
+        deferredToolCallsThisIteration += 1;
+        repeatedAnchoredReadDeferralsThisIteration += 1;
+        toolCalls.push({
+          callId: call.callId,
+          toolName: call.name,
+          argsSummary: summarizeJson(call.input),
+          result: "notRun",
+          note
+        });
+        toolResultParts.push(
+          new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(note)])
+        );
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "deferred",
+            input: isRecord(call.input) ? call.input : undefined,
+            note,
+            elapsedMs: 0,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
+        continue;
+      }
+
       if (runnableToolCallsThisIteration >= maxRunnableToolCallsThisIteration) {
         const note = shouldReserveIterationSynthesisSlot
           ? `Deferred ${call.name} to preserve a final synthesis turn before the iteration budget is exhausted.`
@@ -1590,6 +2236,19 @@ export async function runTraceableSubagent(
         toolResultParts.push(
           new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(note)])
         );
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "deferred",
+            input: isRecord(call.input) ? call.input : undefined,
+            note,
+            elapsedMs: 0,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
         continue;
       }
 
@@ -1605,6 +2264,19 @@ export async function runTraceableSubagent(
         toolResultParts.push(
           new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(note)])
         );
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "deferred",
+            input: isRecord(call.input) ? call.input : undefined,
+            note,
+            elapsedMs: 0,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
         continue;
       }
 
@@ -1620,14 +2292,27 @@ export async function runTraceableSubagent(
         toolResultParts.push(
           new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(note)])
         );
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "failure",
+            input: isRecord(call.input) ? call.input : undefined,
+            note,
+            elapsedMs: 0,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
         continue;
       }
-
       try {
         const toolResult = await vscode.lm.invokeTool(call.name, {
           input: isRecord(call.input) ? call.input : {},
           toolInvocationToken: undefined
         }, options.token);
+        const toolElapsedMs = Date.now() - toolStartedAtMs;
 
         runnableToolCallsThisIteration += 1;
 
@@ -1645,7 +2330,20 @@ export async function runTraceableSubagent(
           result: "success"
         });
         toolResultParts.push(new vscode.LanguageModelToolResultPart(call.callId, toolResult.content));
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "success",
+            input: isRecord(call.input) ? call.input : undefined,
+            elapsedMs: toolElapsedMs,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
       } catch (error) {
+        const toolElapsedMs = Date.now() - toolStartedAtMs;
         const failure = summarizeToolError(error);
         toolCalls.push({
           callId: call.callId,
@@ -1657,6 +2355,19 @@ export async function runTraceableSubagent(
         toolResultParts.push(
           new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(failure.note)])
         );
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "failure",
+            input: isRecord(call.input) ? call.input : undefined,
+            note: failure.note,
+            elapsedMs: toolElapsedMs,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
       }
     }
 
@@ -1685,6 +2396,20 @@ export async function runTraceableSubagent(
     currentIterationMetric.executedToolCallCount = runnableToolCallsThisIteration;
     currentIterationMetric.deferredToolCallCount = deferredToolCallsThisIteration;
     currentIterationMetric.remainingToolCalls = remainingToolCalls;
+
+    const shouldGrantPureDeferRetryTurn = !isFinalRecoveryIteration
+      && maxPureDeferRetryTurns > 0
+      && extraPureDeferRetryTurns < maxPureDeferRetryTurns
+      && toolCallParts.length > 0
+      && runnableToolCallsThisIteration === 0
+      && deferredToolCallsThisIteration === toolCallParts.length
+      && repeatedAnchoredReadDeferralsThisIteration === deferredToolCallsThisIteration
+      && lastRawModelText.length === 0;
+    if (shouldGrantPureDeferRetryTurn) {
+      extraPureDeferRetryTurns += 1;
+      currentIterationMetric.nonConsumingRetryGranted = true;
+    }
+
     lastIterationSummary = {
       ...(lastIterationSummary ?? {}),
       shouldReserveIterationSynthesisSlot,
@@ -1692,17 +2417,39 @@ export async function runTraceableSubagent(
       requestedToolCallCount: toolCallParts.length,
       executedToolCallCount: runnableToolCallsThisIteration,
       deferredToolCallCount: deferredToolCallsThisIteration,
+      repeatedAnchoredReadDeferralsThisIteration,
+      nonConsumingRetryGranted: currentIterationMetric.nonConsumingRetryGranted ?? false,
       remainingToolCalls,
       accumulatedToolCallCount: toolCalls.length,
       consumedToolCallBudgetCount: consumedToolBudgetAfterIteration
     };
 
+    if (shouldGrantPureDeferRetryTurn) {
+      messages.push(vscode.LanguageModelChatMessage.User([
+        new vscode.LanguageModelTextPart(
+          "Traceable subagent retry credit: the previous turn only attempted repeated anchored rereads that were deferred, so that turn will not consume the regular iteration budget once. Do not reread the same anchored file now. Read one of the explicitly named unread anchored files next, or emit the best unresolved/partial JSON object now if the remaining practical budget is already too tight."
+        )
+      ]));
+      await appendTraceableSubagentDebugEvent(debugLogPath, {
+        phase: "pure_defer_retry_credit_granted",
+        iteration,
+        deferredToolCallCount: deferredToolCallsThisIteration,
+        repeatedAnchoredReadDeferralsThisIteration,
+        remainingToolCalls,
+        accumulatedToolCallCount: toolCalls.length,
+        consumedToolCallBudgetCount: consumedToolBudgetAfterIteration,
+        extraPureDeferRetryTurns
+      });
+    }
+
     const shouldScheduleFinalRecoveryTurn = !isFinalRecoveryIteration
+      && !shouldGrantPureDeferRetryTurn
       && iteration === budgetPolicy.maxIterations - 1
       && deferredToolCallsThisIteration > 0
       && runnableToolCallsThisIteration === 0
       && !allowOneFinalRecoveryTurn;
     if (shouldScheduleFinalRecoveryTurn) {
+      setStatus("final recovery");
       allowOneFinalRecoveryTurn = true;
       messages.push(vscode.LanguageModelChatMessage.User([
         new vscode.LanguageModelTextPart(

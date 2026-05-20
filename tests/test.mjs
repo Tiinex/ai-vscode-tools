@@ -44,6 +44,9 @@ const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools"
 const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
 const distLanguageModelTools = path.join(packageRoot, "dist", "languageModelTools.js");
 const distTraceableSubagent = path.join(packageRoot, "dist", "traceableSubagent.js");
+const distTraceableSubagentStatusBar = path.join(packageRoot, "dist", "traceableSubagentStatusBar.js");
+const distTraceableSubagentStatusDetail = path.join(packageRoot, "dist", "traceableSubagentStatusDetail.js");
+const distTraceableSubagentStatusPanel = path.join(packageRoot, "dist", "traceableSubagentStatusPanel.js");
 const distToolNameNormalization = path.join(packageRoot, "dist", "toolNameNormalization.js");
 const packageJsonPath = path.join(packageRoot, "package.json");
 const readmePath = path.join(packageRoot, "README.md");
@@ -78,6 +81,8 @@ const expectedLanguageModelToolNames = [
   "estimate_agent_context_breakdown",
   "get_agent_session_profile",
   "survey_agent_sessions",
+  "list_traceable_agents",
+  "list_traceable_models",
   "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
@@ -110,6 +115,8 @@ const expectedExtensionCommandNames = [
 ];
 
 const liveToolManifestParityNames = new Set([
+  "list_traceable_agents",
+  "list_traceable_models",
   "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
@@ -6952,6 +6959,8 @@ async function runManifestChecks() {
   const activationEvents = packageJson.activationEvents;
   const languageModelTools = packageJson.contributes?.languageModelTools;
   const extensionCommands = packageJson.contributes?.commands;
+  const panelViews = packageJson.contributes?.views?.tiinexAiVscodeToolsTraceablePanel ?? [];
+  const panelContainers = packageJson.contributes?.viewsContainers?.panel ?? [];
   const viewTitleMenu = packageJson.contributes?.menus?.["view/title"] ?? [];
   const viewItemContextMenu = packageJson.contributes?.menus?.["view/item/context"] ?? [];
   const commandPaletteMenu = packageJson.contributes?.menus?.["commandPalette"] ?? [];
@@ -6962,6 +6971,8 @@ async function runManifestChecks() {
   assert(Array.isArray(activationEvents), "package.json activationEvents must be an array.");
   assert(Array.isArray(languageModelTools), "package.json contributes.languageModelTools must be an array.");
   assert(Array.isArray(extensionCommands), "package.json contributes.commands must be an array.");
+  assert(Array.isArray(panelViews), "package.json contributes.views.tiinexAiVscodeToolsTraceablePanel must be an array.");
+  assert(Array.isArray(panelContainers), "package.json contributes.viewsContainers.panel must be an array.");
 
   for (const toolName of expectedLanguageModelToolNames) {
     assert(
@@ -7023,6 +7034,8 @@ async function runManifestChecks() {
   }
 
   const windowTool = languageModelTools.find((tool) => tool.name === "get_agent_session_window");
+  const traceablePanelView = panelViews.find((view) => view.id === "tiinex.aiVscodeTools.traceableStatus");
+  const traceablePanelContainer = panelContainers.find((container) => container.id === "tiinexAiVscodeToolsTraceablePanel");
   const transcriptTool = languageModelTools.find((tool) => tool.name === "export_agent_evidence_transcript");
   const estimateTool = languageModelTools.find((tool) => tool.name === "estimate_agent_context_breakdown");
   const deleteTool = languageModelTools.find((tool) => tool.name === "delete_live_agent_chat_artifacts");
@@ -7030,6 +7043,10 @@ async function runManifestChecks() {
   const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "tiinex.aiVscodeTools.openSessionFile");
 
   assert(windowTool?.inputSchema?.properties?.afterLatestCompact, "package.json window tool schema must expose afterLatestCompact.");
+  assert(traceablePanelView?.type === "webview", "package.json traceable panel view must remain a webview contribution.");
+  assert(traceablePanelView?.visibility === "hidden", "package.json traceable panel view must stay hidden until explicitly revealed from the status surface.");
+  assert(traceablePanelView?.when === "tiinex.aiVscodeTools.traceablePanelVisible", "package.json traceable panel view must stay gated behind the explicit traceable panel visibility context.");
+  assert(traceablePanelContainer?.title === "Traceable", "package.json traceable panel container must contribute the Traceable panel title.");
   assert(windowTool?.inputSchema?.properties?.anchorOccurrence, "package.json window tool schema must expose anchorOccurrence.");
   assert(!windowTool?.inputSchema?.required, "package.json window tool schema must not require anchorText when compaction-only windows are allowed.");
   assert(transcriptTool?.inputSchema?.properties?.maxBlocks, "package.json transcript tool schema must expose maxBlocks.");
@@ -7212,14 +7229,626 @@ async function runTraceableSubagentChecks() {
       return { role: "tool", content };
     }
   };
+  const originalCreateStatusBarItem = vscode.window?.createStatusBarItem;
+  const originalOpenTextDocument = vscode.workspace?.openTextDocument;
+  const originalExecuteCommand = vscode.commands?.executeCommand;
+  const originalShowTextDocument = vscode.window?.showTextDocument;
+  const originalStatusBarAlignment = vscode.StatusBarAlignment;
+  const fakeStatusBarItems = [];
+  const executedCommands = [];
+  const openedDocuments = [];
+  const shownDocuments = [];
+  vscode.window = vscode.window || {};
+  vscode.workspace = vscode.workspace || {};
+  vscode.commands = vscode.commands || {};
+  vscode.StatusBarAlignment = vscode.StatusBarAlignment || { Left: 1 };
+  vscode.Uri = vscode.Uri || {
+    from(value) {
+      const scheme = value?.scheme || "file";
+      const pathValue = value?.path || "";
+      return {
+        scheme,
+        path: pathValue,
+        toString() {
+          return `${scheme}:${pathValue}`;
+        }
+      };
+    },
+    file(filePath) {
+      return {
+        fsPath: filePath,
+        toString() {
+          const normalizedPath = String(filePath).replace(/\\/g, "/");
+          return `file://${normalizedPath.startsWith("/") ? "" : "/"}${normalizedPath}`;
+        }
+      };
+    }
+  };
+  vscode.EventEmitter = vscode.EventEmitter || class EventEmitter {
+    constructor() {
+      this.listeners = [];
+      this.event = (listener) => {
+        this.listeners.push(listener);
+        return { dispose() {} };
+      };
+    }
+    fire(value) {
+      for (const listener of this.listeners) {
+        listener(value);
+      }
+    }
+    dispose() {
+      this.listeners = [];
+    }
+  };
+  vscode.window.createStatusBarItem = (_alignment, priority) => {
+    const item = {
+      text: "",
+      name: "",
+      tooltip: "",
+      command: undefined,
+      priority,
+      showCount: 0,
+      hideCount: 0,
+      disposed: false,
+      show() {
+        this.showCount += 1;
+      },
+      hide() {
+        this.hideCount += 1;
+      },
+      dispose() {
+        this.disposed = true;
+      }
+    };
+    fakeStatusBarItems.push(item);
+    return item;
+  };
+  vscode.workspace.openTextDocument = async (value) => {
+    openedDocuments.push(value);
+    return { uri: value };
+  };
+  vscode.commands.executeCommand = async (command, ...args) => {
+    executedCommands.push({ command, args });
+    return undefined;
+  };
+  vscode.window.showTextDocument = async (document) => {
+    shownDocuments.push(document);
+    return document;
+  };
+
   const traceableSubagent = await import(`${pathToFileURL(distTraceableSubagent).href}?traceable-subagent=${Date.now()}`);
+  const traceableSubagentStatusBar = await import(`${pathToFileURL(distTraceableSubagentStatusBar).href}?traceable-subagent-status-bar=${Date.now()}`);
+  const traceableSubagentStatusDetail = await import(`${pathToFileURL(distTraceableSubagentStatusDetail).href}?traceable-subagent-status-detail=${Date.now()}`);
+  const traceableSubagentStatusPanel = await import(`${pathToFileURL(distTraceableSubagentStatusPanel).href}?traceable-subagent-status-panel=${Date.now()}`);
   const toolNameNormalization = await import(`${pathToFileURL(distToolNameNormalization).href}?tool-name-normalization=${Date.now()}`);
+
+  const detailController = new traceableSubagentStatusDetail.TraceableSubagentStatusDetailController();
+
+  const statusBarController = new traceableSubagentStatusBar.TraceableSubagentStatusBarController({
+    detailCommandId: "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail",
+    updateDetailView: (snapshot) => detailController.update(snapshot)
+  });
+  const formattedStatusReporter = statusBarController.startRun({
+    agentName: "Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)",
+    modelLabel: "gpt-5-mini"
+  });
+  const fakeStatusBarItem = fakeStatusBarItems[0];
+  assert(
+    fakeStatusBarItem.command === "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail",
+    `Traceable subagent status bar main item must open the shared detail markdown view when clicked. Got: ${String(fakeStatusBarItem.command)}`
+  );
+  formattedStatusReporter.update("continuing analysis");
+  assert(
+    fakeStatusBarItem.text === "$(sync~spin) Anchor: gpt-5-mini: reasoning: continuing",
+    `Traceable subagent status bar must format reasoning status with agent and model context. Got: ${fakeStatusBarItem.text}`
+  );
+  formattedStatusReporter.update("running copilot_readFile");
+  assert(
+    fakeStatusBarItem.text === "$(sync~spin) Anchor: gpt-5-mini: tool: readFile",
+    `Traceable subagent status bar must surface the current tool in a compact structured form. Got: ${fakeStatusBarItem.text}`
+  );
+  formattedStatusReporter.update("reading 2/4");
+  assert(
+    fakeStatusBarItem.text === "$(sync~spin) Anchor: gpt-5-mini: reading: 2/4",
+    `Traceable subagent status bar must surface bounded file-read progress in the structured format. Got: ${fakeStatusBarItem.text}`
+  );
+  formattedStatusReporter.setHeader?.({ modelLabel: "gpt-5" });
+  formattedStatusReporter.finish("completed", { detail: "grounded ok" });
+  assert(
+    fakeStatusBarItem.text === "$(check) Anchor: gpt-5: completed",
+    `Traceable subagent status bar must keep the structured header on completion while updating the terminal message. Got: ${fakeStatusBarItem.text}`
+  );
+  assert(
+    String(fakeStatusBarItem.tooltip).includes("Status: completed")
+      && String(fakeStatusBarItem.tooltip).includes("Detail: grounded ok"),
+    `Traceable subagent status bar must keep long-form completion detail in the tooltip instead of the visible label. Got: ${String(fakeStatusBarItem.tooltip)}`
+  );
+  formattedStatusReporter.recordToolCall?.({
+    callId: "call-1",
+    toolName: "copilot_readFile",
+    phase: "running",
+    input: {
+      filePath: path.join(packageRoot, "src", "extension.ts"),
+      startLine: 1,
+      endLine: 120
+    }
+  });
+  formattedStatusReporter.recordToolCall?.({
+    callId: "call-2",
+    toolName: "copilot_readFile",
+    phase: "deferred",
+    input: {
+      filePath: path.join(packageRoot, "README.md"),
+      startLine: 1,
+      endLine: 120
+    },
+    note: "Deferred to preserve synthesis."
+  });
+  const latestTrailItem = fakeStatusBarItems[2];
+  const olderTrailItem = fakeStatusBarItems[1];
+  assert(
+    fakeStatusBarItem.priority > latestTrailItem.priority
+      && latestTrailItem.priority > olderTrailItem.priority,
+    `Traceable subagent status bar must keep the main header item to the left of the tool trail while ordering trail items by recency. Got: ${JSON.stringify(fakeStatusBarItems.map((item) => ({ text: item.text, priority: item.priority })))} `
+  );
+  assert(
+    latestTrailItem.text === "$(warning) defer README.md"
+      && olderTrailItem.text === "$(sync~spin) read extension.ts"
+      && latestTrailItem.priority > olderTrailItem.priority,
+    `Traceable subagent status bar must place the latest tool trail item first with compact labels. Got: ${JSON.stringify(fakeStatusBarItems.map((item) => ({ text: item.text, priority: item.priority })))} `
+  );
+  assert(
+    String(latestTrailItem.tooltip).includes("Tool: copilot_readFile")
+      && String(latestTrailItem.tooltip).includes("File: ")
+      && String(latestTrailItem.tooltip).includes("Deferred to preserve synthesis."),
+    `Traceable subagent status bar tool trail must expose tool metadata in the tooltip. Got: ${String(latestTrailItem.tooltip)}`
+  );
+  assert(
+    latestTrailItem.command === "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail"
+      && olderTrailItem.command === "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail",
+    `Traceable subagent status bar trail items must also open the shared detail markdown view. Got: ${JSON.stringify(fakeStatusBarItems.map((item) => ({ text: item.text, command: item.command })))} `
+  );
+  const renderedDetailMarkdown = traceableSubagentStatusDetail.renderTraceableSubagentDetailMarkdown({
+    header: {
+      agentName: "Anchor",
+      agentResolved: true,
+      modelLabel: "gpt-5",
+      candidate: true,
+      experimental: true,
+      humanRole: true,
+      toolsetNames: ["read/readFile", "search/textSearch", "execute/runInTerminal", "tiinex.ai-vscode-tools/listAgentSessions"]
+    },
+    status: {
+      phase: "warning",
+      message: "incomplete",
+      detail: "Grounding remained partial after deferred reads."
+    },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [
+      {
+        callId: "call-2",
+        toolName: "copilot_readFile",
+        phase: "deferred",
+        input: { filePath: path.join(packageRoot, "README.md"), startLine: 1, endLine: 120 },
+        note: "Deferred to preserve synthesis."
+      }
+    ],
+    startedAt: "2026-05-19T22:32:20.000Z",
+    updatedAt: "2026-05-19T22:33:00.000Z"
+  });
+  assert(
+    renderedDetailMarkdown.includes("⚠ Traceable Subagent Status")
+      && renderedDetailMarkdown.includes("Anchor · gpt-5 · candidate · experimental · human-role · incomplete")
+      && renderedDetailMarkdown.includes("Toolset: read\\_file, text\\_search, run\\_in\\_terminal, list\\_agent\\_sessions")
+      && renderedDetailMarkdown.includes("⚠ defer README.md · copilot\\_readFile · lines 1-120 · [README.md](file:///")
+      && renderedDetailMarkdown.includes("[README.md](file:///"),
+    `Traceable subagent detail markdown must render compact inline event layout plus header metadata. Got: ${renderedDetailMarkdown}`
+  );
+  const renderedPanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    header: {
+      agentName: "Anchor",
+      agentFilePath: path.join(packageRoot, ".github", "agents", "Anchor.agent.md"),
+      agentResolved: true,
+      modelLabel: "GPT-5.4 mini (Copilot)",
+      candidate: true,
+      experimental: true,
+      humanRole: true,
+      toolsetNames: ["read/readFile", "search/textSearch", "execute/runInTerminal", "tiinex.ai-vscode-tools/listAgentSessions"]
+    },
+    status: {
+      phase: "warning",
+      message: "incomplete",
+      detail: "Grounding remained partial after deferred reads."
+    },
+    requestSummary: [
+      {
+        label: "Task",
+        value: "Inspect missing final payloads",
+        title: "Inspect missing final payloads"
+      },
+      {
+        label: "Role",
+        value: "Anchor",
+        title: "Anchor"
+      },
+      {
+        label: "Budget",
+        value: "4i · 6t",
+        title: "Requested iteration and tool-call budget"
+      }
+    ],
+    statusHistory: [
+      {
+        id: "status-1",
+        phase: "running",
+        message: "starting",
+        occurredAt: "2026-05-19T22:32:20.000Z"
+      },
+      {
+        id: "status-2",
+        phase: "running",
+        message: "requesting analysis",
+        occurredAt: "2026-05-19T22:32:21.000Z"
+      },
+      {
+        id: "status-3",
+        phase: "running",
+        message: "reading 1/2",
+        occurredAt: "2026-05-19T22:32:24.000Z"
+      },
+      {
+        id: "status-4",
+        phase: "warning",
+        message: "incomplete",
+        detail: "Grounding remained partial after deferred reads.",
+        occurredAt: "2026-05-19T22:33:00.000Z"
+      }
+    ],
+    recentTools: [
+      {
+        callId: "call-2",
+        toolName: "copilot_readFile",
+        phase: "deferred",
+        input: { filePath: path.join(packageRoot, "README.md"), startLine: 1, endLine: 120 },
+        note: "Deferred to preserve synthesis.",
+        elapsedMs: 0,
+        occurredAt: "2026-05-19T22:32:40.000Z"
+      },
+      {
+        callId: "call-1b",
+        toolName: "copilot_readFile",
+        phase: "success",
+        input: { filePath: path.join(packageRoot, "src", "extension.ts"), startLine: 121, endLine: 240 },
+        elapsedMs: 210,
+        occurredAt: "2026-05-19T22:32:26.000Z"
+      },
+      {
+        callId: "call-1",
+        toolName: "copilot_readFile",
+        phase: "success",
+        input: { filePath: path.join(packageRoot, "src", "extension.ts"), startLine: 1, endLine: 120 },
+        elapsedMs: 180,
+        occurredAt: "2026-05-19T22:32:24.000Z"
+      },
+      {
+        callId: "call-3",
+        toolName: "list_agent_sessions",
+        phase: "failure",
+        input: {},
+        note: "Tool unavailable.",
+        elapsedMs: 320,
+        occurredAt: "2026-05-19T22:32:55.000Z"
+      }
+    ],
+    startedAt: "2026-05-19T22:32:20.000Z",
+    updatedAt: "2026-05-19T22:33:00.000Z"
+  }, "codicon.css");
+  assert(
+    renderedPanelHtml.includes("position: sticky;")
+      && renderedPanelHtml.includes("top: 8px;")
+      && renderedPanelHtml.includes("box-shadow: 0 -8px 0 0 var(--bg);")
+      && renderedPanelHtml.includes("<link rel=\"stylesheet\" href=\"codicon.css\" />")
+      && renderedPanelHtml.includes("<button class=\"header-badge header-badge-role-human header-badge-role-resolved\" type=\"button\"")
+      && renderedPanelHtml.includes("title=\"Human role")
+      && renderedPanelHtml.includes("title=\"Model: GPT-5.4 mini (Copilot)\"")
+      && renderedPanelHtml.includes("title=\"Track: Candidate\"")
+      && renderedPanelHtml.includes("Anchor.agent.md")
+      && renderedPanelHtml.includes("data-message=\"{&quot;type&quot;:&quot;openFile&quot;,&quot;filePath&quot;:&quot;")
+      && renderedPanelHtml.includes(".header-badge-role-human .header-badge-icon {")
+      && renderedPanelHtml.includes(".header-badge-role-ai .header-badge-icon {")
+      && renderedPanelHtml.includes(".header-badge-role-pending {")
+      && renderedPanelHtml.includes(".header-badge-model {")
+      && renderedPanelHtml.includes(".header-badge-track-candidate {")
+      && renderedPanelHtml.includes(".header-badge-track-experimental {")
+      && renderedPanelHtml.includes("⚠ incomplete")
+      && renderedPanelHtml.includes("class=\"meta-status meta-status-warning\"")
+      && renderedPanelHtml.includes("activities")
+      && renderedPanelHtml.includes("<span class=\"meta-stopwatch-label\">Total</span><span class=\"meta-stopwatch-value\">40s</span>")
+      && renderedPanelHtml.includes("<span class=\"meta-stopwatch-label\">Tools</span><span class=\"meta-stopwatch-value\">710ms</span>")
+      && renderedPanelHtml.includes("<span class=\"meta-stopwatch-label\">Think</span><span class=\"meta-stopwatch-value\">39s</span>")
+      && renderedPanelHtml.includes("<li class=\"event-row event-request\"")
+      && renderedPanelHtml.includes("<span class=\"event-label\">Request</span>")
+      && renderedPanelHtml.includes("Inspect missing final payloads")
+      && !renderedPanelHtml.includes(">Task<")
+      && renderedPanelHtml.includes(".event-request .event-note {")
+      && renderedPanelHtml.includes("-webkit-line-clamp: 2;")
+      && (renderedPanelHtml.match(/>Role</g)?.length ?? 0) === 1
+      && (renderedPanelHtml.match(/>Model</g)?.length ?? 0) === 1
+      && renderedPanelHtml.includes("<li class=\"event-row event-status event-status-running event-status-settled\"")
+      && renderedPanelHtml.includes("event-status-settled")
+      && renderedPanelHtml.includes(">requesting analysis<")
+      && renderedPanelHtml.includes("activity-duration")
+      && renderedPanelHtml.includes("<span class=\"activity-duration-label\">For</span><span class=\"activity-duration-value\">3.0s</span>")
+      && !renderedPanelHtml.includes("<span class=\"chip activity-duration-label\">")
+      && !renderedPanelHtml.includes("<span class=\"chip chip-status-phase\">running</span>")
+      && renderedPanelHtml.includes(".event-status-running.event-status-settled .event-icon {")
+      && renderedPanelHtml.includes("<span class=\"chip chip-status-phase\">warning</span><span class=\"chip chip-time\"")
+      && renderedPanelHtml.includes("<span class=\"chip chip-time\" title=\"Started 00:32:55\">00:32:55</span><span class=\"chip activity-duration\"")
+      && renderedPanelHtml.includes("Tool access 4 total · 1 custom")
+      && renderedPanelHtml.includes("align-items: start;")
+      && renderedPanelHtml.includes("align-content: start;")
+      && renderedPanelHtml.includes("align-self: start;")
+      && renderedPanelHtml.includes("position: relative;")
+      && renderedPanelHtml.includes("Native Tools <span class=\"toolset-count\">3</span>")
+      && renderedPanelHtml.includes("Extension Tools <span class=\"toolset-count\">1</span>")
+      && renderedPanelHtml.includes("<div class=\"toolset-tree-children toolset-tree-children-root\"><details class=\"toolset-namespace-group toolset-runtime-warning\">")
+      && renderedPanelHtml.includes("toolset-runtime-warning")
+      && renderedPanelHtml.includes("toolset-runtime-failure")
+      && renderedPanelHtml.includes(">read_file<")
+      && renderedPanelHtml.includes(">list_agent_sessions<")
+      && renderedPanelHtml.includes("toolset-runtime-inactive")
+      && renderedPanelHtml.includes(".tool-runtime-badge {")
+      && renderedPanelHtml.includes(".tool-runtime-badge-success {")
+      && renderedPanelHtml.includes(".tool-runtime-badge-warning {")
+      && renderedPanelHtml.includes(".tool-runtime-badge-failure {")
+      && renderedPanelHtml.includes(".tool-runtime-badge-time {")
+      && renderedPanelHtml.includes(".tool-runtime-badge-icon {")
+      && renderedPanelHtml.includes(".tool-runtime-badge-value {")
+      && renderedPanelHtml.includes(".toolset-item.toolset-runtime-success .toolset-item-label,")
+      && renderedPanelHtml.includes(".toolset-item.toolset-runtime-warning .toolset-item-label,")
+      && renderedPanelHtml.includes(".toolset-item.toolset-runtime-failure .toolset-item-label,")
+      && renderedPanelHtml.includes(".toolset-namespace-group[open] .toolset-namespace-twistie .codicon {")
+      && renderedPanelHtml.includes("transform: rotate(90deg);")
+      && renderedPanelHtml.includes(".toolset-namespace-icon-spacer {")
+      && renderedPanelHtml.includes(".toolset-tree-children {")
+      && renderedPanelHtml.includes("padding-left: 8px;")
+      && renderedPanelHtml.includes(".toolset-tree-children-root {")
+      && renderedPanelHtml.includes(".toolset-tree-children-root::before {")
+      && renderedPanelHtml.includes("top: -6px;")
+      && renderedPanelHtml.includes(".toolset-list-nested {")
+      && renderedPanelHtml.includes("padding-left: 0;")
+      && renderedPanelHtml.includes("border-left: 0;")
+      && renderedPanelHtml.includes(".toolset-item-branch {")
+      && renderedPanelHtml.includes("width: 6px;")
+      && renderedPanelHtml.includes("height: 9px;")
+      && renderedPanelHtml.includes("border-bottom: 1px solid")
+      && renderedPanelHtml.includes("gap: 6px;")
+      && renderedPanelHtml.includes(">read_file<")
+      && renderedPanelHtml.includes(">list_agent_sessions<")
+      && renderedPanelHtml.includes("<ul class=\"events\">")
+      && renderedPanelHtml.includes("<li class=\"event-row event-deferred\"")
+      && renderedPanelHtml.includes("<div class=\"event-note\">Deferred to preserve synthesis.</div>")
+      && renderedPanelHtml.includes("grid-template-columns: minmax(0, 1fr) auto;")
+      && renderedPanelHtml.includes("justify-content: flex-end;")
+      && renderedPanelHtml.includes("<span class=\"chip chip-tool chip-collapsible\" title=\"Tool: readFile\">")
+      && renderedPanelHtml.includes("codicon-file")
+      && renderedPanelHtml.includes("<span class=\"chip-hover-label\">readFile</span>")
+      && renderedPanelHtml.includes("<span class=\"chip\" title=\"Merged 2 tool calls\">2x</span>")
+      && renderedPanelHtml.includes("<span class=\"chip chip-range chip-collapsible\" title=\"Lines 1-240\">")
+      && renderedPanelHtml.includes("<span class=\"chip-hover-label\">lines</span>")
+      && renderedPanelHtml.includes("<span class=\"chip-value\">1-240</span>")
+      && renderedPanelHtml.includes("\"type\":\"closePanel\"")
+      && renderedPanelHtml.includes(">Close<")
+      && renderedPanelHtml.includes("Export Markdown")
+      && renderedPanelHtml.indexOf("Read extension.ts") < renderedPanelHtml.indexOf("Deferred README.md")
+      && renderedPanelHtml.includes("Updated ")
+      && renderedPanelHtml.includes("const BOTTOM_FOLLOW_THRESHOLD_PX = 24;")
+      && renderedPanelHtml.includes("vscodeApi.getState()")
+      && renderedPanelHtml.includes("vscodeApi.setState(panelState);")
+      && renderedPanelHtml.includes("toolsetDisclosureOpen: false")
+      && renderedPanelHtml.includes("const toolsetDisclosure = document.querySelector('.toolset-disclosure');")
+      && renderedPanelHtml.includes("const timerNodes = Array.from(document.querySelectorAll('[data-timer-kind]'));")
+      && renderedPanelHtml.includes("data-timer-kind=\"total\"")
+      && renderedPanelHtml.includes("data-started-at=\"2026-05-19T22:32:20.000Z\"")
+      && renderedPanelHtml.includes("data-base-elapsed-ms=\"3000\"")
+      && renderedPanelHtml.includes("data-running=\"false\"")
+      && renderedPanelHtml.includes("const formatElapsedMs = (elapsedMs) => {")
+      && renderedPanelHtml.includes("const computeTimerElapsedMs = (timerNode, referenceIso) => {")
+      && renderedPanelHtml.includes("const parseActiveStarts = (value) =>")
+      && renderedPanelHtml.includes("window.setInterval(() => {")
+      && renderedPanelHtml.includes("toolsetDisclosure.open = panelState.toolsetDisclosureOpen;")
+      && renderedPanelHtml.includes("toolsetDisclosure.addEventListener('toggle'")
+      && renderedPanelHtml.includes("const clickTarget = target.closest('[data-message]');")
+      && renderedPanelHtml.includes(".chip-collapsible .chip-hover-label")
+      && renderedPanelHtml.includes(".chip-collapsible:hover .chip-hover-label")
+      && renderedPanelHtml.includes("followLatest: isNearBottom()")
+      && renderedPanelHtml.includes("if (panelState.followLatest)")
+      && renderedPanelHtml.includes("document.scrollingElement || document.documentElement || document.body")
+      && renderedPanelHtml.includes("scrollingRoot.scrollTop = scrollingRoot.scrollHeight;")
+      && renderedPanelHtml.includes("window.addEventListener('message'")
+      && renderedPanelHtml.includes("document.visibilityState === 'visible'")
+      && renderedPanelHtml.includes("setTimeout(applyScroll, 120);")
+      && renderedPanelHtml.match(/Read extension\.ts/g)?.length === 1
+      && renderedPanelHtml.includes("Grounding remained partial after deferred reads."),
+    `Traceable subagent status panel must render a compact lower-panel event feed with export affordance and header metadata badges. Got: ${renderedPanelHtml}`
+  );
+  const renderedNormalizedSearchBadgePanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    header: {
+      agentName: "Sigma",
+      agentResolved: false,
+      modelLabel: "gpt-5",
+      candidate: false,
+      experimental: false,
+      humanRole: false,
+      toolsetNames: []
+    },
+    status: {
+      phase: "running",
+      message: "working"
+    },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [
+      {
+        callId: "call-search-1",
+        toolName: "copilot_find_files",
+        phase: "success",
+        input: {},
+        elapsedMs: 140,
+        occurredAt: "2026-05-19T22:33:01.000Z"
+      }
+    ],
+    startedAt: "2026-05-19T22:33:00.000Z",
+    updatedAt: "2026-05-19T22:33:05.000Z"
+  }, "codicon.css");
+  assert(
+    renderedNormalizedSearchBadgePanelHtml.includes("<span class=\"chip-icon\"><span class=\"codicon codicon-files\" aria-hidden=\"true\"></span></span>")
+      && renderedNormalizedSearchBadgePanelHtml.includes("<span class=\"header-badge-icon\"><span class=\"codicon codicon-hubot\" aria-hidden=\"true\"></span></span>")
+      && renderedNormalizedSearchBadgePanelHtml.includes("header-badge-role-pending")
+      && renderedNormalizedSearchBadgePanelHtml.includes("Requested AI role\nNot yet resolved to a workspace .agent.md artifact.")
+      && renderedNormalizedSearchBadgePanelHtml.includes(">Sigma (requested)<")
+      && renderedNormalizedSearchBadgePanelHtml.includes("<span class=\"chip-hover-label\">find_files</span>")
+      && renderedNormalizedSearchBadgePanelHtml.includes("Observed tools 1 total")
+      && renderedNormalizedSearchBadgePanelHtml.includes("Native Tools <span class=\"toolset-count\">1</span>")
+      && renderedNormalizedSearchBadgePanelHtml.includes(">find_files<"),
+    `Traceable subagent panel must show an explicit AI role icon and normalize equivalent tool-name spellings before icon lookup. Got: ${renderedNormalizedSearchBadgePanelHtml}`
+  );
+  const renderedGappedRangePanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    header: {
+      agentName: "Anchor",
+      modelLabel: "gpt-5",
+      candidate: false,
+      experimental: false,
+      humanRole: false,
+      toolsetNames: []
+    },
+    status: {
+      phase: "completed",
+      message: "completed"
+    },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [
+      {
+        callId: "call-gap-2",
+        toolName: "copilot_readFile",
+        phase: "success",
+        input: { filePath: path.join(packageRoot, "src", "extension.ts"), startLine: 401, endLine: 520 },
+        elapsedMs: 150,
+        occurredAt: "2026-05-19T22:32:50.000Z"
+      },
+      {
+        callId: "call-gap-1",
+        toolName: "copilot_readFile",
+        phase: "success",
+        input: { filePath: path.join(packageRoot, "src", "extension.ts"), startLine: 1, endLine: 120 },
+        elapsedMs: 110,
+        occurredAt: "2026-05-19T22:32:10.000Z"
+      }
+    ],
+    startedAt: "2026-05-19T22:32:05.000Z",
+    updatedAt: "2026-05-19T22:33:10.000Z"
+  }, "codicon.css");
+  assert(
+    renderedGappedRangePanelHtml.includes("<span class=\"chip\" title=\"Merged 2 tool calls\">2x</span>")
+      && renderedGappedRangePanelHtml.includes("<span class=\"chip chip-range chip-collapsible\" title=\"Lines 1-120\">")
+      && renderedGappedRangePanelHtml.includes("<span class=\"chip chip-range chip-collapsible\" title=\"Lines 401-520\">")
+      && !renderedGappedRangePanelHtml.includes("<span class=\"chip chip-range chip-collapsible\" title=\"Lines 1-520\">")
+      && renderedGappedRangePanelHtml.includes("&quot;filePath&quot;:&quot;")
+      && renderedGappedRangePanelHtml.includes("extension.ts</button>")
+      && !renderedGappedRangePanelHtml.includes("&quot;startLine&quot;")
+      && !renderedGappedRangePanelHtml.includes("&quot;endLine&quot;"),
+    `Traceable subagent panel must keep non-contiguous line spans as separate badges instead of implying one continuous range. Got: ${renderedGappedRangePanelHtml}`
+  );
+  const renderedCompletedOutputPanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    header: {
+      agentName: "Anchor",
+      modelLabel: "gpt-5-mini",
+      candidate: false,
+      experimental: true,
+      humanRole: false,
+      toolsetNames: ["read/readFile"]
+    },
+    status: {
+      phase: "completed",
+      message: "completed",
+      detail: "Successfully read lines 1-400 of traceableSubagent.ts and returned a bounded summary."
+    },
+    requestSummary: [],
+    statusHistory: [
+      {
+        id: "status-complete-1",
+        phase: "running",
+        message: "requesting analysis",
+        occurredAt: "2026-05-20T04:04:02.000Z"
+      },
+      {
+        id: "status-complete-2",
+        phase: "running",
+        message: "synthesizing",
+        occurredAt: "2026-05-20T04:04:53.000Z"
+      },
+      {
+        id: "status-complete-3",
+        phase: "completed",
+        message: "completed",
+        detail: "Successfully read lines 1-400 of traceableSubagent.ts and returned a bounded summary.",
+        occurredAt: "2026-05-20T04:04:57.000Z"
+      }
+    ],
+    recentTools: [
+      {
+        callId: "complete-call-1",
+        toolName: "copilot_readFile",
+        phase: "success",
+        input: { filePath: path.join(packageRoot, "src", "traceableSubagent.ts"), startLine: 1, endLine: 400 },
+        elapsedMs: 12,
+        occurredAt: "2026-05-20T04:04:16.000Z"
+      }
+    ],
+    startedAt: "2026-05-20T04:04:02.000Z",
+    updatedAt: "2026-05-20T04:04:57.000Z"
+  }, "codicon.css");
+  assert(
+    renderedCompletedOutputPanelHtml.includes("<span class=\"event-label\">Output</span>")
+      && renderedCompletedOutputPanelHtml.includes("Successfully read lines 1-400 of traceableSubagent.ts and returned a bounded summary.")
+      && renderedCompletedOutputPanelHtml.includes("<li class=\"event-row event-output\"")
+      && !renderedCompletedOutputPanelHtml.includes("chip-status-phase\">returned</span>")
+      && renderedCompletedOutputPanelHtml.indexOf(">completed<") < renderedCompletedOutputPanelHtml.indexOf(">Output<"),
+    `Traceable subagent panel must append a dedicated output activity after completion. Got: ${renderedCompletedOutputPanelHtml}`
+  );
+  assert(
+    renderedCompletedOutputPanelHtml.match(/Successfully read lines 1-400 of traceableSubagent\.ts and returned a bounded summary\./g)?.length === 1,
+    `Traceable subagent panel must avoid duplicating the final output text once the dedicated output row is present. Got: ${renderedCompletedOutputPanelHtml}`
+  );
+  await detailController.open();
+  assert(
+    executedCommands.length === 1
+      && executedCommands[0].command === "markdown.showPreview"
+      && openedDocuments.length === 0
+      && shownDocuments.length === 0,
+    `Traceable subagent detail controller must prefer markdown preview when opening the shared detail view. Got: commands=${JSON.stringify(executedCommands)}, opened=${openedDocuments.length}, shown=${shownDocuments.length}`
+  );
+  detailController.dispose();
+  statusBarController.dispose();
+  vscode.window.createStatusBarItem = originalCreateStatusBarItem;
+  vscode.workspace.openTextDocument = originalOpenTextDocument;
+  vscode.commands.executeCommand = originalExecuteCommand;
+  vscode.window.showTextDocument = originalShowTextDocument;
+  vscode.StatusBarAlignment = originalStatusBarAlignment;
 
   assert(
     toolNameNormalization.normalizeToolReferenceKey("tiinex.ai-vscode-tools/listAgentSessions") === "list_agent_sessions"
       && toolNameNormalization.normalizeToolReferenceKey("tiinex.ai-vscode-tools/invoke-youtube-host-command") === "invoke_youtube_host_command"
       && toolNameNormalization.normalizeToolReferenceKey("read/readFile") === "read_file",
     "Tool-name normalization must collapse namespaced prompt aliases, hyphenated aliases, and slash-scoped runtime names to one comparison key."
+  );
+  assert(
+    JSON.stringify(toolNameNormalization.expandToolReferenceKeys("read/readFile")) === JSON.stringify(["read_file", "copilot_read_file"])
+      && JSON.stringify(toolNameNormalization.expandToolReferenceKeys("search/textSearch")) === JSON.stringify(["text_search", "copilot_find_text_in_files"]),
+    "Tool-name normalization must expand legacy read/search aliases to the current copilot runtime tool names."
   );
 
   const selectedTools = traceableSubagent.selectTraceableSubagentTools([
@@ -7356,6 +7985,34 @@ async function runTraceableSubagentChecks() {
     `Traceable subagent inherited tool selection must keep the concrete read/search dependency surface and ignore unavailable declarations. Got: ${JSON.stringify(inheritedDependencyToolNames)}`
   );
 
+  const inheritedCopilotDependencySurface = traceableSubagent.selectTraceableSubagentTools([
+    { name: "copilot_readFile", description: "file read" },
+    { name: "copilot_findTextInFiles", description: "text search" },
+    { name: "copilot_findFiles", description: "file search" },
+    { name: "copilot_listDirectory", description: "directory listing" },
+    { name: "create_live_agent_chat", description: "mutation" }
+  ], {
+    userInput: "inspect the workspace",
+    parentTask: "use legacy inherited aliases against the current copilot runtime tool names",
+    blockedToolNames: [],
+    defaultAllowedToolNames: [
+      "read/readFile",
+      "search/textSearch",
+      "search/fileSearch",
+      "search/listDirectory"
+    ]
+  });
+
+  assert(
+    JSON.stringify(inheritedCopilotDependencySurface.map((tool) => tool.name)) === JSON.stringify([
+      "copilot_readFile",
+      "copilot_findTextInFiles",
+      "copilot_findFiles",
+      "copilot_listDirectory"
+    ]),
+    `Traceable subagent inherited tool selection must let legacy read/search aliases resolve to the current copilot runtime tool names. Got: ${JSON.stringify(inheritedCopilotDependencySurface)}`
+  );
+
   const explicitOverrideSelectedTools = traceableSubagent.selectTraceableSubagentTools([
     { name: "read/readFile", description: "file read" },
     { name: "search/textSearch", description: "search" }
@@ -7442,7 +8099,9 @@ async function runTraceableSubagentChecks() {
   }, ["copilot_readFile"]);
 
   assert(
-    multiFilePromptSections.promptTexts.some((section) => section.includes("cover each anchored file at least once before drilling deeper into one file")),
+    multiFilePromptSections.promptTexts.some((section) => section.includes("cover each anchored file at least once before drilling deeper into one file"))
+      && multiFilePromptSections.promptTexts.some((section) => section.includes("Do not spend a second top-of-file read on one anchored file while another anchored file remains unread"))
+      && multiFilePromptSections.promptTexts.some((section) => section.includes("stop broad rereads and emit the best partial or unresolved JSON object you can from the evidence already gathered")),
     `Traceable subagent prompt sections must tell the child lane how to spend read budget across multiple anchored files. Got: ${JSON.stringify(multiFilePromptSections.promptTexts)}`
   );
 
@@ -7469,6 +8128,76 @@ async function runTraceableSubagentChecks() {
   assert(
     parsedPayload?.stopReason === "completed" && parsedPayload?.completionClaim === "partial",
     "Traceable subagent payload extraction must parse fenced JSON child output."
+  );
+
+  const parsedPayloadWithTrailingText = traceableSubagent.extractTraceableSubagentPayload(
+    '{"steps":[],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"ok"}\n\nI will now read more.\n\n{"filePath":"c:\\\\repo\\\\src\\\\traceableSubagent.ts","startLine":1,"endLine":200}'
+  );
+
+  assert(
+    parsedPayloadWithTrailingText?.stopReason === "completed"
+      && parsedPayloadWithTrailingText?.completionClaim === "complete"
+      && parsedPayloadWithTrailingText?.finalSummary === "ok",
+    "Traceable subagent payload extraction must recover the first balanced JSON object when extra trailing text or filePath blocks follow it."
+  );
+
+  const parsedPayloadWithShapeDrift = traceableSubagent.extractTraceableSubagentPayload(`{
+    "steps": [
+      "Read extension.ts to inspect activation wiring.",
+      "Read languageModelTools.ts to inspect tool registration wiring."
+    ],
+    "expectedButMissing": [
+      "src/traceableSubagentStatusBar.ts: controller implementation was not gathered."
+    ],
+    "stopReason": "insufficient_grounding",
+    "completionClaim": "partial_evidence_only",
+    "finalSummary": "Grounded partial evidence only."
+  }`);
+
+  assert(
+    parsedPayloadWithShapeDrift?.completionClaim === "partial"
+      && parsedPayloadWithShapeDrift?.steps.length === 2
+      && parsedPayloadWithShapeDrift?.expectedButMissing.length === 1
+      && parsedPayloadWithShapeDrift?.expectedButMissing[0]?.label.includes("src/traceableSubagentStatusBar.ts"),
+    `Traceable subagent payload extraction must tolerate the live child-shape drift seen in host runs. Got: ${JSON.stringify(parsedPayloadWithShapeDrift)}`
+  );
+
+  const parsedPayloadWithCustomCompletionClaim = traceableSubagent.extractTraceableSubagentPayload(`{
+    "steps": [
+      "Read extension.ts activation wiring.",
+      "Read languageModelTools.ts declaration wiring."
+    ],
+    "expectedButMissing": [
+      "src/traceableSubagent.ts runtime hook body was not gathered."
+    ],
+    "stopReason": "insufficient_grounding",
+    "completionClaim": "activation_and_tool_declaration_observed_but_runtime_hooks_not_verified",
+    "finalSummary": "Grounded partial evidence only."
+  }`);
+
+  assert(
+    parsedPayloadWithCustomCompletionClaim?.completionClaim === "unresolved"
+      && parsedPayloadWithCustomCompletionClaim?.stopReason === "insufficient_grounding"
+      && parsedPayloadWithCustomCompletionClaim?.steps.length === 2,
+    `Traceable subagent payload extraction must not discard an otherwise valid payload just because the child emitted a drifted completionClaim string. Got: ${JSON.stringify(parsedPayloadWithCustomCompletionClaim)}`
+  );
+
+  const parsedPayloadWithNaturalLanguageOutcome = traceableSubagent.extractTraceableSubagentPayload(`{
+    "steps": [
+      "Read c:\\\\Users\\\\micro\\\\Documents\\\\Repos\\\\Tiinex\\\\ai-vscode-tools\\\\src\\\\traceableSubagentStatusPanel.ts",
+      "Verified request-row rendering behavior"
+    ],
+    "expectedButMissing": [],
+    "stopReason": "Completed: target file inspected; bounded summary produced.",
+    "completionClaim": "Confirmed from the file: the task item is rendered as the request-row note and not as a request badge.",
+    "finalSummary": "Task text is rendered as the primary request-row note, not as a badge."
+  }`);
+
+  assert(
+    parsedPayloadWithNaturalLanguageOutcome?.stopReason === "completed"
+      && parsedPayloadWithNaturalLanguageOutcome?.completionClaim === "complete"
+      && parsedPayloadWithNaturalLanguageOutcome?.steps.length === 2,
+    `Traceable subagent payload extraction must tolerate natural-language stopReason/completionClaim drift from live child output. Got: ${JSON.stringify(parsedPayloadWithNaturalLanguageOutcome)}`
   );
 
   const markdown = traceableSubagent.renderTraceableSubagentMarkdown({
@@ -7760,13 +8489,23 @@ async function runTraceableSubagentChecks() {
     };
 
     const groundedDebugDir = path.join(groundedRoot, ".traceable-debug");
+    const groundedStatuses = [];
+    const unsupportedStatuses = [];
 
     const groundedResult = await traceableSubagent.runTraceableSubagent({
       userInput: "Inspect the grounded agent role.",
       parentTask: "Use the grounded agent artifact and return a bounded trace payload.",
       agentRole: { name: "Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)" }
     }, {
-      debugLogDir: groundedDebugDir
+      debugLogDir: groundedDebugDir,
+      statusReporter: {
+        update(message) {
+          groundedStatuses.push(`update:${message}`);
+        },
+        finish(message, options) {
+          groundedStatuses.push(`finish:${options?.error === true ? "error" : options?.warning === true ? "warning" : "ok"}:${message}`);
+        }
+      }
     });
 
     assert(
@@ -7824,6 +8563,13 @@ async function runTraceableSubagentChecks() {
       `Traceable subagent grounded-role test did not persist elapsedMs into the debug log. Got: ${groundedDebugLog}`
     );
     assert(
+      groundedStatuses.includes("update:starting")
+        && groundedStatuses.includes("update:resolving role")
+        && groundedStatuses.includes("update:selecting model")
+        && groundedStatuses.some((entry) => entry.startsWith("finish:ok:completed")),
+      `Traceable subagent grounded-role test did not emit the expected status reporter messages. Got: ${JSON.stringify(groundedStatuses)}`
+    );
+    assert(
       groundedDebugRows.some((row) => Number.isFinite(row.iterationElapsedMs) && row.usageProvenance === "unavailable"),
       `Traceable subagent grounded-role test did not persist per-iteration timing and usage provenance into the debug log. Got: ${groundedDebugLog}`
     );
@@ -7862,15 +8608,30 @@ async function runTraceableSubagentChecks() {
       userInput: "Inspect the unsupported model declaration.",
       parentTask: "Fail closed if the agent artifact model declaration cannot be translated safely.",
       agentRole: { name: "Parallax (Experimental)" }
+    }, {
+      statusReporter: {
+        update(message) {
+          unsupportedStatuses.push(`update:${message}`);
+        },
+        finish(message, options) {
+          unsupportedStatuses.push(`finish:${options?.error === true ? "error" : options?.warning === true ? "warning" : "ok"}:${message}`);
+        }
+      }
     });
 
     assert(
-      unsupportedSelectCalls === 0,
-      `Traceable subagent unsupported-model test reached model selection unexpectedly. Got calls: ${unsupportedSelectCalls}`
+      unsupportedSelectCalls === 1,
+      `Traceable subagent unsupported-model test should probe the broad runtime model list exactly once for recovery context. Got calls: ${unsupportedSelectCalls}`
     );
     assert(
-      unsupportedModelResult.stopReason === "tool_blocked" && unsupportedModelResult.finalSummary.includes("could not translate"),
+      unsupportedModelResult.stopReason === "tool_blocked"
+        && unsupportedModelResult.finalSummary.includes("could not translate")
+        && unsupportedModelResult.finalSummary.includes("availableRuntimeModels="),
       `Traceable subagent unsupported-model test did not fail closed on an unrecognized model declaration. Got: ${JSON.stringify(unsupportedModelResult)}`
+    );
+    assert(
+      unsupportedStatuses.some((entry) => entry.startsWith("finish:error:failed")),
+      `Traceable subagent unsupported-model test did not report a hard failure status. Got: ${JSON.stringify(unsupportedStatuses)}`
     );
 
     const unavailableToolsRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-unavailable-tools-"));
@@ -7969,6 +8730,127 @@ async function runTraceableSubagentChecks() {
         && synthesisReservationResult.completionClaim === "complete"
         && synthesisReservationResult.finalSummary === "synthesized ok",
       `Traceable subagent synthesis-reservation test did not reach a final payload after deferring the last batched tool call. Got: ${JSON.stringify(synthesisReservationResult)}`
+    );
+
+    let repeatedAnchoredReadInvokeCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(messages) {
+            const serializedMessages = JSON.stringify(messages);
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("anchor-call-1", "copilot_readFile", { filePath: path.resolve(packageRoot, "package.json"), startLine: 1, endLine: 200 });
+              yield new vscode.LanguageModelToolCallPart("anchor-call-2", "copilot_readFile", { filePath: path.resolve(packageRoot, "package.json"), startLine: 201, endLine: 400 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-anchor-coverage","intent":"cover anchors before rereading one file","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"anchor coverage ok"}');
+            }
+            const sawDeferredRepeatReadNote = serializedMessages.includes("Deferred repeated read of package.json until the remaining anchored files are covered once");
+            return { stream: sawDeferredRepeatReadNote ? secondStream() : firstStream() };
+          }
+        }];
+      },
+      async invokeTool() {
+        repeatedAnchoredReadInvokeCount += 1;
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const repeatedAnchoredReadResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the anchored runtime files.",
+      parentTask: "Cover each anchored file once before rereading one anchored file under bounded read budget.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 4, maxToolCalls: 4 },
+      carriedContext: {
+        fileContext: ["package.json", "README.md"]
+      }
+    });
+
+    assert(
+      repeatedAnchoredReadInvokeCount === 1
+        && repeatedAnchoredReadResult.stopReason === "completed"
+        && repeatedAnchoredReadResult.toolCalls.some((entry) => entry.result === "notRun"
+          && entry.note?.includes("Next action: read one of these unread anchored files now")
+          && entry.note.includes(path.resolve(packageRoot, "README.md"))),
+      `Traceable subagent anchored-read guard did not defer the repeated anchored read before unread anchors were covered. Got: ${JSON.stringify({ repeatedAnchoredReadInvokeCount, repeatedAnchoredReadResult })}`
+    );
+
+    let retryCreditSendCount = 0;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest(messages) {
+            retryCreditSendCount += 1;
+            const serializedMessages = JSON.stringify(messages);
+            async function* firstStream() {
+              yield new vscode.LanguageModelToolCallPart("retry-credit-call-1", "copilot_readFile", { filePath: path.resolve(packageRoot, "package.json"), startLine: 1, endLine: 120 });
+            }
+            async function* secondStream() {
+              yield new vscode.LanguageModelToolCallPart("retry-credit-call-2", "copilot_readFile", { filePath: path.resolve(packageRoot, "package.json"), startLine: 121, endLine: 240 });
+            }
+            async function* thirdStream() {
+              yield new vscode.LanguageModelToolCallPart("retry-credit-call-3", "copilot_readFile", { filePath: path.resolve(packageRoot, "README.md"), startLine: 1, endLine: 120 });
+            }
+            async function* fourthStream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[{"id":"step-retry-credit","intent":"use the retry credit to reach the unread anchor","status":"completed"}],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"retry credit ok"}');
+            }
+            if (serializedMessages.includes("Traceable subagent retry credit:")) {
+              return { stream: fourthStream() };
+            }
+            return {
+              stream: retryCreditSendCount === 1
+                ? firstStream()
+                : retryCreditSendCount === 2
+                  ? secondStream()
+                  : thirdStream()
+            };
+          }
+        }];
+      },
+      async invokeTool() {
+        return {
+          content: [new vscode.LanguageModelTextPart("read ok")]
+        };
+      }
+    };
+
+    const retryCreditResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the anchored runtime files.",
+      parentTask: "Cover each anchored file once before rereading one anchored file under bounded read budget.",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 3, maxToolCalls: 4 },
+      carriedContext: {
+        fileContext: ["package.json", "README.md"]
+      }
+    });
+
+    assert(
+      retryCreditSendCount === 3
+        && retryCreditResult.stopReason === "completed"
+        && retryCreditResult.finalSummary === "retry credit ok"
+        && retryCreditResult.iterationMetrics?.some((entry) => entry.nonConsumingRetryGranted === true)
+        && retryCreditResult.iterationMetrics.some((entry) => entry.executedToolCallCount === 0 && entry.deferredToolCallCount === 1),
+      `Traceable subagent pure-defer retry credit did not preserve a regular iteration for the unread anchor. Got: ${JSON.stringify({ retryCreditSendCount, retryCreditResult })}`
     );
     assert(
       JSON.stringify(synthesisReservationResult.toolCalls.map((entry) => entry.result)) === JSON.stringify(["success", "success", "success", "notRun"])
@@ -8318,6 +9200,47 @@ async function runTraceableSubagentChecks() {
       "Traceable subagent unparseable-payload fallback must keep raw child output available without promoting it into the final summary."
     );
 
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [
+        { name: "copilot_readFile", description: "file read" }
+      ],
+      async selectChatModels() {
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest() {
+            async function* stream() {
+            }
+            return { stream: stream() };
+          }
+        }];
+      },
+      async invokeTool() {
+        throw new Error("Traceable empty-response test should not invoke tools.");
+      }
+    };
+
+    const emptyResponseResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "inspect current status",
+      parentTask: "return a bounded summary",
+      modelSelector: { vendor: "copilot", id: "gpt-5-mini" },
+      allowedToolNames: ["copilot_readFile"],
+      budgetPolicy: { maxIterations: 2, maxToolCalls: 2 }
+    });
+
+    assert(
+      emptyResponseResult.stopReason === "tool_blocked"
+        && emptyResponseResult.completionClaim === "unresolved"
+        && emptyResponseResult.finalSummary.includes("empty response stream")
+        && emptyResponseResult.finalSummary.includes("no-choices response")
+        && emptyResponseResult.expectedButMissing.some((item) => item.label === "Final JSON payload")
+        && emptyResponseResult.rawModelText === "",
+      `Traceable subagent empty-response fallback did not produce the expected no-choices style failure surface. Got: ${JSON.stringify(emptyResponseResult)}`
+    );
+
     const ambiguousRootA = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-a-"));
     const ambiguousRootB = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-ambiguous-b-"));
     tempRoots.push(ambiguousRootA, ambiguousRootB);
@@ -8355,8 +9278,25 @@ async function runTraceableSubagentChecks() {
     });
 
     assert(
-      ambiguousResult.stopReason === "tool_blocked" && ambiguousResult.finalSummary.includes("matched multiple direct workspace agent artifacts"),
+      ambiguousResult.stopReason === "tool_blocked"
+        && ambiguousResult.finalSummary.includes("matched multiple direct workspace agent artifacts")
+        && ambiguousResult.finalSummary.includes("availableDisplayNames="),
       `Traceable subagent ambiguity test did not fail closed on multiple direct matches. Got: ${JSON.stringify(ambiguousResult)}`
+    );
+
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: ambiguousRootA } }];
+    const unresolvedRoleResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect the unresolved role.",
+      parentTask: "Fail closed if the requested role does not exist.",
+      agentRole: { name: "Not A Real Traceable Agent" }
+    });
+
+    assert(
+      unresolvedRoleResult.stopReason === "tool_blocked"
+        && unresolvedRoleResult.finalSummary.includes("could not be resolved")
+        && unresolvedRoleResult.finalSummary.includes("availableDisplayNames=")
+        && unresolvedRoleResult.finalSummary.includes("Anchor (GPT-5 mini)"),
+      `Traceable subagent unresolved-role test did not return available display-name guidance. Got: ${JSON.stringify(unresolvedRoleResult)}`
     );
   } finally {
     if (originalWorkspace) {
@@ -8817,6 +9757,12 @@ async function runLiveToolMutexChecks() {
       "Live tool mutex test could not capture the run_traceable_subagent tool registration."
     );
 
+    const traceableModelsTool = registeredTools.get("list_traceable_models");
+    assert(
+      traceableModelsTool && typeof traceableModelsTool.prepareInvocation === "function",
+      "Live tool mutex test could not capture the list_traceable_models tool registration."
+    );
+
     const traceablePrepared = traceableTool.prepareInvocation({
       input: {
         userInput: "compare plan and implementation",
@@ -8829,12 +9775,8 @@ async function runLiveToolMutexChecks() {
     });
 
     assert(
-      String(traceablePrepared?.invocationMessage ?? "") === "Comparing 2 files for gaps",
+      String(traceablePrepared?.invocationMessage ?? "") === "Trace lane: 2 files for gaps",
       `Traceable subagent invocation message must stay short and action-shaped for anchored read runs. Got: ${String(traceablePrepared?.invocationMessage ?? "")}`
-    );
-    assert(
-      String(traceablePrepared?.pastTenseMessage ?? "") === "Compared 2 files for gaps",
-      `Traceable subagent prepared invocation should expose a past-tense completion label for host surfaces that support it. Got: ${String(traceablePrepared?.pastTenseMessage ?? "")}`
     );
     assert(
       !String(traceablePrepared?.invocationMessage ?? "").includes("determine what crossed from plan into verified implementation"),
