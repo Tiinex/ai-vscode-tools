@@ -34,6 +34,7 @@ type PanelActivityEntry =
     id: string;
     occurredAt: string;
     requestSummary: PanelRequestSummaryItem[];
+    snapshot: TraceableSubagentDetailSnapshot;
   }
   | {
     kind: "status";
@@ -58,6 +59,15 @@ type PanelActivityEntry =
     id: string;
     occurredAt: string;
     displayEvent: PanelDisplayEvent;
+  };
+
+type PanelRenderedEntry =
+  | PanelActivityEntry
+  | {
+    kind: "status-group";
+    id: string;
+    occurredAt: string;
+    entries: Array<Extract<PanelActivityEntry, { kind: "status" }>>;
   };
 
 interface ToolsetListItem {
@@ -275,7 +285,7 @@ function renderCodicon(iconName: string, extraClasses?: string): string {
 function toolBadgeIcon(toolName: string): string | undefined {
   switch (normalizeToolBadgeKey(toolName)) {
     case "read_file":
-      return "file";
+      return "go-to-file";
     case "find_text_in_files":
     case "text_search":
       return "search";
@@ -504,15 +514,15 @@ function eventLabel(event: PanelDisplayEvent): string {
   const kind = event.kind;
   if (kind === "Read") {
     const filePath = event.filePath ?? "";
-    return filePath ? `Read ${path.basename(filePath)}` : "Read file";
+    return filePath ? `read ${path.basename(filePath)}` : "read file";
   }
   if (kind === "Search") {
     switch (normalizeToolBadgeKey(event.event.toolName)) {
       case "find_files":
       case "file_search":
-        return "Found files";
+        return "found files";
       default:
-        return "Searched text";
+        return "searched text";
     }
   }
   return event.event.toolName.startsWith("copilot_") ? event.event.toolName.slice("copilot_".length) : event.event.toolName;
@@ -682,28 +692,107 @@ function renderTimingChip(
   return `<span class="${className}"${dataAttributes}${titleAttribute}><span class="${partClassName}-label">${escapeHtml(label)}</span><span class="${partClassName}-value">${escapeHtml(value)}</span></span>`;
 }
 
-function renderRequestSummaryBadge(item: PanelRequestSummaryItem): string {
-  const titleAttribute = item.title ? ` title="${escapeHtml(item.title)}"` : "";
-  return [
-    `<span class="header-badge activity-request-badge"${titleAttribute}>`,
-    `<span class="header-badge-label">${escapeHtml(item.label)}</span>`,
-    `<span class="header-badge-value">${escapeHtml(item.value)}</span>`,
-    `</span>`
-  ].join("");
+function renderRequestSummaryBadge(item: PanelRequestSummaryItem, snapshot?: TraceableSubagentDetailSnapshot): string {
+  const normalizedLabel = item.label.trim().toLowerCase();
+  if (normalizedLabel === "track") {
+    const trackClassName = item.value.trim().toLowerCase() === "candidate"
+      ? "activity-request-badge header-badge-track-candidate"
+      : "activity-request-badge header-badge-track-experimental";
+    return renderHeaderBadge(item.label, item.value, trackClassName, item.title);
+  }
+  if (normalizedLabel === "model") {
+    return renderHeaderBadge(item.label, item.value, "activity-request-badge header-badge-model", item.title);
+  }
+  if (normalizedLabel === "role" && snapshot) {
+    const isHuman = snapshot.header.humanRole;
+    const isResolved = snapshot.header.agentResolved;
+    const title = isResolved
+      ? snapshot.header.agentFilePath
+        ? `${isHuman ? "Human role" : "AI role"}\n${snapshot.header.agentFilePath}`
+        : (isHuman ? "Human role" : "AI role")
+      : `Requested ${isHuman ? "human" : "AI"} role\nNot yet resolved to a workspace .agent.md artifact.`;
+    const className = `${isHuman ? "header-badge-role-human" : "header-badge-role-ai"} ${isResolved ? "header-badge-role-resolved" : "header-badge-role-pending"}`;
+    const value = isResolved ? (snapshot.header.agentName || item.value) : `${snapshot.header.agentName || item.value} (requested)`;
+    return renderHeaderBadge(
+      item.label,
+      value,
+      `activity-request-badge ${className}`,
+      title,
+      isHuman ? "account" : "hubot",
+      isResolved && snapshot.header.agentFilePath ? { type: "openFile", filePath: snapshot.header.agentFilePath } : undefined
+    );
+  }
+  if (normalizedLabel === "allowlist") {
+    const countMatch = item.value.match(/^(\d+)\s+tool/i);
+    const countBadge = countMatch
+      ? renderHeaderBadge("Tools", countMatch[1], "activity-request-badge activity-request-badge-count", `${countMatch[1]} allowed tool${countMatch[1] === "1" ? "" : "s"}`)
+      : "";
+    return `${countBadge}${renderHeaderBadge(item.label, item.value, "activity-request-badge", item.title)}`;
+  }
+  return renderHeaderBadge(item.label, item.value, "activity-request-badge", item.title);
 }
 
-function splitRequestSummary(summary: PanelRequestSummaryItem[]): {
+function normalizePanelModelDisplayName(modelLabel: string | undefined): string {
+  const trimmed = modelLabel?.trim();
+  return trimmed || "model";
+}
+
+function decorateRequestSummaryItem(
+  item: PanelRequestSummaryItem,
+  snapshot: TraceableSubagentDetailSnapshot
+): PanelRequestSummaryItem {
+  const normalizedLabel = item.label.trim().toLowerCase();
+  if (normalizedLabel === "model" && snapshot.header.modelLabel?.trim()) {
+    return {
+      ...item,
+      value: normalizePanelModelDisplayName(snapshot.header.modelLabel),
+      title: `Model: ${snapshot.header.modelLabel.trim()}`
+    };
+  }
+  if (normalizedLabel === "role" && snapshot.header.agentName?.trim()) {
+    return {
+      ...item,
+      value: snapshot.header.agentName.trim(),
+      title: item.title || snapshot.header.agentFilePath?.trim() || snapshot.header.agentName.trim()
+    };
+  }
+  return item;
+}
+
+function buildTrackRequestSummaryItems(snapshot: TraceableSubagentDetailSnapshot): PanelRequestSummaryItem[] {
+  const items: PanelRequestSummaryItem[] = [];
+  if (snapshot.header.candidate) {
+    items.push({
+      label: "Track",
+      value: "Candidate",
+      title: "Track: Candidate"
+    });
+  }
+  if (snapshot.header.experimental) {
+    items.push({
+      label: "Track",
+      value: "Experimental",
+      title: "Track: Experimental"
+    });
+  }
+  return items;
+}
+
+function splitRequestSummary(summary: PanelRequestSummaryItem[], snapshot: TraceableSubagentDetailSnapshot): {
   task?: PanelRequestSummaryItem;
   userInput?: PanelRequestSummaryItem;
-  metadata: PanelRequestSummaryItem[];
+  prominentMetadata: PanelRequestSummaryItem[];
+  secondaryMetadata: PanelRequestSummaryItem[];
 } {
-  const hiddenLabels = new Set(["role", "model", "track", "user input"]);
-  const metadata: PanelRequestSummaryItem[] = [];
+  const hiddenLabels = new Set(["user input"]);
+  const prominentMetadata: PanelRequestSummaryItem[] = [];
+  const secondaryMetadata: PanelRequestSummaryItem[] = [];
   let task: PanelRequestSummaryItem | undefined;
   let userInput: PanelRequestSummaryItem | undefined;
-  for (const item of summary) {
+  const augmentedSummary = [...summary.map((item) => decorateRequestSummaryItem(item, snapshot)), ...buildTrackRequestSummaryItems(snapshot)];
+  for (const item of augmentedSummary) {
     const normalizedLabel = item.label.trim().toLowerCase();
-    if (!task && normalizedLabel === "task") {
+    if (!task && (normalizedLabel === "task" || normalizedLabel === "parent frame")) {
       task = item;
       continue;
     }
@@ -714,14 +803,18 @@ function splitRequestSummary(summary: PanelRequestSummaryItem[]): {
     if (hiddenLabels.has(normalizedLabel)) {
       continue;
     }
-    metadata.push(item);
+    if (normalizedLabel === "role" || normalizedLabel === "model" || normalizedLabel === "track") {
+      prominentMetadata.push(item);
+      continue;
+    }
+    secondaryMetadata.push(item);
   }
-  return { task, userInput, metadata };
+  return { task, userInput, prominentMetadata, secondaryMetadata };
 }
 
-function renderRequestSummaryChips(summary: PanelRequestSummaryItem[]): string {
+function renderRequestSummaryChips(summary: PanelRequestSummaryItem[], snapshot?: TraceableSubagentDetailSnapshot): string {
   return summary
-    .map((item) => renderRequestSummaryBadge(item))
+    .map((item) => renderRequestSummaryBadge(item, snapshot))
     .join("");
 }
 
@@ -734,6 +827,60 @@ function renderRequestDetailSection(label: string, value: string): string {
   ].join("");
 }
 
+function compactModeDetailText(title: string, fallbackValue: string): string {
+  const lines = title
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const inputMode = lines.find((line) => line.startsWith("Declared input mode:"))?.replace(/^Declared input mode:\s*/u, "") || "";
+  const validationMode = lines.find((line) => line.startsWith("Declared validation mode:"))?.replace(/^Declared validation mode:\s*/u, "") || "";
+  const code = lines.find((line) => line.startsWith("Declared mode code:"))?.replace(/^Declared mode code:\s*/u, "") || fallbackValue;
+  const inputSummary = lines.includes("Treat the bounded task contract as explicit operational direction.")
+    ? "Operational direction."
+    : lines.includes("Treat the input as inquiry-shaped framing rather than as a fixed target conclusion.")
+      ? "Inquiry-shaped framing, not a fixed conclusion."
+      : lines.includes("Treat the input as inquiry-shaped framing and avoid smuggling the target conclusion into the task contract.")
+        ? "Inquiry-shaped framing; avoid leading the conclusion."
+        : "";
+  const validationSummary = lines.includes("Do not apply any extra input-mode mismatch gate by default.")
+    ? "No extra mismatch gate."
+    : lines.includes("Surface input-mode mismatches as trace-visible warnings while preserving the original userInput and parentFrame text unchanged.")
+      ? "Warnings only; original text preserved."
+      : lines.includes("Treat input-mode mismatches as hard validation errors and stop the lane before model execution.")
+        ? "Hard-stop on mismatch."
+        : lines.includes("NON_LEADING_EPISTEMIC requires validationMode WARN or ERROR.")
+          ? "Requires WARN or ERROR."
+          : "";
+  const header = [inputMode, validationMode, code].filter(Boolean).join(" · ");
+  const detail = [inputSummary, validationSummary].filter(Boolean).join(" ");
+  return [header, detail].filter(Boolean).join("\n");
+}
+
+function renderRequestDetailValue(item: PanelRequestSummaryItem): string {
+  const label = item.label.trim().toLowerCase();
+  const title = item.title?.trim() || "";
+  const value = item.value?.trim() || "";
+  if (label === "mode") {
+    return compactModeDetailText(title, value);
+  }
+  if (label === "allowlist") {
+    return title.replace(/^Allowed tools:\s*/u, "") || value;
+  }
+  if (label === "blocklist") {
+    return title.replace(/^Blocked tools:\s*/u, "") || value;
+  }
+  if (label === "reveal") {
+    return value || title;
+  }
+  if (label === "model") {
+    return title.replace(/^Model:\s*/u, "") || value;
+  }
+  if (label === "track") {
+    return title.replace(/^Track:\s*/u, "") || value;
+  }
+  return title || value;
+}
+
 function buildActivityEntries(snapshot: TraceableSubagentDetailSnapshot): PanelActivityEntry[] {
   const activities: PanelActivityEntry[] = [];
   if (snapshot.requestSummary.length > 0) {
@@ -741,7 +888,8 @@ function buildActivityEntries(snapshot: TraceableSubagentDetailSnapshot): PanelA
       kind: "request",
       id: "request-summary",
       occurredAt: snapshot.startedAt,
-      requestSummary: snapshot.requestSummary
+      requestSummary: snapshot.requestSummary,
+      snapshot
     });
   }
 
@@ -844,9 +992,80 @@ function renderActivityMeta(
   return `<div class="event-chips">${chips.join("")}</div>`;
 }
 
+function compactStatusGroupText(parts: string[], maxLength: number): string {
+  const compactParts = parts
+    .map((part) => part.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const combined = compactParts.join(" ... ");
+  if (combined.length <= maxLength) {
+    return combined;
+  }
+  return `${combined.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+
+function groupActivityEntries(activities: PanelActivityEntry[]): PanelRenderedEntry[] {
+  const grouped: PanelRenderedEntry[] = [];
+  let index = 0;
+  while (index < activities.length) {
+    const current = activities[index];
+    if (current.kind !== "status") {
+      grouped.push(current);
+      index += 1;
+      continue;
+    }
+    const statusEntries: Array<Extract<PanelActivityEntry, { kind: "status" }>> = [current];
+    let nextIndex = index + 1;
+    while (nextIndex < activities.length && activities[nextIndex].kind === "status") {
+      statusEntries.push(activities[nextIndex] as Extract<PanelActivityEntry, { kind: "status" }>);
+      nextIndex += 1;
+    }
+    if (statusEntries.length >= 2) {
+      grouped.push({
+        kind: "status-group",
+        id: `${statusEntries[0].id}:${statusEntries[statusEntries.length - 1].id}`,
+        occurredAt: statusEntries[0].occurredAt,
+        entries: statusEntries
+      });
+    } else {
+      grouped.push(statusEntries[0]);
+    }
+    index = nextIndex;
+  }
+  return grouped;
+}
+
+function deriveStatusTransparencyNote(entry: Extract<PanelActivityEntry, { kind: "status" }>): string | undefined {
+  if (entry.detail) {
+    return undefined;
+  }
+  switch (entry.message) {
+    case "starting":
+      return "Initializing trace lane state.";
+    case "resolving role":
+      return "Resolving the requested role artifact before the child lane starts.";
+    case "selecting model":
+      return "Selecting the grounded child model for this lane.";
+    case "model ready":
+      return "Grounded model selected; the child lane can begin.";
+    case "requesting analysis":
+      return "Awaiting the first child response.";
+    case "continuing analysis":
+      return "Awaiting the next child response.";
+    case "synthesizing":
+      return "No further tool work is scheduled; preparing the child result.";
+    case "final recovery":
+      return "Running the recovery turn after deferred-only progress.";
+    case "finalizing":
+      return "Rendering the final result for the parent lane.";
+    default:
+      return undefined;
+  }
+}
+
 function renderStatusActivity(entry: Extract<PanelActivityEntry, { kind: "status" }>): string {
   const suppressNoteRow = entry.phase === "completed" && entry.message === "completed";
-  const noteRow = entry.detail && !suppressNoteRow ? `<div class="event-note">${escapeHtml(entry.detail)}</div>` : "";
+  const noteText = suppressNoteRow ? "" : (entry.detail || deriveStatusTransparencyNote(entry) || "");
+  const noteRow = noteText ? `<div class="event-note">${escapeHtml(noteText)}</div>` : "";
   const phaseChips = entry.phase === "running"
     ? []
     : [`<span class="chip chip-status-phase chip-status-phase-${entry.phase}">${escapeHtml(entry.phase)}</span>`];
@@ -868,20 +1087,86 @@ function renderStatusActivity(entry: Extract<PanelActivityEntry, { kind: "status
   ].join("");
 }
 
+function renderStatusGroupActivity(entry: Extract<PanelRenderedEntry, { kind: "status-group" }>): string {
+  const firstEntry = entry.entries[0];
+  const severityClass = entry.entries.some((child) => child.phase === "error")
+    ? "status-group-severity-error"
+    : entry.entries.some((child) => child.phase === "warning")
+      ? "status-group-severity-warning"
+      : entry.entries.some((child) => child.phase === "running")
+        ? "status-group-severity-running"
+        : entry.entries.some((child) => child.phase === "completed")
+          ? "status-group-severity-completed"
+          : "";
+  const labelText = compactStatusGroupText(entry.entries.map((child) => child.message), 80);
+  const noteText = compactStatusGroupText(
+    entry.entries
+      .map((child) => child.detail || deriveStatusTransparencyNote(child) || "")
+      .filter(Boolean),
+    120
+  );
+  const titleText = entry.entries.map((child) => child.message).join(" ... ");
+  const durationChips = entry.entries
+    .filter((child) => child.running || child.baseElapsedMs >= 0)
+    .map((child) => renderActivityDuration(
+      child.durationLabel ?? (child.running ? "Live" : "For"),
+      child.baseElapsedMs,
+      child.occurredAt,
+      child.running,
+      child.durationTitle ?? (child.running ? "Current status duration" : "Status duration")
+    ));
+  const chips: string[] = [];
+  const clockLabel = formatPanelClockTime(firstEntry.occurredAt);
+  if (clockLabel) {
+    chips.push(`<span class="chip chip-time" title="Started ${escapeHtml(clockLabel)}">${escapeHtml(clockLabel)}</span>`);
+  }
+  chips.push(...durationChips);
+  const childRows = entry.entries.map((child) => renderStatusActivity(child)).join("");
+  return [
+    `<li class="status-group-item">`,
+    `<details class="status-group ${severityClass}" data-status-group-id="${escapeHtml(entry.id)}">`,
+    `<summary class="event-row event-status-group-summary" title="${escapeHtml(titleText)}">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon event-status-group-toggle">${renderCodicon("chevron-right")}</span><span class="event-label">${escapeHtml(labelText)}</span></div>${noteText ? `<div class="event-note">${escapeHtml(noteText)}</div>` : ""}</div>`,
+    `<div class="event-chips">${chips.join("")}</div>`,
+    `</summary>`,
+    `<ul class="status-group-children">${childRows}</ul>`,
+    `</details>`,
+    `</li>`
+  ].join("");
+}
+
 function renderRequestActivity(entry: Extract<PanelActivityEntry, { kind: "request" }>): string {
-  const { task, userInput, metadata } = splitRequestSummary(entry.requestSummary);
+  const { task, userInput, prominentMetadata, secondaryMetadata } = splitRequestSummary(entry.requestSummary, entry.snapshot);
   const noteText = task?.value?.trim() || "Compact launch parameters for this trace lane.";
   const noteTitleAttribute = task?.title ? ` title="${escapeHtml(task.title)}"` : "";
-  const metadataMarkup = metadata.length > 0 ? `<div class="event-chips">${renderRequestSummaryChips(metadata)}</div>` : "";
+  const prominentMetadataMarkup = prominentMetadata.length > 0
+    ? `<div class="event-chips event-request-primary-chips">${renderRequestSummaryChips(prominentMetadata, entry.snapshot)}</div>`
+    : "";
+  const secondaryMetadataMarkup = secondaryMetadata.length > 0
+    ? `<div class="event-chips event-request-secondary-chips">${renderRequestSummaryChips(secondaryMetadata, entry.snapshot)}</div>`
+    : "";
+  const metadataMarkup = prominentMetadataMarkup || secondaryMetadataMarkup
+    ? `<div class="event-request-chip-stack">${[prominentMetadataMarkup, secondaryMetadataMarkup].filter(Boolean).join("")}</div>`
+    : "";
+  const metadataDetailSections = [...prominentMetadata, ...secondaryMetadata]
+    .map((item) => {
+      const detailText = renderRequestDetailValue(item);
+      return detailText ? renderRequestDetailSection(item.label, detailText) : "";
+    })
+    .filter(Boolean);
   const detailSections = [
-    task?.title?.trim() ? renderRequestDetailSection("Task", task.title) : "",
-    userInput?.title?.trim() ? renderRequestDetailSection("User Input", userInput.title) : ""
+    task?.title?.trim() ? renderRequestDetailSection("Parent Frame", task.title) : "",
+    userInput?.title?.trim() ? renderRequestDetailSection("User Input", userInput.title) : "",
+    ...metadataDetailSections
   ].filter(Boolean).join("");
   const expandable = detailSections.length > 0;
   const expandableAttributes = expandable ? ' data-request-expandable="true" tabindex="0" role="button" aria-expanded="false"' : "";
+  const summaryMarkup = noteText
+    ? `<span class="event-summary-inline"><span class="event-summary-preview"${noteTitleAttribute}>${escapeHtml(noteText)}</span>${expandable ? `<span class="event-expand-indicator" aria-hidden="true">▸</span>` : ""}</span>`
+    : expandable ? `<span class="event-expand-indicator" aria-hidden="true">▸</span>` : "";
   return [
     `<li class="event-row event-request" title="Traceable input"${expandableAttributes}>`,
-    `<div class="event-body"><div class="event-main"><span class="event-icon">${renderCodicon("mail")}</span><span class="event-label">Input</span>${expandable ? `<span class="event-expand-indicator" aria-hidden="true">▸</span>` : ""}</div><div class="event-note"${noteTitleAttribute}>${escapeHtml(noteText)}</div>${detailSections ? `<div class="event-request-detail">${detailSections}</div>` : ""}</div>`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${renderCodicon("mail")}</span><span class="event-label">Input</span>${summaryMarkup}</div><div class="event-note"${noteTitleAttribute}>${escapeHtml(noteText)}</div>${detailSections ? `<div class="event-request-detail">${detailSections}</div>` : ""}</div>`,
     metadataMarkup,
     `</li>`
   ].join("");
@@ -915,7 +1200,10 @@ function renderToolActivity(entry: Extract<PanelActivityEntry, { kind: "tool" }>
   ].join("");
 }
 
-function renderActivityRow(entry: PanelActivityEntry): string {
+function renderActivityRow(entry: PanelRenderedEntry): string {
+  if (entry.kind === "status-group") {
+    return renderStatusGroupActivity(entry);
+  }
   if (entry.kind === "request") {
     return renderRequestActivity(entry);
   }
@@ -1288,11 +1576,12 @@ export function renderTraceableSubagentPanelHtml(
   options: { pinnedOpen?: boolean } = {}
 ): string {
   const activities = buildActivityEntries(snapshot);
-  const hasActivityFeed = activities.length > 0;
+  const renderedEntries = groupActivityEntries(activities);
+  const hasActivityFeed = renderedEntries.length > 0;
   const pinnedOpen = options.pinnedOpen === true;
   const showExport = snapshot.status.phase !== "running";
   const eventRows = hasActivityFeed
-    ? activities.map((event) => renderActivityRow(event)).join("")
+    ? renderedEntries.map((event) => renderActivityRow(event)).join("")
     : renderPanelEmptyState(snapshot);
   const updatedLabel = formatPanelUpdatedAt(snapshot.updatedAt);
   const runningState = snapshot.status.phase === "running" ? "true" : "false";
@@ -1585,6 +1874,24 @@ export function renderTraceableSubagentPanelHtml(
     .activity-request-badge .header-badge-value {
       color: color-mix(in srgb, var(--fg) 84%, var(--muted));
       font-weight: 600;
+    }
+    .activity-request-badge.header-badge-track-candidate .header-badge-label,
+    .activity-request-badge.header-badge-track-experimental .header-badge-label {
+      color: color-mix(in srgb, var(--muted) 92%, transparent);
+    }
+    .activity-request-badge.header-badge-track-candidate {
+      border-color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 26%, var(--chip-border));
+      background: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 8%, var(--chip-bg));
+    }
+    .activity-request-badge.header-badge-track-candidate .header-badge-value {
+      color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 74%, var(--fg));
+    }
+    .activity-request-badge.header-badge-track-experimental {
+      border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 24%, var(--chip-border));
+      background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 7%, var(--chip-bg));
+    }
+    .activity-request-badge.header-badge-track-experimental .header-badge-value {
+      color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 72%, var(--fg));
     }
     .chip-request {
       gap: 5px;
@@ -1949,6 +2256,13 @@ export function renderTraceableSubagentPanelHtml(
       gap: 8px;
       min-width: 0;
     }
+    .event-summary-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      flex: 1 1 auto;
+    }
     .event-body {
       display: grid;
       gap: 2px;
@@ -1973,6 +2287,14 @@ export function renderTraceableSubagentPanelHtml(
       overflow: hidden;
       text-overflow: ellipsis;
     }
+    .event-summary-preview {
+      min-width: 0;
+      color: color-mix(in srgb, var(--fg) 88%, var(--muted));
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .event-note {
       color: var(--muted);
       padding-left: 20px;
@@ -1987,13 +2309,12 @@ export function renderTraceableSubagentPanelHtml(
       white-space: normal;
       display: -webkit-box;
       -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
+      -webkit-line-clamp: 1;
     }
     .event-expand-indicator {
       color: color-mix(in srgb, var(--muted) 90%, transparent);
       font-size: 11px;
       line-height: 1;
-      margin-left: 6px;
       transform-origin: 50% 50%;
       transition: transform 120ms ease, color 120ms ease;
     }
@@ -2019,6 +2340,12 @@ export function renderTraceableSubagentPanelHtml(
     .event-request.request-expanded .event-note {
       display: none;
     }
+    .event-request.request-expanded .event-summary-preview {
+      display: none;
+    }
+    .event-request.request-expanded .event-chips {
+      display: none;
+    }
     .event-request.request-expanded .event-expand-indicator {
       transform: rotate(90deg);
       color: color-mix(in srgb, var(--accent) 78%, var(--fg));
@@ -2040,6 +2367,74 @@ export function renderTraceableSubagentPanelHtml(
     }
     .event-request {
       align-items: start;
+    }
+    .event-request .event-label {
+      color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+      letter-spacing: 0.02em;
+    }
+    .event-request-chip-stack {
+      display: grid;
+      gap: 6px;
+      justify-items: end;
+      min-width: 0;
+    }
+    .event-request-primary-chips,
+    .event-request-secondary-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    .status-group-item {
+      list-style: none;
+    }
+    .status-group {
+      display: grid;
+      gap: 0;
+    }
+    .status-group > summary {
+      list-style: none;
+    }
+    .status-group > summary::-webkit-details-marker {
+      display: none;
+    }
+    .event-status-group-summary {
+      cursor: pointer;
+    }
+    .event-status-group-summary .event-body {
+      min-width: 0;
+    }
+    .event-status-group-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: color-mix(in srgb, var(--muted) 92%, transparent);
+      transition: transform 140ms ease;
+    }
+    .status-group.status-group-severity-running .event-status-group-toggle {
+      color: var(--vscode-progressBar-background);
+    }
+    .status-group.status-group-severity-completed .event-status-group-toggle {
+      color: var(--vscode-terminal-ansiGreen);
+    }
+    .status-group.status-group-severity-warning .event-status-group-toggle {
+      color: var(--vscode-editorWarning-foreground);
+    }
+    .status-group.status-group-severity-error .event-status-group-toggle {
+      color: var(--vscode-errorForeground);
+    }
+    .status-group[open] .event-status-group-toggle {
+      transform: rotate(90deg);
+    }
+    .status-group-children {
+      display: grid;
+      gap: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .status-group-children .event-row {
+      padding-left: 22px;
     }
     .event-chips {
       display: flex;
@@ -2240,6 +2635,7 @@ export function renderTraceableSubagentPanelHtml(
       toolsetDisclosureOpen: false,
       requestExpanded: false,
       namespaceOpenById: {},
+      statusGroupOpenById: {},
       runId: ''
     };
 
@@ -2254,6 +2650,9 @@ export function renderTraceableSubagentPanelHtml(
             namespaceOpenById: state.namespaceOpenById && typeof state.namespaceOpenById === 'object'
               ? Object.fromEntries(Object.entries(state.namespaceOpenById).filter(([key, value]) => typeof key === 'string' && typeof value === 'boolean'))
               : {},
+            statusGroupOpenById: state.statusGroupOpenById && typeof state.statusGroupOpenById === 'object'
+              ? Object.fromEntries(Object.entries(state.statusGroupOpenById).filter(([key, value]) => typeof key === 'string' && typeof value === 'boolean'))
+              : {},
             runId: typeof state.runId === 'string' ? state.runId : ''
           }
         : defaultPanelState;
@@ -2263,6 +2662,7 @@ export function renderTraceableSubagentPanelHtml(
     const currentRunId = ${JSON.stringify(snapshot.startedAt)};
     const toolsetDisclosure = document.querySelector('.toolset-disclosure');
     const namespaceGroups = Array.from(document.querySelectorAll('.toolset-namespace-group[data-namespace-id]'));
+    const statusGroups = Array.from(document.querySelectorAll('.status-group[data-status-group-id]'));
     const timerNodes = Array.from(document.querySelectorAll('[data-timer-kind]'));
     const requestRow = document.querySelector('.event-request[data-request-expandable="true"]');
 
@@ -2274,7 +2674,8 @@ export function renderTraceableSubagentPanelHtml(
     if (panelState.runId !== currentRunId) {
       persistPanelState({
         runId: currentRunId,
-        namespaceOpenById: {}
+        namespaceOpenById: {},
+        statusGroupOpenById: {}
       });
     }
 
@@ -2415,6 +2816,58 @@ export function renderTraceableSubagentPanelHtml(
           }
         });
       });
+    }
+
+    let applyingStatusGroupState = false;
+    const applyStatusGroupState = () => {
+      applyingStatusGroupState = true;
+      try {
+        for (const groupNode of statusGroups) {
+          if (!(groupNode instanceof HTMLDetailsElement)) {
+            continue;
+          }
+          const groupId = groupNode.dataset.statusGroupId || '';
+          const hasStoredState = Object.prototype.hasOwnProperty.call(panelState.statusGroupOpenById, groupId);
+          groupNode.open = hasStoredState ? panelState.statusGroupOpenById[groupId] === true : false;
+        }
+      } finally {
+        applyingStatusGroupState = false;
+      }
+    };
+
+    applyStatusGroupState();
+
+    for (const groupNode of statusGroups) {
+      if (!(groupNode instanceof HTMLDetailsElement)) {
+        continue;
+      }
+      groupNode.addEventListener('toggle', () => {
+        if (applyingStatusGroupState) {
+          return;
+        }
+        const groupId = groupNode.dataset.statusGroupId || '';
+        persistPanelState({
+          statusGroupOpenById: {
+            ...panelState.statusGroupOpenById,
+            [groupId]: groupNode.open
+          }
+        });
+      });
+      for (const childStatusRow of Array.from(groupNode.querySelectorAll('.status-group-children .event-status'))) {
+        if (!(childStatusRow instanceof HTMLElement)) {
+          continue;
+        }
+        childStatusRow.addEventListener('click', () => {
+          groupNode.open = false;
+          const groupId = groupNode.dataset.statusGroupId || '';
+          persistPanelState({
+            statusGroupOpenById: {
+              ...panelState.statusGroupOpenById,
+              [groupId]: false
+            }
+          });
+        });
+      }
     }
 
     const applyRequestExpansion = () => {

@@ -392,7 +392,7 @@ function formatFileCount(fileCount: number): string {
 }
 
 function traceableSubagentInvocationAction(input: TraceableSubagentInput): string | undefined {
-  const source = input.userInput?.trim() || input.parentTask?.trim();
+  const source = input.userInput?.trim() || input.parentFrame?.trim() || input.parentTask?.trim();
   if (!source) {
     return undefined;
   }
@@ -417,7 +417,7 @@ function traceableSubagentInvocationAction(input: TraceableSubagentInput): strin
 }
 
 function traceableSubagentInvocationSuffix(input: TraceableSubagentInput, action: string | undefined): string | undefined {
-  const source = `${input.userInput?.trim() ?? ""} ${input.parentTask?.trim() ?? ""}`.toLowerCase();
+  const source = `${input.userInput?.trim() ?? ""} ${input.parentFrame?.trim() ?? input.parentTask?.trim() ?? ""}`.toLowerCase();
   if (!source) {
     return undefined;
   }
@@ -449,7 +449,7 @@ function traceableSubagentInvocationSuffix(input: TraceableSubagentInput, action
 }
 
 function traceableSubagentInvocationMessage(input: TraceableSubagentInput): string {
-  const summary = summarizeInvocationText(input.parentTask) ?? summarizeInvocationText(input.userInput);
+  const summary = summarizeInvocationText(input.parentFrame) ?? summarizeInvocationText(input.parentTask) ?? summarizeInvocationText(input.userInput);
   const action = traceableSubagentInvocationAction(input);
   const suffix = traceableSubagentInvocationSuffix(input, action);
   const fileCount = Array.isArray(input.carriedContext?.fileContext) ? input.carriedContext.fileContext.length : 0;
@@ -834,18 +834,32 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: TRACEABLE_SUBAGENT_TOOL_NAME,
     displayName: "Run Traceable Subagent",
     userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
-    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentTask, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, and treats native runSubagent delegation as opaque rather than fully trace-supported. Prefer non-leading parent framing: use userInput as the source wording or material to inspect rather than the desired answer shape, and let parentTask carry the bounded investigative contract without smuggling in the target conclusion. When agentRole is provided, the runtime resolves a workspace .agent.md artifact and grounds the child from both its frontmatter and body. To avoid hidden model-cost drift, the runtime uses the agent artifact's declared model when it can translate it deterministically; otherwise it requires an exact model id in modelSelector.id and does not auto-select a fallback model. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
+    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentFrame, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, and treats native runSubagent delegation as opaque rather than fully trace-supported. Prefer non-leading parent framing: use userInput as the source wording or material to inspect rather than the desired answer shape, and let parentFrame carry the bounded investigative contract without smuggling in the target conclusion. Legacy parentTask input is still accepted as a compatibility alias. When agentRole is provided, the runtime resolves a workspace .agent.md artifact and grounds the child from both its frontmatter and body. To avoid hidden model-cost drift, the runtime uses the agent artifact's declared model when it can translate it deterministically; otherwise it requires an exact model id in modelSelector.id and does not auto-select a fallback model. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
     toolReferenceName: "runTraceableSubagent",
     inputSchema: {
       type: "object",
       properties: {
         userInput: {
           type: "string",
-          description: "The original or near-original user wording or source material for the task being delegated. Keep this distinct from parentTask and do not rely on it as the desired answer shape."
+          description: "The original or near-original user wording or source material for the task being delegated. Keep this distinct from parentFrame and do not rely on it as the desired answer shape."
+        },
+        parentFrame: {
+          type: "string",
+          description: "The exact bounded investigative frame that the parent wants the child lane to follow. Prefer non-leading wording that preserves inquiry without baking in the target conclusion."
         },
         parentTask: {
           type: "string",
-          description: "The exact bounded investigative task that the parent wants the child lane to perform. Prefer non-leading wording that preserves inquiry without baking in the target conclusion."
+          description: "Legacy compatibility alias for parentFrame. Prefer parentFrame for new calls."
+        },
+        inputMode: {
+          type: "string",
+          description: "Optional declarative behavior mode for how the parent intends the userInput and parentFrame pairing to be interpreted. This is framing metadata, not automatic rewriting. NON_LEADING_EPISTEMIC requires validationMode WARN or ERROR.",
+          enum: ["OPERATIVE", "EPISTEMIC", "NON_LEADING_EPISTEMIC"]
+        },
+        validationMode: {
+          type: "string",
+          description: "Declarative validation mode for behavior-mode mismatches. WARN keeps the lane running but records a visible warning; ERROR stops before model execution. NON_LEADING_EPISTEMIC requires WARN or ERROR. Neither mode rewrites the original userInput or parentFrame text.",
+          enum: ["NONE", "WARN", "ERROR"]
         },
         reveal: {
           type: "boolean",
@@ -960,20 +974,24 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
         },
         allowedToolNames: {
           type: "array",
-          description: "Optional tool allowlist for the child lane. Entries may use host runtime tool names or prompt-reference aliases such as tiinex.ai-vscode-tools/listAgentSessions. When omitted, the lane uses the host tool list minus its default blocked set.",
+          description: "Optional tool allowlist for the child lane. Entries may use host runtime tool names or prompt-reference aliases such as tiinex.ai-vscode-tools/listAgentSessions. When an agent role declares tools, this allowlist only narrows that inherited role surface and cannot add tools beyond it. When no role tool constraint exists, the allowlist narrows the host tool list minus the default blocked set.",
           items: {
             type: "string"
           }
         },
         blockedToolNames: {
           type: "array",
-          description: "Optional extra tool names to block for this run in addition to the default self/mutation blocklist. Entries may use host runtime tool names or prompt-reference aliases.",
+          description: "Optional extra tool names to block for this run in addition to the default self/mutation blocklist. Entries may use host runtime tool names or prompt-reference aliases. This list is subtractive only and cannot expand the inherited or host tool surface.",
           items: {
             type: "string"
           }
         }
       },
-      required: ["userInput", "parentTask"]
+      required: ["userInput"],
+      anyOf: [
+        { required: ["parentFrame"] },
+        { required: ["parentTask"] }
+      ]
     }
   },
   {

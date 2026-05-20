@@ -64,12 +64,87 @@ function compactTraceableSummaryText(value: string, maxLength: number): string {
   return `${compact.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
-function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableSubagentRequestSummaryItem[] {
+function formatTraceableInputMode(mode: TraceableSubagentInput["inputMode"]): string | undefined {
+  switch (mode) {
+    case "OPERATIVE":
+      return "O";
+    case "EPISTEMIC":
+      return "E";
+    case "NON_LEADING_EPISTEMIC":
+      return "NLE";
+    default:
+      return undefined;
+  }
+}
+
+function formatTraceableModeSummaryValue(
+  inputMode: TraceableSubagentInput["inputMode"],
+  validationMode: TraceableSubagentInput["validationMode"]
+): string | undefined {
+  const modeCode = formatTraceableInputMode(inputMode);
+  if (!modeCode) {
+    return undefined;
+  }
+  const normalizedValidationMode = validationMode?.trim().toUpperCase();
+  if (normalizedValidationMode === "WARN") {
+    return `${modeCode}-W`;
+  }
+  if (normalizedValidationMode === "ERROR") {
+    return `${modeCode}-E`;
+  }
+  return modeCode;
+}
+
+function describeTraceableInputMode(mode: TraceableSubagentInput["inputMode"]): string | undefined {
+  switch (mode) {
+    case "OPERATIVE":
+      return "Declared input mode: OPERATIVE\nTreat the bounded task contract as explicit operational direction.";
+    case "EPISTEMIC":
+      return "Declared input mode: EPISTEMIC\nTreat the input as inquiry-shaped framing rather than as a fixed target conclusion.";
+    case "NON_LEADING_EPISTEMIC":
+      return "Declared input mode: NON_LEADING_EPISTEMIC\nTreat the input as inquiry-shaped framing and avoid smuggling the target conclusion into the task contract.";
+    default:
+      return undefined;
+  }
+}
+
+function describeTraceableValidationMode(mode: TraceableSubagentInput["validationMode"]): string | undefined {
+  switch (mode) {
+    case "NONE":
+      return "Declared validation mode: NONE\nDo not apply any extra input-mode mismatch gate by default.";
+    case "WARN":
+      return "Declared validation mode: WARN\nSurface input-mode mismatches as trace-visible warnings while preserving the original userInput and parentFrame text unchanged.";
+    case "ERROR":
+      return "Declared validation mode: ERROR\nTreat input-mode mismatches as hard validation errors and stop the lane before model execution.";
+    default:
+      return undefined;
+  }
+}
+
+function describeTraceableModeSummary(
+  inputMode: TraceableSubagentInput["inputMode"],
+  validationMode: TraceableSubagentInput["validationMode"]
+): string | undefined {
+  const inputModeDescription = describeTraceableInputMode(inputMode);
+  const validationModeDescription = describeTraceableValidationMode(validationMode);
+  if (!inputModeDescription) {
+    return validationModeDescription;
+  }
+  if (!validationModeDescription) {
+    return inputMode === "NON_LEADING_EPISTEMIC"
+      ? `${inputModeDescription}\nDeclared mode code: ${formatTraceableModeSummaryValue(inputMode, validationMode)}\nNON_LEADING_EPISTEMIC requires validationMode WARN or ERROR.`
+      : `${inputModeDescription}\nDeclared mode code: ${formatTraceableModeSummaryValue(inputMode, validationMode)}`;
+  }
+  return `${inputModeDescription}\n${validationModeDescription}\nDeclared mode code: ${formatTraceableModeSummaryValue(inputMode, validationMode)}`;
+}
+
+export function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableSubagentRequestSummaryItem[] {
   const summary: TraceableSubagentRequestSummaryItem[] = [];
+  const parentFrame = input.parentFrame?.trim() || input.parentTask?.trim() || "";
   summary.push({
-    label: "Task",
-    value: compactTraceableSummaryText(input.parentTask, 54),
-    title: input.parentTask
+    label: "Parent Frame",
+    value: compactTraceableSummaryText(parentFrame, 54),
+    title: parentFrame
   });
   if (input.userInput.trim()) {
     summary.push({
@@ -77,6 +152,24 @@ function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableS
       value: compactTraceableSummaryText(input.userInput, 54),
       title: input.userInput
     });
+  }
+  const formattedMode = formatTraceableModeSummaryValue(input.inputMode, input.validationMode);
+  const modeDescription = describeTraceableModeSummary(input.inputMode, input.validationMode);
+  if (formattedMode && modeDescription) {
+    summary.push({
+      label: "Mode",
+      value: formattedMode,
+      title: modeDescription
+    });
+  } else {
+    const validationModeDescription = describeTraceableValidationMode(input.validationMode);
+    if (input.validationMode?.trim() && validationModeDescription) {
+    summary.push({
+      label: "Validation",
+      value: input.validationMode.trim().toLowerCase(),
+      title: validationModeDescription
+    });
+    }
   }
   if (input.agentRole?.name?.trim()) {
     summary.push({
@@ -92,25 +185,57 @@ function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableS
       title: input.modelSelector.id.trim()
     });
   }
+  const carryParts: string[] = [];
+  const carryTitleParts: string[] = [];
+  if (input.carriedContext?.priorTurnsSummary?.trim()) {
+    carryParts.push("context");
+    carryTitleParts.push("Prior context summary carried into this trace run");
+  }
+  if (Array.isArray(input.carriedContext?.fileContext) && input.carriedContext.fileContext.length > 0) {
+    const fileCount = input.carriedContext.fileContext.length;
+    carryParts.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
+    carryTitleParts.push(`File anchors: ${input.carriedContext.fileContext.join(", ")}`);
+  }
+  if (Array.isArray(input.carriedContext?.reductions) && input.carriedContext.reductions.length > 0) {
+    const reductionCount = input.carriedContext.reductions.length;
+    carryParts.push(`${reductionCount} reduction${reductionCount === 1 ? "" : "s"}`);
+    carryTitleParts.push(`Reductions: ${input.carriedContext.reductions.join(" | ")}`);
+  }
+  if (carryParts.length > 0) {
+    summary.push({
+      label: "Carry",
+      value: compactTraceableSummaryText(carryParts.join(" · "), 36),
+      title: carryTitleParts.join("\n")
+    });
+  }
   if (input.budgetPolicy?.maxIterations || input.budgetPolicy?.maxToolCalls) {
+    const budgetParts: string[] = [];
+    if (input.budgetPolicy.maxIterations) {
+      budgetParts.push(`up to ${input.budgetPolicy.maxIterations} model turn${input.budgetPolicy.maxIterations === 1 ? "" : "s"}`);
+    }
+    if (input.budgetPolicy.maxToolCalls) {
+      budgetParts.push(`up to ${input.budgetPolicy.maxToolCalls} tool call${input.budgetPolicy.maxToolCalls === 1 ? "" : "s"}`);
+    }
     summary.push({
       label: "Budget",
       value: `${input.budgetPolicy.maxIterations ?? "-"}i · ${input.budgetPolicy.maxToolCalls ?? "-"}t`,
-      title: "Requested iteration and tool-call budget"
+      title: budgetParts.length > 0
+        ? `This child run may use ${budgetParts.join(" and ")}.`
+        : "This child run has a bounded model-turn and tool-call budget."
     });
   }
   if (Array.isArray(input.allowedToolNames) && input.allowedToolNames.length > 0) {
     summary.push({
       label: "Allowlist",
       value: `${input.allowedToolNames.length} tool${input.allowedToolNames.length === 1 ? "" : "s"}`,
-      title: input.allowedToolNames.join(", ")
+      title: `Allowed tools: ${input.allowedToolNames.join(", ")}`
     });
   }
   if (Array.isArray(input.blockedToolNames) && input.blockedToolNames.length > 0) {
     summary.push({
       label: "Blocklist",
       value: `${input.blockedToolNames.length} tool${input.blockedToolNames.length === 1 ? "" : "s"}`,
-      title: input.blockedToolNames.join(", ")
+      title: `Blocked tools: ${input.blockedToolNames.join(", ")}`
     });
   }
   if (input.reveal) {
