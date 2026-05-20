@@ -390,6 +390,36 @@
 				"focused-send"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "traceable policy tree checks",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"traceable-subagent"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "traceable tree regression fix checks",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"traceable-subagent"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "traceable namespace policy checks",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"tests/test.mjs",
+				"traceable-subagent"
+			],
+			"isBackground": false
 		}
 	]
 }

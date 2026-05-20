@@ -3,6 +3,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 import { isRuntimeAgentArtifactPath, normalizeArtifactPath } from "./tools/runtimeAgentArtifactStructure";
 import { expandToolReferenceKeys, normalizeToolReferenceKey } from "./toolNameNormalization";
+import { appendLineToRollingLog } from "./runtimeFileHygiene";
 
 export const TRACEABLE_SUBAGENT_TOOL_NAME = "run_traceable_subagent";
 
@@ -15,6 +16,8 @@ export interface TraceableSubagentStatusHeader {
   experimental?: boolean;
   humanRole?: boolean;
   toolsetNames?: string[];
+  selectedToolNames?: string[];
+  toolSelectionRestricted?: boolean;
 }
 
 export interface TraceableSubagentRequestSummaryItem {
@@ -812,8 +815,11 @@ async function appendTraceableSubagentDebugEvent(logPath: string | undefined, en
     return;
   }
   try {
-    await fs.mkdir(path.dirname(logPath), { recursive: true });
-    await fs.appendFile(logPath, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, "utf8");
+    await appendLineToRollingLog(
+      logPath,
+      JSON.stringify({ at: new Date().toISOString(), ...entry }),
+      { maxBytes: 1024 * 1024, retainBytes: 768 * 1024 }
+    );
   } catch {
     // Debug logging must not change traceable subagent behavior.
   }
@@ -1053,7 +1059,7 @@ function normalizeStopReasonValue(value: unknown): TraceableStopReason | undefin
   if (!normalized) {
     return undefined;
   }
-  if (/\bcompleted\b|\bsummary produced\b|\bfinished\b/u.test(normalized)) {
+  if (/(^|[\s_:-])complete(?:d)?([\s_:-]|$)|\bsummary produced\b|\bfinished\b/u.test(normalized)) {
     return "completed";
   }
   if (/\bbudget\b|\bexhausted\b/u.test(normalized)) {
@@ -1091,7 +1097,7 @@ function normalizeCompletionClaimValue(value: unknown, stopReason: TraceableStop
   if (/\bunresolved\b|\bnot verified\b|\bnot confirmed\b|\binsufficient\b/u.test(normalized)) {
     return "unresolved";
   }
-  if (/\bconfirmed\b|\bcomplete\b|\bcompleted\b|\bgrounded\b|\bderived\b|\bverified\b/u.test(normalized)) {
+  if (/\bconfirmed\b|\bcomplete\b|\bcompleted\b|\bgrounded\b|\bderived\b|\bverified\b|\bsucceeded\b|\bsuccessful\b|\bsuccess\b/u.test(normalized)) {
     return "complete";
   }
   return stopReason === "completed"
@@ -1103,7 +1109,10 @@ function normalizeParsedPayload(value: unknown): TraceableSubagentChildPayload |
   if (!isRecord(value)) {
     return undefined;
   }
-  const stopReason = normalizeStopReasonValue(value.stopReason);
+  const normalizedStopReason = normalizeStopReasonValue(value.stopReason);
+  const stopReason = normalizedStopReason ?? (normalizeCompletionClaimValue(value.completionClaim, normalizedStopReason) === "complete"
+    ? "completed"
+    : undefined);
   const completionClaim = normalizeCompletionClaimValue(value.completionClaim, stopReason);
   const finalSummary = typeof value.finalSummary === "string" ? value.finalSummary.trim() : "";
   if (!stopReason || !completionClaim || !finalSummary) {
@@ -1766,12 +1775,16 @@ export async function runTraceableSubagent(
   const availableToolNames = vscode.lm.tools.map((tool) => tool.name);
   const requestedAllowedToolNames = uniqueStrings(input.allowedToolNames);
   const inheritedAllowedToolNames = resolvedAgentArtifact?.toolDeclarations ?? [];
+  const requestedBlockedToolNames = uniqueStrings(input.blockedToolNames);
   const selectedTools = selectTraceableSubagentTools(vscode.lm.tools, {
     allowedToolNames: requestedAllowedToolNames,
-    blockedToolNames: input.blockedToolNames,
+    blockedToolNames: requestedBlockedToolNames,
     defaultAllowedToolNames: inheritedAllowedToolNames
   });
   const selectedToolNames = selectedTools.map((tool) => tool.name);
+  const toolSelectionRestricted = requestedAllowedToolNames.length > 0
+    || inheritedAllowedToolNames.length > 0
+    || requestedBlockedToolNames.length > 0;
   let broadRuntimeModelsPromise: Promise<{ available: vscode.LanguageModelChat[]; sendable: vscode.LanguageModelChat[] }> | undefined;
   const loadBroadRuntimeModels = () => {
     broadRuntimeModelsPromise ??= listBroadRuntimeModelCandidates(options.accessInformation);
@@ -1783,11 +1796,20 @@ export async function runTraceableSubagent(
     availableToolCount: availableToolNames.length,
     availableToolNames,
     requestedAllowedToolNames,
-    requestedBlockedToolNames: uniqueStrings(input.blockedToolNames),
+    requestedBlockedToolNames,
     inheritedAllowedToolNames,
     selectedToolCount: selectedToolNames.length,
     selectedToolNames
   });
+
+  try {
+    options.statusReporter?.setHeader?.({
+      selectedToolNames,
+      toolSelectionRestricted
+    });
+  } catch {
+    // Best-effort UI status only; runtime correctness should not depend on it.
+  }
 
   if (resolvedAgentArtifact?.disableModelInvocation) {
     return finalizeResult(fallbackResult(
@@ -1935,7 +1957,7 @@ export async function runTraceableSubagent(
 
   try {
     options.statusReporter?.setHeader?.({
-      modelLabel: model.id
+      modelLabel: model.name || model.id
     });
   } catch {
     // Best-effort UI status only; runtime correctness should not depend on it.

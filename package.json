@@ -183,6 +183,25 @@
           "type": "boolean",
           "default": true,
           "description": "When true, focused-send calls will wait for a persisted session mutation by default. Set to false to make focused-send non-blocking by default. Individual calls can override with the request flag `waitForPersisted`."
+        },
+        "tiinex.aiVscodeTools.traceableAutoReveal": {
+          "type": "string",
+          "enum": [
+            "yes",
+            "no",
+            "always"
+          ],
+          "default": "yes",
+          "description": "Control whether TRACEABLE opens automatically when run_traceable_subagent starts. `yes` honors the request flag `reveal: true`, `no` suppresses automatic opening, and `always` opens the TRACEABLE panel for every run regardless of the request flag."
+        },
+        "tiinex.aiVscodeTools.traceableAutoHide": {
+          "type": "string",
+          "enum": [
+            "yes",
+            "no"
+          ],
+          "default": "yes",
+          "description": "Control whether TRACEABLE hides automatically when the transient status-bar run clears. `yes` hides the panel together with the transient status surface unless you explicitly reopened TRACEABLE to keep it open, and `no` leaves the panel open until you close it manually."
         }
       }
     },

@@ -187,7 +187,9 @@ export class TraceableSubagentStatusDetailController implements vscode.TextDocum
       candidate: false,
       experimental: false,
       humanRole: false,
-      toolsetNames: []
+      toolsetNames: [],
+      selectedToolNames: [],
+      toolSelectionRestricted: false
     },
     status: {
       phase: "idle",

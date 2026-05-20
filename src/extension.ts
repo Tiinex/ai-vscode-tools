@@ -24,6 +24,7 @@ import {
   readAndDeleteOfflineLocalChatCleanupReports,
   type OfflineLocalChatCleanupSummary
 } from "./offlineLocalChatCleanup";
+import { cleanupGlobalStorageArtifacts } from "./runtimeFileHygiene";
 import { loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
 import { closeVisibleEditorChatTabsForSession } from "./chatInterop/editorTabLifecycle";
@@ -52,6 +53,8 @@ interface ExtensionError extends Error {
 }
 
 type DiscoveryScope = "current-workspace" | "all-local";
+type TraceableAutoRevealMode = "yes" | "no" | "always";
+type TraceableAutoHideMode = "yes" | "no";
 
 function compactTraceableSummaryText(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
@@ -68,6 +71,13 @@ function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableS
     value: compactTraceableSummaryText(input.parentTask, 54),
     title: input.parentTask
   });
+  if (input.userInput.trim()) {
+    summary.push({
+      label: "User Input",
+      value: compactTraceableSummaryText(input.userInput, 54),
+      title: input.userInput
+    });
+  }
   if (input.agentRole?.name?.trim()) {
     summary.push({
       label: "Role",
@@ -111,6 +121,44 @@ function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableS
     });
   }
   return summary;
+}
+
+function getTraceableAutoRevealMode(): TraceableAutoRevealMode {
+  const configured = vscode.workspace.getConfiguration("tiinex.aiVscodeTools").get<string>("traceableAutoReveal", "yes");
+  return configured === "no" || configured === "always" ? configured : "yes";
+}
+
+function getTraceableAutoHideMode(): TraceableAutoHideMode {
+  const configured = vscode.workspace.getConfiguration("tiinex.aiVscodeTools").get<unknown>("traceableAutoHide", "yes");
+  if (configured === false || configured === "false" || configured === "no") {
+    return "no";
+  }
+  return "yes";
+}
+
+function shouldAutoRevealTraceablePanel(inputReveal: boolean | undefined): boolean {
+  const mode = getTraceableAutoRevealMode();
+  if (mode === "always") {
+    return true;
+  }
+  if (mode === "no") {
+    return false;
+  }
+  return Boolean(inputReveal);
+}
+
+export function shouldKeepTraceablePanelPinned(options: {
+  reason: "auto" | "manual";
+  autoHideMode: TraceableAutoHideMode;
+  currentlyPinnedOpen: boolean;
+}): boolean {
+  if (options.reason === "manual") {
+    return true;
+  }
+  if (options.currentlyPinnedOpen) {
+    return true;
+  }
+  return options.autoHideMode !== "yes";
 }
 
 function toTraceablePanelRestoreCommand(activePanel: unknown): string | undefined {
@@ -781,10 +829,25 @@ async function syncLiveChatInteropContext(chatInterop: ChatInteropApi): Promise<
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await maybeReportOfflineLocalChatCleanup(context);
+  await cleanupGlobalStorageArtifacts(context.globalStorageUri.fsPath);
   await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
   const adapter = new SessionToolsAdapter();
   let traceablePanelRestoreCommand: string | undefined;
+  let traceablePanelPinnedOpen = false;
   const traceableStatusDetail = new TraceableSubagentStatusDetailController();
+  const hideTraceablePanel = async (options: { restoreFocus?: boolean; hideStatusBar?: boolean; resetKeepOpen?: boolean } = {}): Promise<void> => {
+    await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
+    if (options.hideStatusBar) {
+      traceableStatusBar.hideNow();
+    }
+    if (options.restoreFocus) {
+      await vscode.commands.executeCommand(traceablePanelRestoreCommand ?? TRACEABLE_PANEL_FALLBACK_COMMAND);
+    }
+    if (options.resetKeepOpen) {
+      traceablePanelPinnedOpen = false;
+    }
+    traceablePanelRestoreCommand = undefined;
+  };
   const traceableStatusPanel = new TraceableSubagentStatusPanelProvider(
     context.extensionUri,
     async () => {
@@ -800,13 +863,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     },
     async () => {
-      await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
-      await vscode.commands.executeCommand(traceablePanelRestoreCommand ?? TRACEABLE_PANEL_FALLBACK_COMMAND);
-      traceablePanelRestoreCommand = undefined;
+      await hideTraceablePanel({ restoreFocus: true, hideStatusBar: true, resetKeepOpen: true });
+      traceableStatusPanel.setPinnedOpen(false);
+    },
+    async () => {
+      traceablePanelPinnedOpen = true;
+      traceableStatusPanel.setPinnedOpen(true);
     }
   );
+  const revealTraceablePanel = async (reason: "auto" | "manual" = "manual"): Promise<void> => {
+    traceablePanelRestoreCommand = await getTraceablePanelRestoreCommand();
+    traceablePanelPinnedOpen = shouldKeepTraceablePanelPinned({
+      reason,
+      autoHideMode: getTraceableAutoHideMode(),
+      currentlyPinnedOpen: traceablePanelPinnedOpen
+    });
+    traceableStatusPanel.setPinnedOpen(traceablePanelPinnedOpen);
+    await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, true);
+    await traceableStatusPanel.open();
+  };
   const traceableStatusBar = new TraceableSubagentStatusBarController({
     detailCommandId: OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND,
+    onDidAutoHide: async () => {
+      if (getTraceableAutoHideMode() !== "yes") {
+        traceablePanelPinnedOpen = true;
+        traceableStatusPanel.setPinnedOpen(true);
+        return;
+      }
+      if (traceablePanelPinnedOpen) {
+        return;
+      }
+      traceableStatusPanel.setPinnedOpen(false);
+      await hideTraceablePanel();
+    },
     updateDetailView: (snapshot) => {
       traceableStatusDetail.update(snapshot);
       traceableStatusPanel.update(snapshot);
@@ -819,9 +908,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("tiinex-traceable-subagent-status", traceableStatusDetail),
     vscode.commands.registerCommand(OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND, async () => {
-      traceablePanelRestoreCommand = await getTraceablePanelRestoreCommand();
-      await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, true);
-      await traceableStatusPanel.open();
+      await revealTraceablePanel("manual");
     }),
     vscode.window.registerWebviewViewProvider(TRACEABLE_SUBAGENT_PANEL_VIEW_ID, traceableStatusPanel, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -831,6 +918,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     traceableStatusBar,
     tree,
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("tiinex.aiVscodeTools.traceableAutoHide") && getTraceableAutoHideMode() !== "yes") {
+        traceablePanelPinnedOpen = true;
+        traceableStatusPanel.setPinnedOpen(true);
+      }
       if (event.affectsConfiguration("tiinex.aiVscodeTools.sessionDiscoveryScope")) {
         tree.refresh();
       }
@@ -855,11 +946,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   registerLanguageModelTools(context, adapter, chatInterop, (input) => {
-    if (input.reveal) {
+    if (shouldAutoRevealTraceablePanel(input.reveal)) {
       void (async () => {
-        traceablePanelRestoreCommand = await getTraceablePanelRestoreCommand();
-        await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, true);
-        await traceableStatusPanel.open();
+        await revealTraceablePanel("auto");
       })();
     }
     const reporter = traceableStatusBar.startRun({

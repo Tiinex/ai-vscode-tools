@@ -1,5 +1,4 @@
 import path from "node:path";
-import { appendFileSync, mkdirSync } from "node:fs";
 import * as vscode from "vscode";
 import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, type CreateChatRequest, type SendChatMessageRequest } from "./chatInterop";
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
@@ -35,6 +34,7 @@ import {
   launchOfflineLocalChatCleanup,
   queueOfflineLocalChatCleanupRequest
 } from "./offlineLocalChatCleanup";
+import { appendLineToRollingLog } from "./runtimeFileHygiene";
 import {
   listTraceableAgentCatalogEntries,
   listTraceableModelCatalogEntries,
@@ -2007,12 +2007,13 @@ export function registerLanguageModelTools(
     const liveToolRegistrations: vscode.Disposable[] = [];
     const liveToolLogPath = path.join(context.globalStorageUri.fsPath, "live-tool-register.log");
     const logLiveToolRegistration = (phase: "start" | "done" | "error", toolName: string, detail?: string): void => {
-      mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-      appendFileSync(
+      void appendLineToRollingLog(
         liveToolLogPath,
-        `${new Date().toISOString()} ${phase} ${toolName}${detail ? ` ${detail}` : ""}\n`,
-        "utf8"
-      );
+        `${new Date().toISOString()} ${phase} ${toolName}${detail ? ` ${detail}` : ""}`,
+        { maxBytes: 256 * 1024, retainBytes: 192 * 1024 }
+      ).catch(() => {
+        // Debug registration logging must not change live tool registration behavior.
+      });
     };
     const registerLiveTool = (toolName: string, tool: any): vscode.Disposable => {
       logLiveToolRegistration("start", toolName);

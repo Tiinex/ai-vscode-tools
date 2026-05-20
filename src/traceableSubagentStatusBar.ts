@@ -44,7 +44,9 @@ function defaultHeaderState(): Required<TraceableSubagentStatusHeader> {
     candidate: false,
     experimental: false,
     humanRole: false,
-    toolsetNames: []
+    toolsetNames: [],
+    selectedToolNames: [],
+    toolSelectionRestricted: false
   };
 }
 
@@ -161,6 +163,7 @@ interface TraceableSubagentStatusBarOptions {
   openDetailView?: () => Thenable<void> | Promise<void>;
   updateDetailView?: (snapshot: TraceableSubagentDetailSnapshot) => void;
   detailCommandId?: string;
+  onDidAutoHide?: () => Thenable<void> | Promise<void>;
 }
 
 function formatStatusSegments(message: string): string[] {
@@ -198,6 +201,7 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
   private readonly openDetailView: (() => Thenable<void> | Promise<void>) | undefined;
   private readonly updateDetailView: ((snapshot: TraceableSubagentDetailSnapshot) => void) | undefined;
   private readonly detailCommandId: string | undefined;
+  private readonly onDidAutoHide: (() => Thenable<void> | Promise<void>) | undefined;
   private activeRunId = 0;
   private clearTimer: NodeJS.Timeout | undefined;
   private trailItems = new Map<string, TrailItemState>();
@@ -216,6 +220,7 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
     this.openDetailView = options.openDetailView;
     this.updateDetailView = options.updateDetailView;
     this.detailCommandId = options.detailCommandId;
+    this.onDidAutoHide = options.onDidAutoHide;
     this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, MAIN_ITEM_PRIORITY);
     this.item.name = "Traceable Subagent Status";
     this.item.tooltip = "Latest traceable subagent status";
@@ -284,6 +289,14 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
     this.item.dispose();
   }
 
+  hideNow(): void {
+    this.clearPendingTimer();
+    this.item.hide();
+    for (const entry of this.trailItems.values()) {
+      entry.item.hide();
+    }
+  }
+
   private showSpinner(runId: number, message: string): void {
     if (runId !== this.activeRunId) {
       return;
@@ -336,6 +349,12 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
     }
     if (Array.isArray(header.toolsetNames)) {
       this.currentHeader.toolsetNames = dedupeHeaderToolsetNames(header.toolsetNames);
+    }
+    if (Array.isArray(header.selectedToolNames)) {
+      this.currentHeader.selectedToolNames = dedupeHeaderToolsetNames(header.selectedToolNames);
+    }
+    if (typeof header.toolSelectionRestricted === "boolean") {
+      this.currentHeader.toolSelectionRestricted = header.toolSelectionRestricted;
     }
     this.item.tooltip = this.buildMainTooltip();
     this.publishDetailView();
@@ -399,10 +418,8 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
       if (runId !== this.activeRunId) {
         return;
       }
-      this.item.hide();
-      for (const entry of this.trailItems.values()) {
-        entry.item.hide();
-      }
+      this.hideNow();
+      void this.onDidAutoHide?.();
     }, keepMs);
   }
 

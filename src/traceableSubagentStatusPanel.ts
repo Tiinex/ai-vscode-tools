@@ -7,7 +7,8 @@ export const TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID = "tiinexAiVscodeToolsTraceab
 export const TRACEABLE_SUBAGENT_PANEL_VIEW_ID = "tiinex.aiVscodeTools.traceableStatus";
 const TRACEABLE_PANEL_CODICON_PATH = ["node_modules", "@vscode", "codicons", "dist", "codicon.css"] as const;
 
-type PanelEventKind = "Read" | "Search" | "Deferred" | "Failed" | "Tool";
+type PanelEventKind = "Read" | "Search" | "Tool";
+type PanelEventOutcome = "running" | "success" | "deferred" | "failure";
 type PanelToolEvent = TraceableSubagentDetailSnapshot["recentTools"][number];
 type PanelStatusEvent = TraceableSubagentDetailSnapshot["statusHistory"][number];
 type PanelRequestSummaryItem = TraceableSubagentDetailSnapshot["requestSummary"][number];
@@ -15,6 +16,7 @@ type PanelRequestSummaryItem = TraceableSubagentDetailSnapshot["requestSummary"]
 interface PanelDisplayEvent {
   event: PanelToolEvent;
   kind: PanelEventKind;
+  outcome: PanelEventOutcome;
   count: number;
   occurredAt?: string;
   baseElapsedMs: number;
@@ -177,34 +179,65 @@ function panelStatusIcon(phase: TraceableSubagentDetailSnapshot["status"]["phase
   }
 }
 
-function detectEventKind(event: PanelToolEvent): PanelEventKind {
-  if (event.phase === "deferred") {
-    return "Deferred";
+function panelStatusRowIcon(
+  phase: TraceableSubagentDetailSnapshot["status"]["phase"],
+  running: boolean
+): string {
+  if (phase === "running" && !running) {
+    return "✓";
   }
-  if (event.phase === "failure") {
-    return "Failed";
-  }
-  if (event.toolName === "copilot_readFile") {
-    return "Read";
-  }
-  if (event.toolName === "copilot_findTextInFiles") {
-    return "Search";
-  }
-  return "Tool";
+  return panelStatusIcon(phase);
 }
 
-function eventIcon(kind: PanelEventKind): string {
+function detectEventKind(event: PanelToolEvent): PanelEventKind {
+  switch (normalizeToolBadgeKey(event.toolName)) {
+    case "read_file":
+      return "Read";
+    case "find_text_in_files":
+    case "text_search":
+    case "find_files":
+    case "file_search":
+    case "semantic_search":
+    case "vscode_list_code_usages":
+      return "Search";
+    default:
+      return "Tool";
+  }
+}
+
+function detectEventOutcome(event: PanelToolEvent): PanelEventOutcome {
+  if (event.phase === "deferred") {
+    return "deferred";
+  }
+  if (event.phase === "failure") {
+    return "failure";
+  }
+  if (event.phase === "running") {
+    return "running";
+  }
+  return "success";
+}
+
+function runningEventIcon(kind: PanelEventKind): string {
   switch (kind) {
-    case "Read":
-      return "✓";
     case "Search":
       return "⌕";
-    case "Deferred":
-      return "⚠";
-    case "Failed":
-      return "✕";
+    case "Read":
     case "Tool":
       return "•";
+  }
+}
+
+function eventIcon(event: PanelDisplayEvent): string {
+  switch (event.outcome) {
+    case "success":
+      return "✓";
+    case "deferred":
+      return "⚠";
+    case "failure":
+      return "✕";
+    case "running":
+      return runningEventIcon(event.kind);
   }
 }
 
@@ -346,6 +379,8 @@ function isFinishedSnapshot(snapshot: TraceableSubagentDetailSnapshot): boolean 
 
 function summarizeToolRuntime(item: ToolsetListItem, snapshot: TraceableSubagentDetailSnapshot): ToolRuntimeSummary {
   const matchKeys = new Set(item.matchKeys);
+  const selectedToolKeys = new Set((snapshot.header.selectedToolNames ?? []).map((toolName) => normalizeToolReferenceKey(toolName)));
+  const policyRestricted = snapshot.header.toolSelectionRestricted === true;
   let callCount = 0;
   let successCount = 0;
   let deferredCount = 0;
@@ -389,8 +424,10 @@ function summarizeToolRuntime(item: ToolsetListItem, snapshot: TraceableSubagent
   if (hasSuccess) {
     return { status: "success", callCount, successCount, deferredCount, failureCount, totalElapsedMs };
   }
+  const hiddenByPolicy = policyRestricted
+    && item.matchKeys.every((matchKey) => !selectedToolKeys.has(matchKey));
   return {
-    status: isFinishedSnapshot(snapshot) ? "inactive" : "idle",
+    status: hiddenByPolicy || isFinishedSnapshot(snapshot) ? "inactive" : "idle",
     callCount: 0,
     successCount: 0,
     deferredCount: 0,
@@ -416,19 +453,27 @@ function combineRuntimeSummaries(summaries: ToolRuntimeSummary[], snapshot: Trac
   let deferredCount = 0;
   let failureCount = 0;
   let totalElapsedMs = 0;
+  let sawIdle = false;
+  let sawInactive = false;
   for (const summary of summaries) {
     callCount += summary.callCount;
     successCount += summary.successCount;
     deferredCount += summary.deferredCount;
     failureCount += summary.failureCount;
     totalElapsedMs += summary.totalElapsedMs;
+    if (summary.status === "idle") {
+      sawIdle = true;
+    }
+    if (summary.status === "inactive") {
+      sawInactive = true;
+    }
     if (toolRuntimeSeverity(summary.status) > toolRuntimeSeverity(combined.status)) {
       combined = summary;
     }
   }
   return {
     status: callCount === 0
-      ? (isFinishedSnapshot(snapshot) ? "inactive" : "idle")
+      ? (isFinishedSnapshot(snapshot) || (!sawIdle && sawInactive) ? "inactive" : "idle")
       : combined.status,
     callCount,
     successCount,
@@ -462,16 +507,41 @@ function eventLabel(event: PanelDisplayEvent): string {
     return filePath ? `Read ${path.basename(filePath)}` : "Read file";
   }
   if (kind === "Search") {
-    return "Searched text";
-  }
-  if (kind === "Deferred") {
-    const filePath = event.filePath ?? "";
-    return filePath ? `Deferred ${path.basename(filePath)}` : "Deferred tool";
-  }
-  if (kind === "Failed") {
-    return "Tool failed";
+    switch (normalizeToolBadgeKey(event.event.toolName)) {
+      case "find_files":
+      case "file_search":
+        return "Found files";
+      default:
+        return "Searched text";
+    }
   }
   return event.event.toolName.startsWith("copilot_") ? event.event.toolName.slice("copilot_".length) : event.event.toolName;
+}
+
+function buildDerivedEventNote(event: PanelToolEvent, kind: PanelEventKind): string | undefined {
+  if (kind !== "Search") {
+    return undefined;
+  }
+  const query = typeof event.input?.query === "string" ? event.input.query.trim() : "";
+  const maxResults = typeof event.input?.maxResults === "number" && Number.isFinite(event.input.maxResults)
+    ? event.input.maxResults
+    : undefined;
+  if (!query) {
+    return undefined;
+  }
+  switch (normalizeToolBadgeKey(event.toolName)) {
+    case "find_files":
+    case "file_search":
+      return maxResults && maxResults > 0
+        ? `Query: ${query} · up to ${maxResults} result${maxResults === 1 ? "" : "s"}`
+        : `Query: ${query}`;
+    case "find_text_in_files":
+    case "text_search":
+    case "semantic_search":
+      return `Query: ${query}`;
+    default:
+      return undefined;
+  }
 }
 
 function eventCountChipLabel(count: number): string {
@@ -513,7 +583,10 @@ function buildEventChips(event: PanelDisplayEvent): string[] {
   if (event.count > 1) {
     chips.push(`<span class="chip" title="Merged ${escapeHtml(String(event.count))} tool calls">${escapeHtml(eventCountChipLabel(event.count))}</span>`);
   }
-  for (const range of event.ranges) {
+  for (const [index, range] of event.ranges.entries()) {
+    if (index > 0) {
+      chips.push(`<span class="chip-separator" aria-hidden="true">|</span>`);
+    }
     chips.push([
       `<span class="chip chip-range chip-collapsible" title="Lines ${range.startLine}-${range.endLine}">`,
       `<span class="chip-hover-label">lines</span>`,
@@ -544,13 +617,17 @@ function buildDisplayEvents(events: PanelToolEvent[]): PanelDisplayEvent[] {
     const filePath = typeof event.input?.filePath === "string" ? event.input.filePath.trim() : "";
     const startLine = typeof event.input?.startLine === "number" ? event.input.startLine : undefined;
     const endLine = typeof event.input?.endLine === "number" ? event.input.endLine : undefined;
-    const note = typeof event.note === "string" ? event.note.trim() : "";
     const kind = detectEventKind(event);
+    const note = (typeof event.note === "string" ? event.note.trim() : "") || buildDerivedEventNote(event, kind) || "";
+    const outcome = detectEventOutcome(event);
     const previous = displayEvents.at(-1);
     const canMerge = previous
+      && outcome === "success"
       && previous.event.toolName === event.toolName
       && previous.event.phase === event.phase
       && previous.kind === kind
+      && previous.outcome === outcome
+      && previous.note === note
       && Boolean(previous.filePath)
       && previous.filePath === filePath;
 
@@ -563,9 +640,6 @@ function buildDisplayEvents(events: PanelToolEvent[]): PanelDisplayEvent[] {
       if (typeof startLine === "number" && typeof endLine === "number") {
         previous.ranges = mergeContiguousRanges(previous.ranges, startLine, endLine);
       }
-      if (previous.note !== note) {
-        previous.note = "";
-      }
       continue;
     }
 
@@ -576,6 +650,7 @@ function buildDisplayEvents(events: PanelToolEvent[]): PanelDisplayEvent[] {
     displayEvents.push({
       event,
       kind,
+      outcome,
       count: 1,
       occurredAt: event.occurredAt,
       baseElapsedMs: typeof event.elapsedMs === "number" && Number.isFinite(event.elapsedMs) && event.elapsedMs > 0 ? event.elapsedMs : 0,
@@ -619,15 +694,21 @@ function renderRequestSummaryBadge(item: PanelRequestSummaryItem): string {
 
 function splitRequestSummary(summary: PanelRequestSummaryItem[]): {
   task?: PanelRequestSummaryItem;
+  userInput?: PanelRequestSummaryItem;
   metadata: PanelRequestSummaryItem[];
 } {
-  const hiddenLabels = new Set(["role", "model", "track"]);
+  const hiddenLabels = new Set(["role", "model", "track", "user input"]);
   const metadata: PanelRequestSummaryItem[] = [];
   let task: PanelRequestSummaryItem | undefined;
+  let userInput: PanelRequestSummaryItem | undefined;
   for (const item of summary) {
     const normalizedLabel = item.label.trim().toLowerCase();
     if (!task && normalizedLabel === "task") {
       task = item;
+      continue;
+    }
+    if (!userInput && normalizedLabel === "user input") {
+      userInput = item;
       continue;
     }
     if (hiddenLabels.has(normalizedLabel)) {
@@ -635,13 +716,22 @@ function splitRequestSummary(summary: PanelRequestSummaryItem[]): {
     }
     metadata.push(item);
   }
-  return { task, metadata };
+  return { task, userInput, metadata };
 }
 
 function renderRequestSummaryChips(summary: PanelRequestSummaryItem[]): string {
   return summary
     .map((item) => renderRequestSummaryBadge(item))
     .join("");
+}
+
+function renderRequestDetailSection(label: string, value: string): string {
+  return [
+    `<div class="event-request-detail-section">`,
+    `<div class="event-request-detail-label">${escapeHtml(label)}</div>`,
+    `<div class="event-request-detail-value">${escapeHtml(value)}</div>`,
+    `</div>`
+  ].join("");
 }
 
 function buildActivityEntries(snapshot: TraceableSubagentDetailSnapshot): PanelActivityEntry[] {
@@ -757,7 +847,9 @@ function renderActivityMeta(
 function renderStatusActivity(entry: Extract<PanelActivityEntry, { kind: "status" }>): string {
   const suppressNoteRow = entry.phase === "completed" && entry.message === "completed";
   const noteRow = entry.detail && !suppressNoteRow ? `<div class="event-note">${escapeHtml(entry.detail)}</div>` : "";
-  const phaseChips = entry.phase === "running" ? [] : [`<span class="chip chip-status-phase">${escapeHtml(entry.phase)}</span>`];
+  const phaseChips = entry.phase === "running"
+    ? []
+    : [`<span class="chip chip-status-phase chip-status-phase-${entry.phase}">${escapeHtml(entry.phase)}</span>`];
   const rowClasses = ["event-row", "event-status", `event-status-${entry.phase}`, entry.running ? "event-status-live" : "event-status-settled"].join(" ");
   const durationMarkup = entry.running || entry.baseElapsedMs >= 0
     ? renderActivityDuration(
@@ -770,20 +862,27 @@ function renderStatusActivity(entry: Extract<PanelActivityEntry, { kind: "status
     : "";
   return [
     `<li class="${rowClasses}" title="${escapeHtml(entry.message)}">`,
-    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(panelStatusIcon(entry.phase))}</span><span class="event-label">${escapeHtml(entry.message)}</span></div>${noteRow}</div>`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(panelStatusRowIcon(entry.phase, entry.running))}</span><span class="event-label">${escapeHtml(entry.message)}</span></div>${noteRow}</div>`,
     renderActivityMeta(entry.occurredAt, durationMarkup, phaseChips),
     `</li>`
   ].join("");
 }
 
 function renderRequestActivity(entry: Extract<PanelActivityEntry, { kind: "request" }>): string {
-  const { task, metadata } = splitRequestSummary(entry.requestSummary);
+  const { task, userInput, metadata } = splitRequestSummary(entry.requestSummary);
   const noteText = task?.value?.trim() || "Compact launch parameters for this trace lane.";
   const noteTitleAttribute = task?.title ? ` title="${escapeHtml(task.title)}"` : "";
+  const metadataMarkup = metadata.length > 0 ? `<div class="event-chips">${renderRequestSummaryChips(metadata)}</div>` : "";
+  const detailSections = [
+    task?.title?.trim() ? renderRequestDetailSection("Task", task.title) : "",
+    userInput?.title?.trim() ? renderRequestDetailSection("User Input", userInput.title) : ""
+  ].filter(Boolean).join("");
+  const expandable = detailSections.length > 0;
+  const expandableAttributes = expandable ? ' data-request-expandable="true" tabindex="0" role="button" aria-expanded="false"' : "";
   return [
-    `<li class="event-row event-request" title="Traceable input summary">`,
-    `<div class="event-body"><div class="event-main"><span class="event-icon">◦</span><span class="event-label">Request</span></div><div class="event-note"${noteTitleAttribute}>${escapeHtml(noteText)}</div></div>`,
-    renderActivityMeta(entry.occurredAt, "", metadata.length > 0 ? [renderRequestSummaryChips(metadata)] : []),
+    `<li class="event-row event-request" title="Traceable input"${expandableAttributes}>`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${renderCodicon("mail")}</span><span class="event-label">Input</span>${expandable ? `<span class="event-expand-indicator" aria-hidden="true">▸</span>` : ""}</div><div class="event-note"${noteTitleAttribute}>${escapeHtml(noteText)}</div>${detailSections ? `<div class="event-request-detail">${detailSections}</div>` : ""}</div>`,
+    metadataMarkup,
     `</li>`
   ].join("");
 }
@@ -809,8 +908,8 @@ function renderToolActivity(entry: Extract<PanelActivityEntry, { kind: "tool" }>
     event.running ? "Current tool duration" : "Recorded tool duration"
   );
   return [
-    `<li class="event-row event-${event.kind.toLowerCase()}" title="${escapeHtml(title)}">`,
-    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(eventIcon(event.kind))}</span><span class="event-label">${escapeHtml(eventLabel(event))}</span></div>${noteRow}</div>`,
+    `<li class="event-row event-tool event-kind-${event.kind.toLowerCase()} event-outcome-${event.outcome}" title="${escapeHtml(title)}">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(eventIcon(event))}</span><span class="event-label">${escapeHtml(eventLabel(event))}</span></div>${noteRow}</div>`,
     renderActivityMeta(event.occurredAt, durationMarkup, buildEventChips(event)),
     "</li>"
   ].join("");
@@ -878,7 +977,16 @@ function renderHeaderMetadataBadges(snapshot: TraceableSubagentDetailSnapshot): 
   return badges.join("");
 }
 
+function isImplicitTraceLane(snapshot: TraceableSubagentDetailSnapshot): boolean {
+  return !snapshot.header.agentResolved
+    && !(snapshot.header.agentFilePath ?? "").trim()
+    && (snapshot.header.agentName ?? "").trim() === "Trace lane";
+}
+
 function renderRoleBadge(snapshot: TraceableSubagentDetailSnapshot): string {
+  if (isImplicitTraceLane(snapshot)) {
+    return "";
+  }
   const isHuman = snapshot.header.humanRole;
   const isResolved = snapshot.header.agentResolved;
   const title = isResolved
@@ -951,8 +1059,11 @@ function toolsetNamespaceParts(rawName: string, isCustom: boolean): { namespaceP
     const displayName = normalizeToolReferenceKey(trimmed);
     const namespace = trimmed.slice(0, slashIndex).trim();
     if (namespace) {
+      const namespacePath = isCustom
+        ? namespace.split(".").map((part) => part.trim()).filter(Boolean)
+        : [namespace];
       return {
-        namespacePath: isCustom ? namespace.split(".").map((part) => part.trim()).filter(Boolean) : [namespace],
+        namespacePath: namespacePath.length > 0 ? namespacePath : [namespace],
         displayName
       };
     }
@@ -1013,11 +1124,12 @@ function summarizeNamespaceRuntime(group: ToolsetNamespaceGroup, snapshot: Trace
   ], snapshot);
 }
 
-function renderToolsetItem(item: ToolsetListItem, snapshot: TraceableSubagentDetailSnapshot): string {
+function renderToolsetItem(item: ToolsetListItem, snapshot: TraceableSubagentDetailSnapshot, isLast = false): string {
   const runtime = summarizeToolRuntime(item, snapshot);
   const runtimeBadges = renderToolRuntimeBadges(runtime);
+  const lastClass = isLast ? " toolset-node-last" : "";
   return [
-    `<li class="toolset-item toolset-runtime-${runtime.status}" title="${escapeHtml(item.rawName)}">`,
+    `<li class="toolset-item toolset-tree-node toolset-runtime-${runtime.status}${lastClass}" title="${escapeHtml(item.rawName)}">`,
     `<span class="toolset-item-branch" aria-hidden="true"></span>`,
     `<span class="toolset-item-icon">${renderCodicon(item.iconName)}</span>`,
     `<span class="toolset-item-label">${escapeHtml(item.displayName)}</span>`,
@@ -1026,17 +1138,52 @@ function renderToolsetItem(item: ToolsetListItem, snapshot: TraceableSubagentDet
   ].join("");
 }
 
-function renderToolsetNamespaceGroup(group: ToolsetNamespaceGroup, snapshot: TraceableSubagentDetailSnapshot): string {
+function renderToolsetNamespaceGroup(
+  group: ToolsetNamespaceGroup,
+  snapshot: TraceableSubagentDetailSnapshot,
+  isLast = false,
+  ancestry: string[] = []
+): string {
   const runtime = summarizeNamespaceRuntime(group, snapshot);
+  const lastClass = isLast ? " toolset-node-last" : "";
+  const namespacePath = [...ancestry, group.namespace];
+  const namespaceId = namespacePath.join("/");
+  const defaultOpen = runtime.callCount > 0 ? "true" : "false";
+  const renderedChildGroups = group.childGroups.map((childGroup, index) => renderToolsetNamespaceGroup(
+    childGroup,
+    snapshot,
+    group.items.length === 0 && index === group.childGroups.length - 1,
+    namespacePath
+  ));
+  const renderedItems = group.items.length > 0
+    ? `<ul class="toolset-list toolset-list-nested">${group.items.map((item, index) => renderToolsetItem(item, snapshot, index === group.items.length - 1)).join("")}</ul>`
+    : "";
   const childContent = [
-    ...group.childGroups.map((childGroup) => renderToolsetNamespaceGroup(childGroup, snapshot)),
-    group.items.length > 0 ? `<ul class="toolset-list toolset-list-nested">${group.items.map((item) => renderToolsetItem(item, snapshot)).join("")}</ul>` : ""
+    ...renderedChildGroups,
+    renderedItems
   ].join("");
   return [
-    `<details class="toolset-namespace-group toolset-runtime-${runtime.status}">`,
-    `<summary class="toolset-namespace-heading"><span class="toolset-namespace-heading-main"><span class="toolset-namespace-twistie">${renderCodicon("chevron-right")}</span><span class="toolset-namespace-icon-spacer" aria-hidden="true"></span><span class="toolset-namespace-label">${escapeHtml(group.namespace)}</span></span><span class="toolset-namespace-metrics">${renderToolRuntimeBadges(runtime)}<span class="toolset-count" title="${escapeHtml(String(countToolsetGroupItems(group)))} selected tools">${countToolsetGroupItems(group)}</span></span></summary>`,
+    `<details class="toolset-namespace-group toolset-tree-node toolset-runtime-${runtime.status}${lastClass}" data-namespace-id="${escapeHtml(namespaceId)}" data-default-open="${defaultOpen}">`,
+    `<summary class="toolset-namespace-heading"><span class="toolset-namespace-heading-main"><span class="toolset-namespace-branch" aria-hidden="true"></span><span class="toolset-namespace-twistie">${renderCodicon("chevron-right")}</span><span class="toolset-namespace-label">${escapeHtml(group.namespace)}</span></span><span class="toolset-namespace-metrics">${renderToolRuntimeBadges(runtime)}<span class="toolset-count" title="${escapeHtml(String(countToolsetGroupItems(group)))} selected tools">${countToolsetGroupItems(group)}</span></span></summary>`,
     `<div class="toolset-tree-children">${childContent}</div>`,
     `</details>`
+  ].join("");
+}
+
+function renderToolsetColumn(
+  label: string,
+  count: number,
+  groups: ToolsetNamespaceGroup[],
+  snapshot: TraceableSubagentDetailSnapshot
+): string {
+  const hasTree = groups.length > 0;
+  return [
+    `<section class="toolset-column${hasTree ? "" : " toolset-column-empty"}">`,
+    `<div class="toolset-root-heading"><span class="toolset-root-heading-main"><span class="toolset-root-label">${escapeHtml(label)}</span></span><span class="toolset-count">${count}</span></div>`,
+    hasTree
+      ? `<div class="toolset-tree-children toolset-tree-children-root">${groups.map((group, index) => renderToolsetNamespaceGroup(group, snapshot, index === groups.length - 1, [label])).join("")}</div>`
+      : `<div class="toolset-empty">None</div>`,
+    `</section>`
   ].join("");
 }
 
@@ -1058,17 +1205,14 @@ function renderToolsetDisclosure(snapshot: TraceableSubagentDetailSnapshot): str
   const customTools = rawToolset.filter((value) => isCustomToolReference(value));
   const nativeGroups = buildToolsetNamespaceGroups(nativeTools, false);
   const customGroups = buildToolsetNamespaceGroups(customTools, true);
-  const renderToolsetList = (groups: ToolsetNamespaceGroup[]): string => groups.length > 0
-    ? `<div class="toolset-tree-children toolset-tree-children-root">${groups.map((group) => renderToolsetNamespaceGroup(group, snapshot)).join("")}</div>`
-    : `<div class="toolset-empty">None</div>`;
   const summaryLabel = declaredToolset.length > 0 ? "Tool access" : "Observed tools";
   const summary = `${summaryLabel} ${rawToolset.length} total${customTools.length > 0 ? ` · ${customTools.length} custom` : ""}`;
   return [
     `<details class="toolset-disclosure">`,
     `<summary class="toolset-summary">${escapeHtml(summary)}</summary>`,
     `<div class="toolset-grid">`,
-    `<section class="toolset-column"><div class="toolset-heading">Native Tools <span class="toolset-count">${nativeTools.length}</span></div>${renderToolsetList(nativeGroups)}</section>`,
-    `<section class="toolset-column"><div class="toolset-heading">Extension Tools <span class="toolset-count">${customTools.length}</span></div>${renderToolsetList(customGroups)}</section>`,
+    renderToolsetColumn("Native Tools", nativeTools.length, nativeGroups, snapshot),
+    renderToolsetColumn("Extension Tools", customTools.length, customGroups, snapshot),
     `</div>`,
     `</details>`
   ].join("");
@@ -1081,8 +1225,8 @@ function renderEventRow(event: PanelDisplayEvent): string {
   const title = note || event.event.toolName;
   const noteRow = note ? `<div class="event-note">${escapeHtml(note)}</div>` : "";
   return [
-    `<li class="event-row event-${kind.toLowerCase()}" title="${escapeHtml(title)}">`,
-    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(eventIcon(kind))}</span><span class="event-label">${escapeHtml(eventLabel(event))}</span></div>${noteRow}</div>`,
+    `<li class="event-row event-tool event-kind-${kind.toLowerCase()} event-outcome-${event.outcome}" title="${escapeHtml(title)}">`,
+    `<div class="event-body"><div class="event-main"><span class="event-icon">${escapeHtml(eventIcon(event))}</span><span class="event-label">${escapeHtml(eventLabel(event))}</span></div>${noteRow}</div>`,
     `<div class="event-chips">${chips}</div>`,
     "</li>"
   ].join("");
@@ -1102,11 +1246,33 @@ function renderMetaStopwatch(
   return `<span class="meta-stopwatch"${dataAttributes} title="${escapeHtml(title)}"><span class="meta-stopwatch-label">${escapeHtml(label)}</span><span class="meta-stopwatch-value">${escapeHtml(value)}</span></span>`;
 }
 
-export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDetailSnapshot, codiconCssHref?: string): string {
+function renderPanelEmptyState(snapshot: TraceableSubagentDetailSnapshot): string {
+  const title = snapshot.status.phase === "running"
+    ? "Preparing trace lane"
+    : "Waiting for a trace run";
+  const copy = snapshot.status.phase === "running"
+    ? "TRACEABLE opened before the first activity landed. Live updates will appear here as soon as the run starts recording."
+    : "Start a TRACEABLE run, or reopen one from the status bar, to inspect live activity, tool usage, and the final child output here.";
+  return [
+    `<div class="empty-state">`,
+    `<div class="empty-state-title">${escapeHtml(title)}</div>`,
+    `<div class="empty-state-copy">${escapeHtml(copy)}</div>`,
+    `</div>`
+  ].join("");
+}
+
+export function renderTraceableSubagentPanelHtml(
+  snapshot: TraceableSubagentDetailSnapshot,
+  codiconCssHref?: string,
+  options: { pinnedOpen?: boolean } = {}
+): string {
   const activities = buildActivityEntries(snapshot);
-  const eventRows = activities.length > 0
+  const hasActivityFeed = activities.length > 0;
+  const pinnedOpen = options.pinnedOpen === true;
+  const showExport = snapshot.status.phase !== "running";
+  const eventRows = hasActivityFeed
     ? activities.map((event) => renderActivityRow(event)).join("")
-    : `<div class="empty-state">No activity yet.</div>`;
+    : renderPanelEmptyState(snapshot);
   const updatedLabel = formatPanelUpdatedAt(snapshot.updatedAt);
   const runningState = snapshot.status.phase === "running" ? "true" : "false";
   const totalElapsedMs = totalTraceElapsedMs(snapshot);
@@ -1149,6 +1315,13 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     },
     "Derived time: total wall-clock minus recorded tool time"
   );
+  const metaLead = hasActivityFeed
+    ? [
+      renderHeaderBadge("Activities", String(activities.length), "header-badge-meta", `${activities.length} activit${activities.length === 1 ? "y" : "ies"}`),
+      renderHeaderBadge("Updated", updatedLabel, "header-badge-meta", `Updated ${updatedLabel}`)
+    ].join("")
+    : `<span>${snapshot.status.phase === "running" ? "Preparing trace lane..." : "Ready"}</span>`;
+  const metaStopwatches = hasActivityFeed ? `${totalStopwatch}${toolStopwatch}${thinkStopwatch}` : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -1166,6 +1339,7 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       --chip-bg: color-mix(in srgb, var(--vscode-button-background) 18%, transparent);
       --chip-border: color-mix(in srgb, var(--vscode-focusBorder) 44%, transparent);
       --accent: var(--vscode-textLink-foreground);
+      --toolset-tree-line: color-mix(in srgb, var(--border) 76%, transparent);
     }
     * { box-sizing: border-box; }
     body {
@@ -1267,6 +1441,20 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     .header-badge-role-pending .header-badge-value {
       color: color-mix(in srgb, var(--fg) 78%, var(--muted));
     }
+    .header-badge-role-neutral {
+      border-color: color-mix(in srgb, var(--border) 74%, var(--chip-border));
+      background: color-mix(in srgb, var(--chip-bg) 54%, transparent);
+    }
+    .header-badge-role-neutral .header-badge-label {
+      color: color-mix(in srgb, var(--muted) 88%, transparent);
+    }
+    .header-badge-role-neutral .header-badge-value {
+      color: color-mix(in srgb, var(--fg) 78%, var(--muted));
+      font-weight: 500;
+    }
+    .header-badge-role-neutral .header-badge-icon {
+      color: color-mix(in srgb, var(--muted) 82%, transparent);
+    }
     .header-badge-track-candidate {
       min-height: 20px;
       padding: 0 6px;
@@ -1301,6 +1489,21 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     .header-badge-model .header-badge-value {
       color: color-mix(in srgb, var(--fg) 78%, var(--muted));
       font-weight: 500;
+    }
+    .header-badge-meta {
+      min-height: 20px;
+      padding: 0 6px;
+      gap: 4px;
+      border-color: color-mix(in srgb, var(--border) 72%, var(--chip-border));
+      background: color-mix(in srgb, var(--chip-bg) 46%, transparent);
+    }
+    .header-badge-meta .header-badge-label {
+      color: color-mix(in srgb, var(--muted) 90%, transparent);
+    }
+    .header-badge-meta .header-badge-value {
+      color: color-mix(in srgb, var(--fg) 84%, var(--muted));
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
     }
     .header-badge-icon .codicon {
       font-size: 12px;
@@ -1434,32 +1637,22 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     }
     .toolset-namespace-group {
       display: grid;
-      gap: 4px;
+      gap: 0;
       min-width: 0;
     }
     .toolset-tree-children {
       display: grid;
-      gap: 4px;
+      gap: 6px;
       min-width: 0;
-      padding-left: 8px;
+      padding-top: 4px;
+      padding-left: 16px;
       margin-left: 0;
-      border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
     }
     .toolset-tree-children-root {
-      position: relative;
       margin-top: 2px;
+      padding-top: 2px;
     }
-    .toolset-tree-children-root::before {
-      content: "";
-      position: absolute;
-      left: -1px;
-      top: -6px;
-      width: 0;
-      height: 6px;
-      border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-      pointer-events: none;
-    }
-    .toolset-heading {
+    .toolset-root-heading {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -1467,12 +1660,49 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       color: var(--fg);
       font-weight: 600;
     }
+    .toolset-root-heading-main {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      padding-left: 16px;
+    }
+    .toolset-root-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .toolset-namespace-metrics,
     .toolset-item-runtime {
       display: inline-flex;
       align-items: center;
       gap: 6px;
       flex: 0 0 auto;
+    }
+    .toolset-tree-node {
+      position: relative;
+      min-width: 0;
+    }
+    .toolset-tree-node::before {
+      content: "";
+      position: absolute;
+      left: -13px;
+      top: -6px;
+      bottom: -6px;
+      width: 1px;
+      background: var(--toolset-tree-line);
+      pointer-events: none;
+    }
+    .toolset-tree-node.toolset-node-last::before {
+      bottom: auto;
+      height: calc(50% + 6px);
+    }
+    .toolset-tree-children-root > .toolset-tree-node::before {
+      display: none;
+    }
+    .toolset-tree-children-root > .toolset-tree-node > .toolset-namespace-heading .toolset-namespace-branch,
+    .toolset-tree-children-root > .toolset-item > .toolset-item-branch {
+      opacity: 0;
     }
     .toolset-namespace-heading {
       display: flex;
@@ -1490,10 +1720,39 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       display: none;
     }
     .toolset-namespace-heading-main {
+      position: relative;
       display: inline-flex;
       align-items: center;
       gap: 6px;
+      padding-left: 16px;
       min-width: 0;
+    }
+    .toolset-namespace-branch {
+      width: 8px;
+      height: 1px;
+      flex: 0 0 auto;
+      position: absolute;
+      left: -13px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--toolset-tree-line);
+      margin-top: 0;
+      opacity: 0.58;
+    }
+    .toolset-namespace-branch::before,
+    .toolset-item-branch::before {
+      content: "";
+      position: absolute;
+      display: block;
+      pointer-events: none;
+      background: currentColor;
+    }
+    .toolset-namespace-branch::before,
+    .toolset-item-branch::before {
+      left: 0;
+      top: 0;
+      width: 8px;
+      height: 1px;
     }
     .toolset-namespace-twistie {
       display: inline-flex;
@@ -1509,11 +1768,6 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     }
     .toolset-namespace-group[open] .toolset-namespace-twistie .codicon {
       transform: rotate(90deg);
-    }
-    .toolset-namespace-icon-spacer {
-      width: 12px;
-      height: 12px;
-      flex: 0 0 auto;
     }
     .toolset-namespace-label {
       min-width: 0;
@@ -1581,7 +1835,7 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       align-items: center;
       gap: 6px;
       min-width: 0;
-      padding: 2px 0;
+      padding: 2px 0 2px 16px;
       color: var(--muted);
       white-space: nowrap;
       overflow: hidden;
@@ -1594,12 +1848,15 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       color: var(--fg);
     }
     .toolset-item-branch {
-      width: 6px;
-      height: 9px;
+      position: absolute;
+      left: -13px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 8px;
+      height: 1px;
       flex: 0 0 auto;
-      border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-      border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-      margin-top: -1px;
+      color: var(--toolset-tree-line);
+      margin-top: 0;
     }
     .toolset-item-icon {
       flex: 0 0 auto;
@@ -1651,7 +1908,6 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       color: var(--muted);
     }
     .events {
-      list-style: none;
       display: grid;
       gap: 0;
       align-content: start;
@@ -1678,9 +1934,17 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       min-width: 0;
     }
     .event-icon {
-      width: 12px;
+      width: 14px;
+      min-height: 14px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       text-align: center;
+      line-height: 1;
       flex: 0 0 auto;
+    }
+    .event-request .event-icon .codicon {
+      font-size: 13px;
     }
     .event-label {
       font-weight: 600;
@@ -1704,6 +1968,55 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
     }
+    .event-expand-indicator {
+      color: color-mix(in srgb, var(--muted) 90%, transparent);
+      font-size: 11px;
+      line-height: 1;
+      margin-left: 6px;
+      transform-origin: 50% 50%;
+      transition: transform 120ms ease, color 120ms ease;
+    }
+    .event-request[data-request-expandable="true"] {
+      cursor: pointer;
+    }
+    .event-request[data-request-expandable="true"]:hover {
+      background: color-mix(in srgb, var(--chip-bg) 42%, transparent);
+    }
+    .event-request[data-request-expandable="true"]:focus-visible {
+      outline: 1px solid color-mix(in srgb, var(--accent) 72%, transparent);
+      outline-offset: 2px;
+    }
+    .event-request-detail {
+      display: none;
+      gap: 8px;
+      padding-left: 20px;
+      margin-top: 6px;
+    }
+    .event-request.request-expanded .event-request-detail {
+      display: grid;
+    }
+    .event-request.request-expanded .event-note {
+      display: none;
+    }
+    .event-request.request-expanded .event-expand-indicator {
+      transform: rotate(90deg);
+      color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+    }
+    .event-request-detail-section {
+      display: grid;
+      gap: 3px;
+    }
+    .event-request-detail-label {
+      color: color-mix(in srgb, var(--muted) 90%, transparent);
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.04em;
+    }
+    .event-request-detail-value {
+      color: color-mix(in srgb, var(--fg) 88%, var(--muted));
+      white-space: pre-wrap;
+      line-height: 1.45;
+    }
     .event-request {
       align-items: start;
     }
@@ -1714,6 +2027,13 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       gap: 6px;
       align-items: center;
       min-width: 0;
+    }
+    .chip-separator {
+      color: color-mix(in srgb, var(--muted) 88%, transparent);
+      font-size: 11px;
+      line-height: 1;
+      align-self: center;
+      margin: 0 -1px;
     }
     .chip {
       display: inline-flex;
@@ -1779,6 +2099,16 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     .activity-duration {
       font-variant-numeric: tabular-nums;
     }
+    .chip-status-phase-warning {
+      color: var(--vscode-editorWarning-foreground);
+      border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground) 26%, var(--chip-border));
+      background: color-mix(in srgb, var(--vscode-editorWarning-foreground) 8%, var(--chip-bg));
+    }
+    .chip-status-phase-failure {
+      color: var(--vscode-errorForeground);
+      border-color: color-mix(in srgb, var(--vscode-errorForeground) 26%, var(--chip-border));
+      background: color-mix(in srgb, var(--vscode-errorForeground) 8%, var(--chip-bg));
+    }
     .activity-duration {
       display: inline-flex;
       align-items: center;
@@ -1819,13 +2149,23 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     .event-status-completed .event-icon {
       color: var(--vscode-terminal-ansiGreen);
     }
-    .event-deferred .event-icon { color: var(--vscode-editorWarning-foreground); }
-    .event-failed .event-icon { color: var(--vscode-errorForeground); }
-    .event-read .event-icon,
-    .event-search .event-icon { color: var(--vscode-terminal-ansiGreen); }
+    .event-tool.event-outcome-success .event-icon { color: var(--vscode-terminal-ansiGreen); }
+    .event-tool.event-outcome-running.event-kind-search .event-icon { color: var(--vscode-terminal-ansiGreen); }
+    .event-tool.event-outcome-deferred .event-icon { color: var(--vscode-editorWarning-foreground); }
+    .event-tool.event-outcome-failure .event-icon { color: var(--vscode-errorForeground); }
     .empty-state {
       color: var(--muted);
       padding: 10px 2px;
+      display: grid;
+      gap: 6px;
+    }
+    .empty-state-title {
+      color: color-mix(in srgb, var(--fg) 88%, var(--muted));
+      font-weight: 600;
+    }
+    .empty-state-copy {
+      max-width: 64ch;
+      line-height: 1.45;
     }
     @media (max-width: 640px) {
       .toolset-grid {
@@ -1855,16 +2195,15 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
           ${renderHeaderMetadataBadges(snapshot)}
         </div>
         <div class="toolbar">
-          <button class="toolbar-button" data-message='{"type":"closePanel"}' title="Hide the traceable panel until it is reopened from the status bar">Close</button>
-          <button class="toolbar-button" data-message='{"type":"exportMarkdown"}' title="Export full evidence as markdown">Export Markdown</button>
+          ${showExport ? `<button class="toolbar-button" data-message='{"type":"exportMarkdown"}' title="Export full evidence as markdown">Export</button>` : ""}
+          ${pinnedOpen
+            ? `<button class="toolbar-button" data-message='{"type":"closePanel"}' title="Hide the traceable panel until it is reopened from the status bar">Close</button>`
+            : `<button class="toolbar-button" data-message='{"type":"stayOpen"}' title="Keep TRACEABLE open and suppress auto-hide until you close it manually">Stay</button>`}
         </div>
       </div>
       <div class="meta">
-        <span>${activities.length} activit${activities.length === 1 ? "y" : "ies"}</span>
-        <span>Updated ${escapeHtml(updatedLabel)}</span>
-        ${totalStopwatch}
-        ${toolStopwatch}
-        ${thinkStopwatch}
+        ${metaLead}
+        ${metaStopwatches}
         ${renderMetaStatus(snapshot)}
       </div>
     </section>
@@ -1877,7 +2216,10 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
     const defaultPanelState = {
       followLatest: true,
       scrollTop: 0,
-      toolsetDisclosureOpen: false
+      toolsetDisclosureOpen: false,
+      requestExpanded: false,
+      namespaceOpenById: {},
+      runId: ''
     };
 
     const readPanelState = () => {
@@ -1886,14 +2228,34 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
         ? {
             followLatest: state.followLatest !== false,
             scrollTop: typeof state.scrollTop === 'number' ? state.scrollTop : 0,
-            toolsetDisclosureOpen: state.toolsetDisclosureOpen === true
+            toolsetDisclosureOpen: state.toolsetDisclosureOpen === true,
+            requestExpanded: state.requestExpanded === true,
+            namespaceOpenById: state.namespaceOpenById && typeof state.namespaceOpenById === 'object'
+              ? Object.fromEntries(Object.entries(state.namespaceOpenById).filter(([key, value]) => typeof key === 'string' && typeof value === 'boolean'))
+              : {},
+            runId: typeof state.runId === 'string' ? state.runId : ''
           }
         : defaultPanelState;
     };
 
     let panelState = readPanelState();
+    const currentRunId = ${JSON.stringify(snapshot.startedAt)};
     const toolsetDisclosure = document.querySelector('.toolset-disclosure');
+    const namespaceGroups = Array.from(document.querySelectorAll('.toolset-namespace-group[data-namespace-id]'));
     const timerNodes = Array.from(document.querySelectorAll('[data-timer-kind]'));
+    const requestRow = document.querySelector('.event-request[data-request-expandable="true"]');
+
+    const persistPanelState = (nextState) => {
+      panelState = { ...panelState, ...nextState };
+      vscodeApi.setState(panelState);
+    };
+
+    if (panelState.runId !== currentRunId) {
+      persistPanelState({
+        runId: currentRunId,
+        namespaceOpenById: {}
+      });
+    }
 
     const parseTimestampMs = (value) => {
       const parsed = new Date(value || '').getTime();
@@ -1996,10 +2358,74 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
       });
     }
 
-    const persistPanelState = (nextState) => {
-      panelState = { ...panelState, ...nextState };
-      vscodeApi.setState(panelState);
+    let applyingNamespaceDisclosureState = false;
+    const applyNamespaceDisclosureState = () => {
+      applyingNamespaceDisclosureState = true;
+      try {
+        for (const groupNode of namespaceGroups) {
+          if (!(groupNode instanceof HTMLDetailsElement)) {
+            continue;
+          }
+          const namespaceId = groupNode.dataset.namespaceId || '';
+          const hasStoredState = Object.prototype.hasOwnProperty.call(panelState.namespaceOpenById, namespaceId);
+          const defaultOpen = groupNode.dataset.defaultOpen === 'true';
+          groupNode.open = hasStoredState ? panelState.namespaceOpenById[namespaceId] === true : defaultOpen;
+        }
+      } finally {
+        applyingNamespaceDisclosureState = false;
+      }
     };
+
+    applyNamespaceDisclosureState();
+
+    for (const groupNode of namespaceGroups) {
+      if (!(groupNode instanceof HTMLDetailsElement)) {
+        continue;
+      }
+      groupNode.addEventListener('toggle', () => {
+        if (applyingNamespaceDisclosureState) {
+          return;
+        }
+        const namespaceId = groupNode.dataset.namespaceId || '';
+        persistPanelState({
+          namespaceOpenById: {
+            ...panelState.namespaceOpenById,
+            [namespaceId]: groupNode.open
+          }
+        });
+      });
+    }
+
+    const applyRequestExpansion = () => {
+      if (!(requestRow instanceof HTMLElement)) {
+        return;
+      }
+      requestRow.classList.toggle('request-expanded', panelState.requestExpanded === true);
+      requestRow.setAttribute('aria-expanded', panelState.requestExpanded === true ? 'true' : 'false');
+    };
+
+    applyRequestExpansion();
+
+    if (requestRow instanceof HTMLElement) {
+      const toggleRequestExpansion = () => {
+        persistPanelState({ requestExpanded: panelState.requestExpanded !== true });
+        applyRequestExpansion();
+      };
+      requestRow.addEventListener('click', (event) => {
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest('[data-message], button, a')) {
+          return;
+        }
+        toggleRequestExpansion();
+      });
+      requestRow.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') {
+          return;
+        }
+        event.preventDefault();
+        toggleRequestExpansion();
+      });
+    }
 
     const getScrollingRoot = () => document.scrollingElement || document.documentElement || document.body;
 
@@ -2113,6 +2539,8 @@ export function renderTraceableSubagentPanelHtml(snapshot: TraceableSubagentDeta
 export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private codiconCssHref: string | undefined;
+  private pendingViewResolvers: Array<(view: vscode.WebviewView | undefined) => void> = [];
+  private pinnedOpen = false;
   private snapshot: TraceableSubagentDetailSnapshot = {
     header: {
       agentName: "Trace lane",
@@ -2122,7 +2550,9 @@ export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewP
       candidate: false,
       experimental: false,
       humanRole: false,
-      toolsetNames: []
+      toolsetNames: [],
+      selectedToolNames: [],
+      toolSelectionRestricted: false
     },
     status: { phase: "idle", message: "idle" },
     requestSummary: [],
@@ -2136,11 +2566,13 @@ export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewP
     private readonly extensionUri: vscode.Uri,
     private readonly onExportMarkdown: () => Promise<void>,
     private readonly onOpenFile: (filePath: string, startLine?: number, endLine?: number) => Promise<void>,
-    private readonly onClosePanel: () => Promise<void>
+    private readonly onClosePanel: () => Promise<void>,
+    private readonly onStayOpen: () => Promise<void>
   ) {}
 
   async resolveWebviewView(webviewView: vscode.WebviewView): Promise<void> {
     this.view = webviewView;
+    this.resolvePendingViewResolvers(webviewView);
     webviewView.webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, ...TRACEABLE_PANEL_CODICON_PATH.slice(0, -1))]
@@ -2163,6 +2595,10 @@ export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewP
         await this.onClosePanel();
         return;
       }
+      if (message.type === "stayOpen") {
+        await this.onStayOpen();
+        return;
+      }
       if (message.type === "openFile" && typeof message.filePath === "string") {
         const startLine = typeof message.startLine === "number" ? message.startLine : undefined;
         const endLine = typeof message.endLine === "number" ? message.endLine : undefined;
@@ -2177,14 +2613,80 @@ export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewP
     void this.render();
   }
 
+  setPinnedOpen(pinnedOpen: boolean): void {
+    if (this.pinnedOpen === pinnedOpen) {
+      return;
+    }
+    this.pinnedOpen = pinnedOpen;
+    void this.render();
+  }
+
   async open(): Promise<void> {
-    await vscode.commands.executeCommand(`workbench.view.extension.${TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID}`);
-    this.view?.show?.(true);
-    await this.view?.webview.postMessage({ type: "revealLatest" });
+    if (!this.view) {
+      await this.revealContainerUntilViewResolves();
+    }
+    const view = await this.waitForView();
+    view?.show?.(true);
+    await view?.webview.postMessage({ type: "revealLatest" });
   }
 
   dispose(): void {
+    this.resolvePendingViewResolvers(undefined);
     this.view = undefined;
+  }
+
+  private waitForView(timeoutMs = 1500): Promise<vscode.WebviewView | undefined> {
+    if (this.view) {
+      return Promise.resolve(this.view);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (view: vscode.WebviewView | undefined) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve(view);
+      };
+      const timeout = setTimeout(() => {
+        this.pendingViewResolvers = this.pendingViewResolvers.filter((candidate) => candidate !== finish);
+        finish(this.view);
+      }, timeoutMs);
+      this.pendingViewResolvers.push(finish);
+    });
+  }
+
+  private async revealContainerUntilViewResolves(): Promise<void> {
+    const startedAt = Date.now();
+    while (!this.view && Date.now() - startedAt < 2000) {
+      try {
+        await vscode.commands.executeCommand("workbench.action.focusPanel");
+      } catch {
+        // Some hosts may not expose a direct panel focus command.
+      }
+      try {
+        await vscode.commands.executeCommand(`${TRACEABLE_SUBAGENT_PANEL_VIEW_ID}.focus`);
+      } catch {
+        // Some hosts do not expose a direct focus command for contributed views.
+      }
+      await vscode.commands.executeCommand(`workbench.view.extension.${TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID}`);
+      if (this.view) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+  }
+
+  private resolvePendingViewResolvers(view: vscode.WebviewView | undefined): void {
+    if (this.pendingViewResolvers.length === 0) {
+      return;
+    }
+    const resolvers = [...this.pendingViewResolvers];
+    this.pendingViewResolvers = [];
+    for (const resolve of resolvers) {
+      resolve(view);
+    }
   }
 
   private async render(): Promise<void> {
@@ -2193,6 +2695,8 @@ export class TraceableSubagentStatusPanelProvider implements vscode.WebviewViewP
     }
     this.view.title = "Traceable";
     this.view.description = this.snapshot.status.message;
-    this.view.webview.html = renderTraceableSubagentPanelHtml(this.snapshot, this.codiconCssHref);
+    this.view.webview.html = renderTraceableSubagentPanelHtml(this.snapshot, this.codiconCssHref, {
+      pinnedOpen: this.pinnedOpen
+    });
   }
 }
