@@ -7877,6 +7877,74 @@ async function runTraceableSubagentChecks() {
       && renderedRestrictedPolicyPanelHtml.includes("toolset-item toolset-tree-node toolset-runtime-inactive toolset-node-last\" title=\"tiinex.ai-vscode-tools/listAgentSessions\""),
     `Traceable subagent panel must keep allowlisted-but-uninvoked namespaces neutral while propagating inactive state through fully policy-blocked namespaces. Got: ${renderedRestrictedPolicyPanelHtml}`
   );
+  const renderedDottedCustomNamespacePanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    header: {
+      agentName: "Anchor",
+      agentResolved: true,
+      modelLabel: "gpt-5",
+      candidate: false,
+      experimental: false,
+      humanRole: false,
+      toolsetNames: ["search/textSearch", "tiinex.tiinex-youtube-tools/createWorkingTopic"],
+      selectedToolNames: ["search/textSearch", "tiinex.tiinex-youtube-tools/createWorkingTopic"],
+      toolSelectionRestricted: false
+    },
+    status: {
+      phase: "running",
+      message: "requesting analysis"
+    },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [],
+    startedAt: "2026-05-20T05:42:41.000Z",
+    updatedAt: "2026-05-20T05:42:42.000Z"
+  }, "codicon.css");
+  assert(
+    renderedDottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/tiinex\"")
+      && renderedDottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/tiinex/tiinex-youtube-tools\"")
+      && renderedDottedCustomNamespacePanelHtml.includes("title=\"tiinex.tiinex-youtube-tools/createWorkingTopic\"")
+      && !renderedDottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/tiinex.tiinex-youtube-tools\""),
+    `Traceable subagent panel must classify dotted extension namespaces under Extension Tools instead of treating them as native tools. Got: ${renderedDottedCustomNamespacePanelHtml}`
+  );
+  const renderedUndottedCustomNamespacePanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    header: {
+      agentName: "Anchor",
+      agentResolved: true,
+      modelLabel: "gpt-5",
+      candidate: false,
+      experimental: false,
+      humanRole: false,
+      toolsetNames: [
+        "read/readFile",
+        "gitkraken/git_blame",
+        "tiinexaivscodetools/estimateContextBreakdown"
+      ],
+      selectedToolNames: [
+        "read/readFile",
+        "gitkraken/git_blame",
+        "tiinexaivscodetools/estimateContextBreakdown"
+      ],
+      toolSelectionRestricted: false
+    },
+    status: {
+      phase: "running",
+      message: "requesting analysis"
+    },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [],
+    startedAt: "2026-05-20T05:42:41.000Z",
+    updatedAt: "2026-05-20T05:42:42.000Z"
+  }, "codicon.css");
+  assert(
+    renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/gitkraken\"")
+      && renderedUndottedCustomNamespacePanelHtml.includes("title=\"gitkraken/git_blame\"")
+      && renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/tiinexaivscodetools\"")
+      && renderedUndottedCustomNamespacePanelHtml.includes("title=\"tiinexaivscodetools/estimateContextBreakdown\"")
+      && !renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/gitkraken\"")
+      && !renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/tiinexaivscodetools\""),
+    `Traceable subagent panel must classify undotted extension namespaces under Extension Tools instead of treating them as native tools. Got: ${renderedUndottedCustomNamespacePanelHtml}`
+  );
   const renderedIdleLandingPanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
     header: {
       agentName: "Trace lane",
@@ -8902,6 +8970,11 @@ async function runTraceableSubagentChecks() {
       "model: GPT-5 mini (copilot)",
       "tools: [read/readFile, search/textSearch, search/fileSearch, search/listDirectory]",
       "experimental: true",
+      "handoffs:",
+      "  - label: Continue",
+      "    agent: Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)",
+      "    prompt: Continue",
+      "    send: true",
       "---",
       "",
       "You are a grounded test agent.",

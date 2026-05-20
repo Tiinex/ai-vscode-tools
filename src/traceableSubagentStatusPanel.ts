@@ -943,8 +943,29 @@ function normalizeHeaderToolsetNames(toolsetNames: readonly string[]): string[] 
   return normalized;
 }
 
+const NATIVE_TOOL_NAMESPACE_TOKENS = new Set([
+  "agent",
+  "browser",
+  "edit",
+  "execute",
+  "other",
+  "read",
+  "search",
+  "todo",
+  "vscode",
+  "web"
+]);
+
 function isCustomToolReference(toolName: string): boolean {
-  return /^tiinex\.ai-vscode-tools\//iu.test(toolName.trim());
+  const trimmed = toolName.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (!trimmed.includes("/")) {
+    return false;
+  }
+  const namespaceToken = trimmed.slice(0, trimmed.indexOf("/")).trim().toLowerCase();
+  return !NATIVE_TOOL_NAMESPACE_TOKENS.has(namespaceToken);
 }
 
 function renderHeaderBadgeIcon(icon: string | undefined): string {

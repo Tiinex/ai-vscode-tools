@@ -376,6 +376,10 @@ const TRACEABLE_AGENT_ALLOWED_FRONTMATTER_FIELDS = new Set([
   "human-role"
 ]);
 
+const TRACEABLE_AGENT_BLOCK_FRONTMATTER_FIELDS = new Set([
+  "handoffs"
+]);
+
 function normalizeRoleStemToken(value: string): string {
   return value
     .normalize("NFKD")
@@ -592,26 +596,37 @@ export async function listTraceableModelCatalogEntries(
 
 function parseFrontmatterFields(rawFrontmatter: string): Map<string, string> {
   const fields = new Map<string, string>();
+  let activeBlockField: string | undefined;
   for (const line of rawFrontmatter.split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed) {
       continue;
     }
+    const topLevelMatch = line.match(/^([A-Za-z][A-Za-z0-9-]*)\s*:\s*(.*?)\s*$/u);
+    if (topLevelMatch && !/^\s/u.test(line)) {
+      const key = topLevelMatch[1].trim();
+      if (!TRACEABLE_AGENT_ALLOWED_FRONTMATTER_FIELDS.has(key)) {
+        throw new Error(`Traceable agent frontmatter contains an unsupported field: ${key}`);
+      }
+      if (fields.has(key)) {
+        throw new Error(`Traceable agent frontmatter contains a duplicated field: ${key}`);
+      }
+      const value = topLevelMatch[2].trim();
+      fields.set(key, value);
+      activeBlockField = TRACEABLE_AGENT_BLOCK_FRONTMATTER_FIELDS.has(key) && value.length === 0 ? key : undefined;
+      continue;
+    }
+    if ((/^\s/u.test(line) || /^-\s/u.test(trimmed)) && activeBlockField) {
+      const existing = fields.get(activeBlockField) ?? "";
+      fields.set(activeBlockField, existing ? `${existing}\n${line}` : line);
+      continue;
+    }
     if (/^\s/u.test(line) || /^-\s/u.test(trimmed)) {
       throw new Error(`Traceable agent frontmatter uses unsupported nested or block YAML: ${JSON.stringify(line)}`);
     }
-    const match = line.match(/^([A-Za-z][A-Za-z0-9-]*)\s*:\s*(.*?)\s*$/u);
-    if (!match) {
+    if (!topLevelMatch) {
       throw new Error(`Traceable agent frontmatter contains an unsupported line: ${JSON.stringify(line)}`);
     }
-    const key = match[1].trim();
-    if (!TRACEABLE_AGENT_ALLOWED_FRONTMATTER_FIELDS.has(key)) {
-      throw new Error(`Traceable agent frontmatter contains an unsupported field: ${key}`);
-    }
-    if (fields.has(key)) {
-      throw new Error(`Traceable agent frontmatter contains a duplicated field: ${key}`);
-    }
-    fields.set(key, match[2].trim());
   }
   return fields;
 }
