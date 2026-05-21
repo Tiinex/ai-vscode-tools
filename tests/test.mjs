@@ -45,6 +45,7 @@ const distAgentArchitectProcessEvidence = path.join(packageRoot, "dist", "tools"
 const distToolsCore = path.join(packageRoot, "dist", "tools", "core.js");
 const distLanguageModelTools = path.join(packageRoot, "dist", "languageModelTools.js");
 const distTraceableSubagent = path.join(packageRoot, "dist", "traceableSubagent.js");
+const distTraceableSubagentEvidence = path.join(packageRoot, "dist", "traceableSubagentEvidence.js");
 const distTraceableSubagentStatusBar = path.join(packageRoot, "dist", "traceableSubagentStatusBar.js");
 const distTraceableSubagentStatusDetail = path.join(packageRoot, "dist", "traceableSubagentStatusDetail.js");
 const distTraceableSubagentStatusPanel = path.join(packageRoot, "dist", "traceableSubagentStatusPanel.js");
@@ -7159,10 +7160,16 @@ async function runManifestChecks() {
   assert(deleteTool?.inputSchema?.properties?.scheduleExactSelfDelete, "package.json delete live chat tool schema must expose scheduleExactSelfDelete.");
   const traceableAutoRevealSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceableAutoReveal"];
   const traceableAutoHideSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceableAutoHide"];
+  const traceablePreferredModelsSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceablePreferredModels"];
+  const traceableBlockedModelsSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceableBlockedModels"];
   assert(traceableAutoRevealSetting?.default === "yes", "package.json TRACEABLE auto-reveal setting must default to yes.");
   assert(Array.isArray(traceableAutoRevealSetting?.enum) && traceableAutoRevealSetting.enum.join(",") === "yes,no,always", "package.json TRACEABLE auto-reveal setting must expose yes/no/always enum values.");
   assert(traceableAutoHideSetting?.default === "yes", "package.json TRACEABLE auto-hide setting must default to yes.");
   assert(Array.isArray(traceableAutoHideSetting?.enum) && traceableAutoHideSetting.enum.join(",") === "yes,no", "package.json TRACEABLE auto-hide setting must expose yes/no enum values.");
+  assert(traceablePreferredModelsSetting?.type === "array" && Array.isArray(traceablePreferredModelsSetting?.default) && traceablePreferredModelsSetting.default.length === 0, "package.json TRACEABLE preferred-models setting must expose an empty array default.");
+  assert(traceablePreferredModelsSetting?.items?.type === "string", "package.json TRACEABLE preferred-models setting must store human-readable string declarations.");
+  assert(traceableBlockedModelsSetting?.type === "array" && Array.isArray(traceableBlockedModelsSetting?.default) && traceableBlockedModelsSetting.default.length === 0, "package.json TRACEABLE blocked-models setting must expose an empty array default.");
+  assert(traceableBlockedModelsSetting?.items?.type === "string", "package.json TRACEABLE blocked-models setting must store human-readable string declarations.");
   assert(rawSessionCommand?.title === "Tiinex: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
   assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
 
@@ -7427,6 +7434,7 @@ async function runTraceableSubagentChecks() {
   };
 
   const traceableSubagent = await import(`${pathToFileURL(distTraceableSubagent).href}?traceable-subagent=${Date.now()}`);
+  const traceableSubagentEvidence = await import(`${pathToFileURL(distTraceableSubagentEvidence).href}?traceable-subagent-evidence=${Date.now()}`);
   const traceableSubagentStatusBar = await import(`${pathToFileURL(distTraceableSubagentStatusBar).href}?traceable-subagent-status-bar=${Date.now()}`);
   const traceableSubagentStatusDetail = await import(`${pathToFileURL(distTraceableSubagentStatusDetail).href}?traceable-subagent-status-detail=${Date.now()}`);
   const traceableSubagentStatusPanel = await import(`${pathToFileURL(distTraceableSubagentStatusPanel).href}?traceable-subagent-status-panel=${Date.now()}`);
@@ -7446,6 +7454,11 @@ async function runTraceableSubagentChecks() {
   assert(
     fakeStatusBarItem.command === "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail",
     `Traceable subagent status bar main item must open the shared detail markdown view when clicked. Got: ${String(fakeStatusBarItem.command)}`
+  );
+  formattedStatusReporter.update("queued");
+  assert(
+    fakeStatusBarItem.text === "$(sync~spin) Anchor: gpt-5-mini: queued",
+    `Traceable subagent status bar must surface queued trace lanes in the same structured slot without introducing a separate grouping surface. Got: ${fakeStatusBarItem.text}`
   );
   formattedStatusReporter.update("continuing analysis");
   assert(
@@ -7701,7 +7714,39 @@ async function runTraceableSubagentChecks() {
         message: "requesting analysis",
         occurredAt: "2026-05-19T22:32:21.000Z"
       }
+    ],
+    evidenceFile: {
+      status: "writing",
+      filePath: path.join(packageRoot, "evidence", "01-anchor.trace.md"),
+      fileName: "01-anchor.trace.md",
+      requestedBy: "tool-input",
+      outputMode: "summary-with-evidence-path"
+    }
+  }, "codicon.css", { pinnedOpen: false });
+  const renderedQueuedPanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    ...panelSnapshot,
+    status: {
+      phase: "running",
+      message: "queued"
+    },
+    statusHistory: [
+      {
+        id: "status-queued-1",
+        phase: "running",
+        message: "queued",
+        occurredAt: "2026-05-19T22:32:21.000Z"
+      }
     ]
+  }, "codicon.css", { pinnedOpen: false });
+  const renderedReadyEvidencePanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
+    ...panelSnapshot,
+    evidenceFile: {
+      status: "ready",
+      filePath: path.join(packageRoot, "evidence", "01-anchor.trace.md"),
+      fileName: "01-anchor.trace.md",
+      requestedBy: "tool-input",
+      outputMode: "summary-with-evidence-path"
+    }
   }, "codicon.css", { pinnedOpen: false });
   assert(
     renderedPanelHtml.includes("position: sticky;")
@@ -7755,6 +7800,12 @@ async function runTraceableSubagentChecks() {
     `Traceable subagent status panel must render status activity rows with derived transparency notes. Got: ${renderedPanelHtml}`
   );
   assert(
+    renderedQueuedPanelHtml.includes("title=\"queued\"")
+      && renderedQueuedPanelHtml.includes(">queued<")
+      && renderedQueuedPanelHtml.includes("Waiting for the traceable single-flight queue to hand this lane the active slot."),
+    `Traceable subagent status panel must render queued runs through the existing running-status activity path instead of introducing a separate grouping surface. Got: ${renderedQueuedPanelHtml}`
+  );
+  assert(
     renderedPanelHtml.includes("status-group-severity-warning")
       && renderedPanelHtml.includes(".status-group.status-group-severity-error .event-status-group-toggle")
       && renderedPanelHtml.includes(".status-group.status-group-severity-warning .event-status-group-toggle"),
@@ -7769,11 +7820,28 @@ async function runTraceableSubagentChecks() {
       && renderedPanelHtml.includes("<div class=\"event-note\">Deferred to preserve synthesis.</div>")
       && renderedPanelHtml.includes("event-kind-tool event-outcome-failure")
       && renderedPanelHtml.includes(">Export<")
+      && renderedRunningPanelHtml.includes(">View<")
+      && renderedRunningPanelHtml.includes("toolbar-button-export-live")
+      && renderedRunningPanelHtml.includes("toolbar-live-indicator")
       && !renderedRunningPanelHtml.includes(">Export<")
+      && renderedReadyEvidencePanelHtml.includes(">View<")
+      && renderedReadyEvidencePanelHtml.includes("toolbar-button-export-ready")
+      && !renderedReadyEvidencePanelHtml.includes(">Export<")
       && renderedPanelHtml.includes("\"type\":\"stayOpen\"")
       && renderedPinnedPanelHtml.includes("\"type\":\"closePanel\"")
       && renderedPanelHtml.indexOf("read extension.ts") < renderedPanelHtml.indexOf("read README.md"),
     `Traceable subagent status panel must render tool access, event rows, and export affordances. Got: ${renderedPanelHtml}`
+  );
+  const renderedEvidenceEditorPanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml(panelSnapshot, "codicon.css", {
+    pinnedOpen: true,
+    hideToolbarControls: true
+  });
+  assert(
+    !renderedEvidenceEditorPanelHtml.includes(">Export<")
+      && !renderedEvidenceEditorPanelHtml.includes(">View<")
+      && !renderedEvidenceEditorPanelHtml.includes(">Close<")
+      && !renderedEvidenceEditorPanelHtml.includes(">Stay<"),
+    `Traceable evidence editor rendering must hide sticky-header toolbar controls when the shared panel HTML is reused inside an editor tab. Got: ${renderedEvidenceEditorPanelHtml}`
   );
   assert(
     renderedPanelHtml.includes("const BOTTOM_FOLLOW_THRESHOLD_PX = 24;")
@@ -8270,8 +8338,27 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent tool selection must block live mutation tools by default."
   );
   assert(
-    selectedTools.some((tool) => tool.name === "runSubagent"),
-    "Traceable subagent tool selection must allow native runSubagent as an opaque delegation lane."
+    !selectedTools.some((tool) => tool.name === "runSubagent"),
+    "Traceable subagent tool selection must block native runSubagent so the lane cannot spawn opaque child work."
+  );
+
+  const oversizedDefaultSelection = traceableSubagent.selectTraceableSubagentTools([
+    { name: "list_agent_sessions", description: "read only" },
+    { name: "copilot_readFile", description: "file read" },
+    { name: "copilot_findFiles", description: "file search" },
+    ...Array.from({ length: 200 }, (_, index) => ({ name: `other_tool_${index}`, description: "other" }))
+  ], {
+    userInput: "inspect a code path",
+    parentTask: "use the default safe surface"
+  });
+
+  assert(
+    oversizedDefaultSelection.length < 128
+      && oversizedDefaultSelection.some((tool) => tool.name === "list_agent_sessions")
+      && oversizedDefaultSelection.some((tool) => tool.name === "copilot_readFile")
+      && oversizedDefaultSelection.some((tool) => tool.name === "copilot_findFiles")
+      && !oversizedDefaultSelection.some((tool) => tool.name === "other_tool_0"),
+    `Traceable subagent default tool selection must stay on a bounded safe surface instead of forwarding the full host tool catalog. Got: ${JSON.stringify(oversizedDefaultSelection)}`
   );
 
   const inheritedSelectedTools = traceableSubagent.selectTraceableSubagentTools([
@@ -8476,7 +8563,7 @@ async function runTraceableSubagentChecks() {
       name: "tiinex-traceable-subagent-v1",
       closureMode: "bounded-summary"
     }
-  }, ["list_agent_sessions", "runSubagent"]);
+  }, ["list_agent_sessions", "search/textSearch"]);
 
   assert(
     promptSections.requestEnvelope.userInput === "original wording",
@@ -8521,6 +8608,10 @@ async function runTraceableSubagentChecks() {
   assert(
     promptSections.promptTexts.some((section) => section.includes("Task file anchor rule:")),
     "Traceable subagent prompt sections must tell the child lane to prefer task file anchors over nearby role-artifact files when they exist."
+  );
+  assert(
+    promptSections.promptTexts.some((section) => section.includes("Do not call native runSubagent from inside this lane.")),
+    "Traceable subagent prompt sections must explicitly block native runSubagent from inside the lane."
   );
 
   const multiFilePromptSections = traceableSubagent.buildTraceableSubagentPromptSections({
@@ -8711,7 +8802,8 @@ async function runTraceableSubagentChecks() {
     request: {
       userInput: "original wording",
       parentTask: "inspect the controlling code path",
-      notes: "x".repeat(2500)
+      notes: "x".repeat(2500),
+      exportToFolder: "/tmp/evidence"
     },
     model: {
       vendor: "copilot",
@@ -8719,7 +8811,7 @@ async function runTraceableSubagentChecks() {
       id: "gpt-5-mini",
       version: "test"
     },
-    allowedToolNames: ["list_agent_sessions", "runSubagent"],
+    allowedToolNames: ["list_agent_sessions", "search/textSearch"],
     toolCalls: [
       {
         callId: "call-0",
@@ -8729,7 +8821,7 @@ async function runTraceableSubagentChecks() {
       },
       {
         callId: "call-1",
-        toolName: "runSubagent",
+        toolName: "search/textSearch",
         argsSummary: "{}",
         result: "success"
       }
@@ -8747,18 +8839,13 @@ async function runTraceableSubagentChecks() {
       {
         kind: "step",
         label: "Read exact file slice",
-        reason: "The child stopped after an opaque delegation."
+        reason: "The child stopped after a bounded partial pass."
       }
     ],
     stopReason: "completed",
     completionClaim: "partial",
-    finalSummary: "ok",
-    opaqueDelegations: [
-      {
-        toolName: "runSubagent",
-        note: "Native runSubagent delegation remains opaque from the parent trace lane."
-      }
-    ],
+    finalSummary: "ok; export folder: /tmp/evidence",
+    opaqueDelegations: [],
     usage: {
       provenance: "unavailable",
       note: "No token usage surfaced on the current VS Code language model response."
@@ -8782,7 +8869,17 @@ async function runTraceableSubagentChecks() {
     ],
     rawModelText: "{\"finalSummary\":\"ok\"}",
     debugLogPath: "/tmp/traceable-subagent-debug.jsonl",
+    evidenceFile: {
+      status: "ready",
+      filePath: "/tmp/evidence/01-anchor.trace.md",
+      fileName: "01-anchor.trace.md",
+      requestedBy: "tool-input",
+      outputMode: "summary-with-evidence-path"
+    },
     elapsedMs: 9500
+  }, {
+    mode: "relative-markdown",
+    baseDir: "/tmp/evidence"
   });
 
   assert(
@@ -8798,9 +8895,12 @@ async function runTraceableSubagentChecks() {
       && markdown.includes("Read: traceableSubagent.ts")
       && markdown.includes("Took: 9.5s")
       && markdown.includes("Usage: No token usage surfaced on the current VS Code language model response.")
-      && markdown.includes("Concluded: ok")
-      && markdown.includes("Missing: Read exact file slice: The child stopped after an opaque delegation."),
+      && markdown.includes("Missing: Read exact file slice: The child stopped after a bounded partial pass."),
     "Traceable subagent markdown renderer must surface a short semantic quick-read section near the top of the result."
+  );
+  assert(
+    markdown.includes("Concluded: ok; export folder: [evidence](../evidence)"),
+    "Traceable subagent markdown renderer must rewrite known absolute path mentions inside the quick-read conclusion using the active path render policy."
   );
   assert(
     markdown.indexOf("## Quick Read") < markdown.indexOf("## At a Glance"),
@@ -8813,8 +8913,12 @@ async function runTraceableSubagentChecks() {
       && markdown.includes("Elapsed: 9.5s")
       && markdown.includes("Observed Read Targets: 1 unique")
       && markdown.includes("Outstanding Gaps: 1")
-      && markdown.includes("Opaque Delegations: 1"),
+      && markdown.includes("Opaque Delegations: 0"),
     "Traceable subagent markdown renderer must expose compact counts for completed steps, successful tool calls, elapsed time, observed read targets, remaining gaps, and opaque delegations."
+  );
+  assert(
+    markdown.includes("Final Summary: ok; export folder: [evidence](../evidence)"),
+    "Traceable subagent markdown renderer must rewrite known absolute path mentions inside free-text summaries using the active path render policy."
   );
 
   const unresolvedMarkdown = traceableSubagent.renderTraceableSubagentMarkdown({
@@ -8865,16 +8969,8 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent markdown renderer must surface expected-but-missing items as a readable section."
   );
   assert(
-    markdown.includes("Read exact file slice: The child stopped after an opaque delegation."),
+    markdown.includes("Read exact file slice: The child stopped after a bounded partial pass."),
     "Traceable subagent markdown renderer must surface expected-but-missing details outside raw JSON only."
-  );
-  assert(
-    markdown.includes("## Opaque Delegations"),
-    "Traceable subagent markdown renderer must surface opaque delegations as a readable section."
-  );
-  assert(
-    markdown.includes("Native runSubagent delegation remains opaque"),
-    "Traceable subagent markdown renderer must surface opaque delegation notes."
   );
   assert(
     markdown.includes("## Technical Details"),
@@ -8897,12 +8993,123 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent markdown renderer must bound oversized technical JSON blocks instead of emitting one giant blob."
   );
   assert(
-    markdown.includes("/tmp/traceable-subagent-debug.jsonl"),
-    "Traceable subagent markdown renderer must surface the debug log path when present."
+    markdown.includes("[traceable-subagent-debug.jsonl](file:///tmp/traceable-subagent-debug.jsonl)")
+      && markdown.includes("ready | [01-anchor.trace.md](01-anchor.trace.md)"),
+    "Traceable subagent markdown renderer must surface path references as markdown links when a relative evidence render base is provided."
   );
+
+  const evidenceTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "traceable-evidence-"));
+  try {
+    const evidenceController = new traceableSubagentEvidence.TraceableSubagentEvidenceController({
+      header: {
+        agentName: "Trace lane",
+        agentFilePath: "",
+        agentResolved: false,
+        modelLabel: "GPT-5 mini",
+        candidate: false,
+        experimental: false,
+        humanRole: false,
+        toolsetNames: [],
+        selectedToolNames: [],
+        toolSelectionRestricted: false
+      },
+      status: {
+        phase: "running",
+        message: "requesting analysis",
+        detail: "bounded ok"
+      },
+      evidenceFile: { status: "idle" },
+      requestSummary: [],
+      statusHistory: [],
+      recentTools: [],
+      startedAt: "2026-05-21T01:20:25.634Z",
+      updatedAt: "2026-05-21T01:21:12.235Z"
+    });
+    await evidenceController.prepareRequestedExport({
+      outputMode: "summary-with-evidence-path",
+      exportToFolder: evidenceTempDir,
+      userInput: "Return the exact JSON final payload only."
+    });
+    const exportedResult = await evidenceController.finalizeRequestedExport({
+      request: { exportToFolder: evidenceTempDir },
+      outputMode: "summary-with-evidence-path",
+      model: {
+        vendor: "copilot",
+        family: "gpt-5-mini",
+        id: "gpt-5-mini",
+        version: "test"
+      },
+      allowedToolNames: [],
+      toolCalls: [],
+      traceStatus: "trace-supported",
+      steps: [],
+      expectedButMissing: [],
+      stopReason: "completed",
+      completionClaim: "complete",
+      finalSummary: "ok",
+      validationIssues: [],
+      opaqueDelegations: [],
+      debugLogPath: "/tmp/traceable-subagent-debug.jsonl",
+      elapsedMs: 1000
+    }, traceableSubagent.renderTraceableSubagentMarkdown({
+      request: { exportToFolder: evidenceTempDir },
+      outputMode: "summary-with-evidence-path",
+      model: {
+        vendor: "copilot",
+        family: "gpt-5-mini",
+        id: "gpt-5-mini",
+        version: "test"
+      },
+      allowedToolNames: [],
+      toolCalls: [],
+      traceStatus: "trace-supported",
+      steps: [],
+      expectedButMissing: [],
+      stopReason: "completed",
+      completionClaim: "complete",
+      finalSummary: "ok",
+      validationIssues: [],
+      opaqueDelegations: [],
+      debugLogPath: "/tmp/traceable-subagent-debug.jsonl",
+      elapsedMs: 1000
+    }));
+    const exportedEvidenceMarkdown = await fs.readFile(exportedResult.evidenceFile.filePath, "utf8");
+    assert(
+      !exportedEvidenceMarkdown.includes("Debug Log:"),
+      `Traceable evidence export must omit debug log support artifacts so the evidence file does not imply they are part of rehydratable state. Got: ${exportedEvidenceMarkdown}`
+    );
+    assert(
+      exportedEvidenceMarkdown.includes("# GPT-5 mini Evidence")
+        && exportedEvidenceMarkdown.includes("- Role: -")
+        && !exportedEvidenceMarkdown.includes("# Trace lane Evidence"),
+      `Traceable evidence export must not present the generic trace lane label as if it were a real role name. Got: ${exportedEvidenceMarkdown}`
+    );
+    assert(
+      exportedResult.evidenceFile.fileName === "01-gpt-5-mini.trace.md"
+        && !exportedResult.evidenceFile.fileName.includes("trace-lane"),
+      `Traceable evidence export must not keep the fake trace-lane slug in future filenames when only the generic lane header is present. Got: ${exportedResult.evidenceFile.fileName}`
+    );
+    assert(
+      exportedEvidenceMarkdown.includes("## Traceable State")
+        && exportedEvidenceMarkdown.includes('"schema": "tiinex.traceable-state.v1"')
+        && exportedEvidenceMarkdown.includes('"snapshot"')
+        && exportedEvidenceMarkdown.includes('"result"'),
+      `Traceable evidence export must include a machine-readable traceable-state block for future view rehydration. Got: ${exportedEvidenceMarkdown}`
+    );
+    const parsedEvidenceState = traceableSubagentEvidence.parseTraceableEvidenceStateMarkdown(exportedEvidenceMarkdown);
+    assert(
+      parsedEvidenceState?.snapshot?.header?.modelLabel === "GPT-5 mini"
+        && parsedEvidenceState?.snapshot?.evidenceFile?.fileName?.endsWith(".trace.md")
+        && parsedEvidenceState?.result?.completionClaim === "complete",
+      `Traceable evidence export must be parseable back into a reusable traceable state snapshot and result. Got: ${JSON.stringify(parsedEvidenceState)}`
+    );
+  } finally {
+    await fs.rm(evidenceTempDir, { recursive: true, force: true });
+  }
 
   const originalWorkspace = vscode.workspace;
   const originalWorkspaceFolders = originalWorkspace?.workspaceFolders;
+  const originalGetConfiguration = originalWorkspace?.getConfiguration;
   const originalLm = vscode.lm;
   const originalToolMode = vscode.LanguageModelChatToolMode;
   const originalTextPart = vscode.LanguageModelTextPart;
@@ -8911,6 +9118,7 @@ async function runTraceableSubagentChecks() {
   const originalDataPart = vscode.LanguageModelDataPart;
   const originalChatMessage = vscode.LanguageModelChatMessage;
   const tempRoots = [];
+  const traceableConfig = {};
 
   vscode.LanguageModelChatToolMode = { Auto: "auto" };
   vscode.LanguageModelTextPart = class LanguageModelTextPart {
@@ -8943,6 +9151,13 @@ async function runTraceableSubagentChecks() {
       return { role: "tool", content };
     }
   };
+  vscode.workspace.getConfiguration = () => ({
+    get(key, defaultValue) {
+      return Object.prototype.hasOwnProperty.call(traceableConfig, key)
+        ? traceableConfig[key]
+        : defaultValue;
+    }
+  });
 
   try {
     const groundedRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-grounded-"));
@@ -8954,7 +9169,7 @@ async function runTraceableSubagentChecks() {
       "name: Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)",
       "description: Grounded traceable test agent.",
       "argument-hint: Test only.",
-      "model: GPT-5 mini (copilot)",
+      "models: [Claude Opus 4.7 (copilot), GPT-5 mini (copilot)]",
       "tools: [read/readFile, search/textSearch, search/fileSearch, search/listDirectory]",
       "experimental: true",
       "handoffs:",
@@ -9026,11 +9241,11 @@ async function runTraceableSubagentChecks() {
 
     assert(
       selectedTraceableSelector?.vendor === "copilot" && selectedTraceableSelector?.id === "gpt-5-mini",
-      `Traceable subagent grounded-role test did not translate the agent artifact model to the expected exact selector. Got: ${JSON.stringify(selectedTraceableSelector)}`
+      `Traceable subagent grounded-role test did not translate the agent artifact models list to the expected exact selector. Got: ${JSON.stringify(selectedTraceableSelector)}`
     );
     assert(
       groundedResult.model?.id === "gpt-5-mini" && groundedResult.stopReason === "completed" && groundedResult.finalSummary === "grounded ok",
-      `Traceable subagent grounded-role test did not complete through the agent artifact model path. Got: ${JSON.stringify(groundedResult)}`
+      `Traceable subagent grounded-role test did not complete through the agent artifact models-list path. Got: ${JSON.stringify(groundedResult)}`
     );
     assert(
       JSON.stringify(groundedResult.allowedToolNames) === JSON.stringify([
@@ -9074,6 +9289,53 @@ async function runTraceableSubagentChecks() {
       groundedDebugLog.includes('"phase":"model_selected"') && groundedDebugLog.includes('"id":"gpt-5-mini"'),
       `Traceable subagent grounded-role test did not write the expected model-selection debug entry. Got: ${groundedDebugLog}`
     );
+
+    let configuredSelector;
+    let configuredSendRequestCount = 0;
+    traceableConfig.traceablePreferredModels = ["GPT-5.4 mini (copilot)", "GPT-5 mini (copilot)"];
+    traceableConfig.traceableBlockedModels = ["GPT-5.4 mini (copilot)"];
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: packageRoot } }];
+    vscode.lm = {
+      tools: [],
+      async selectChatModels(selector) {
+        configuredSelector = selector;
+        return [{
+          vendor: "copilot",
+          family: "gpt-5",
+          id: "gpt-5-mini",
+          version: "test",
+          async sendRequest() {
+            configuredSendRequestCount += 1;
+            async function* stream() {
+              yield new vscode.LanguageModelTextPart('{"steps":[],"expectedButMissing":[],"stopReason":"completed","completionClaim":"complete","finalSummary":"configured model ok"}');
+            }
+            return { stream: stream() };
+          }
+        }];
+      },
+      async invokeTool() {
+        throw new Error("Traceable configured-model test should not invoke tools.");
+      }
+    };
+
+    const configuredModelResult = await traceableSubagent.runTraceableSubagent({
+      userInput: "Inspect a bounded slice.",
+      parentTask: "Use the configured TRACEABLE model policy when no explicit selector is supplied."
+    });
+
+    assert(
+      configuredSelector?.vendor === "copilot" && configuredSelector?.id === "gpt-5-mini",
+      `Traceable subagent configured-model policy test did not apply the preferred-model declarations after blocking the earlier entry. Got: ${JSON.stringify(configuredSelector)}`
+    );
+    assert(
+      configuredSendRequestCount === 1
+        && configuredModelResult.stopReason === "completed"
+        && configuredModelResult.model?.id === "gpt-5-mini"
+        && configuredModelResult.finalSummary === "configured model ok",
+      `Traceable subagent configured-model policy test did not complete through the filtered settings fallback path. Got: ${JSON.stringify({ configuredSendRequestCount, configuredModelResult })}`
+    );
+    delete traceableConfig.traceablePreferredModels;
+    delete traceableConfig.traceableBlockedModels;
     assert(
       groundedDebugRows.some((row) => Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0),
       `Traceable subagent grounded-role test did not persist elapsedMs into the debug log. Got: ${groundedDebugLog}`
@@ -9279,7 +9541,7 @@ async function runTraceableSubagentChecks() {
     );
     assert(
       unsupportedModelResult.stopReason === "tool_blocked"
-        && unsupportedModelResult.finalSummary.includes("could not translate")
+        && unsupportedModelResult.finalSummary.includes("no supported unblocked declaration")
         && unsupportedModelResult.finalSummary.includes("availableRuntimeModels="),
       `Traceable subagent unsupported-model test did not fail closed on an unrecognized model declaration. Got: ${JSON.stringify(unsupportedModelResult)}`
     );
@@ -10034,6 +10296,11 @@ async function runTraceableSubagentChecks() {
   } finally {
     if (originalWorkspace) {
       originalWorkspace.workspaceFolders = originalWorkspaceFolders;
+      if (originalGetConfiguration === undefined) {
+        delete originalWorkspace.getConfiguration;
+      } else {
+        originalWorkspace.getConfiguration = originalGetConfiguration;
+      }
     } else {
       delete vscode.workspace;
     }

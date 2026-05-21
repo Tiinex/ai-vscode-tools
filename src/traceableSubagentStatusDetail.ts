@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import path from "node:path";
 import type {
+  TraceableSubagentEvidenceFileState,
   TraceableSubagentRequestSummaryItem,
   TraceableSubagentStatusHeader,
   TraceableSubagentToolStatusEvent
@@ -29,6 +30,7 @@ export interface TraceableSubagentStatusHistoryEvent {
 export interface TraceableSubagentDetailSnapshot {
   header: Required<TraceableSubagentStatusHeader>;
   status: TraceableSubagentDetailStatusState;
+  evidenceFile?: TraceableSubagentEvidenceFileState;
   requestSummary: TraceableSubagentRequestSummaryItem[];
   statusHistory: TraceableSubagentStatusHistoryEvent[];
   recentTools: TraceableSubagentToolStatusEvent[];
@@ -169,6 +171,15 @@ export function renderTraceableSubagentDetailMarkdown(snapshot: TraceableSubagen
   if (toolsetSummary) {
     lines.push(`Toolset: ${escapeMarkdown(toolsetSummary)}`);
   }
+  if (snapshot.evidenceFile && snapshot.evidenceFile.status !== "idle") {
+    lines.push(`Evidence: ${escapeMarkdown(snapshot.evidenceFile.status)}`);
+    if (snapshot.evidenceFile.filePath) {
+      lines.push(`Evidence file: ${escapeMarkdown(snapshot.evidenceFile.filePath)}`);
+    }
+    if (snapshot.evidenceFile.error) {
+      lines.push(`Evidence error: ${escapeMarkdown(snapshot.evidenceFile.error)}`);
+    }
+  }
   if (snapshot.status.detail) {
     lines.push("", escapeMarkdown(snapshot.status.detail));
   }
@@ -195,6 +206,7 @@ export class TraceableSubagentStatusDetailController implements vscode.TextDocum
       phase: "idle",
       message: "idle"
     },
+    evidenceFile: { status: "idle" },
     requestSummary: [],
     statusHistory: [],
     recentTools: [],

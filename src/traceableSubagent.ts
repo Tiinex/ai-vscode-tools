@@ -50,6 +50,8 @@ const DEFAULT_OUTPUT_TEXT_CHARS = 1600;
 
 const DEFAULT_BLOCKED_TOOL_NAMES = new Set([
   TRACEABLE_SUBAGENT_TOOL_NAME,
+  "runSubagent",
+  "run_subagent",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",
@@ -57,6 +59,28 @@ const DEFAULT_BLOCKED_TOOL_NAMES = new Set([
   "reveal_live_agent_chat",
   "invoke_youtube_host_command"
 ]);
+
+const DEFAULT_TRACEABLE_ALLOWED_TOOL_NAMES = [
+  "read_file",
+  "text_search",
+  "file_search",
+  "list_directory",
+  "semantic_search",
+  "get_errors",
+  "list_traceable_agents",
+  "list_traceable_models",
+  "list_agent_sessions",
+  "get_agent_session_index",
+  "get_agent_session_window",
+  "export_agent_evidence_transcript",
+  "get_agent_session_snapshot",
+  "estimate_agent_context_breakdown",
+  "survey_agent_sessions"
+];
+
+const DEFAULT_TRACEABLE_ALLOWED_TOOL_KEYS = new Set(
+  DEFAULT_TRACEABLE_ALLOWED_TOOL_NAMES.flatMap((toolName) => expandToolReferenceKeys(toolName))
+);
 
 type TraceableStopReason =
   | "completed"
@@ -100,6 +124,16 @@ export interface TraceableAgentRole {
 
 export type TraceableSubagentInputMode = "OPERATIVE" | "EPISTEMIC" | "NON_LEADING_EPISTEMIC";
 export type TraceableSubagentValidationMode = "NONE" | "WARN" | "ERROR";
+export type TraceableSubagentOutputMode = "summary-with-evidence-path" | "full-markdown-with-evidence-path" | "evidence-path-only";
+
+export interface TraceableSubagentEvidenceFileState {
+  status: "idle" | "writing" | "ready" | "failed";
+  filePath?: string;
+  fileName?: string;
+  error?: string;
+  requestedBy?: "tool-input" | "ui-export";
+  outputMode?: TraceableSubagentOutputMode;
+}
 
 export interface TraceableModelSelector {
   vendor?: string;
@@ -145,10 +179,24 @@ function normalizeTraceableValidationMode(mode: unknown): TraceableSubagentValid
   }
 }
 
+export function normalizeTraceableOutputMode(mode: unknown): TraceableSubagentOutputMode | undefined {
+  const normalized = typeof mode === "string" ? mode.trim().toLowerCase() : "";
+  switch (normalized) {
+    case "summary-with-evidence-path":
+    case "full-markdown-with-evidence-path":
+    case "evidence-path-only":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
 export interface TraceableSubagentInput {
   userInput: string;
   parentFrame?: string;
   parentTask?: string;
+  outputMode?: TraceableSubagentOutputMode;
+  exportToFolder?: string;
   inputMode?: TraceableSubagentInputMode;
   validationMode?: TraceableSubagentValidationMode;
   reveal?: boolean;
@@ -221,6 +269,7 @@ export interface TraceableSubagentIterationMetric {
 
 export interface TraceableSubagentRunResult {
   request: Record<string, unknown>;
+  outputMode?: TraceableSubagentOutputMode;
   model: {
     vendor: string;
     family: string;
@@ -242,6 +291,8 @@ export interface TraceableSubagentRunResult {
   rawModelText?: string;
   debugLogPath?: string;
   elapsedMs?: number;
+  evidenceFile?: TraceableSubagentEvidenceFileState;
+  evidenceMarkdown?: string;
 }
 
 function summarizeMessageContentParts(content: unknown): { partKinds: string[]; toolCallIds: string[]; toolResultCallIds: string[] } {
@@ -307,6 +358,7 @@ interface ResolvedTraceableAgentArtifact {
   rawFrontmatter: string;
   body: string;
   modelDeclaration?: string;
+  modelDeclarations: string[];
   modelSelector?: TraceableModelSelector;
   toolDeclarations: string[];
   candidate: boolean;
@@ -321,6 +373,7 @@ export interface TraceableAgentCatalogEntry {
   filePath: string;
   workspaceFolderName: string;
   modelDeclaration?: string;
+  modelDeclarations: string[];
   toolDeclarations: string[];
   candidate: boolean;
   experimental: boolean;
@@ -333,6 +386,15 @@ export interface TraceableModelCatalogEntry {
   id?: string;
   version?: string;
   sendable: boolean;
+}
+
+export interface TraceableMarkdownPathRenderOptions {
+  mode?: "plain" | "relative-markdown" | "absolute-file-uri-markdown";
+  baseDir?: string;
+}
+
+export interface TraceableMarkdownRenderOptions extends TraceableMarkdownPathRenderOptions {
+  includeSupportArtifacts?: boolean;
 }
 
 type ToolLike = Pick<vscode.LanguageModelToolInformation, "name"> & Partial<Pick<vscode.LanguageModelToolInformation, "description" | "inputSchema">>;
@@ -361,6 +423,16 @@ function uniqueStrings(values: string[] | undefined): string[] {
     result.push(trimmed);
   }
   return result;
+}
+
+function parseConfiguredStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.filter((entry): entry is string => typeof entry === "string"));
+  }
+  if (typeof value !== "string") {
+    return [];
+  }
+  return uniqueStrings(value.split(/[\r\n,]/u));
 }
 
 function normalizeAgentRole(input: TraceableAgentRole | undefined): TraceableAgentRole | undefined {
@@ -397,6 +469,7 @@ const TRACEABLE_AGENT_ALLOWED_FRONTMATTER_FIELDS = new Set([
   "description",
   "argument-hint",
   "model",
+  "models",
   "tools",
   "disable-model-invocation",
   "target",
@@ -476,12 +549,14 @@ async function readTraceableAgentCatalogEntry(filePath: string, workspaceFolderN
   if (!description) {
     return undefined;
   }
+  const modelDeclarations = parseFrontmatterModelDeclarations(parsed.fields);
   return {
     displayName,
     artifactStem: path.basename(filePath, ".agent.md"),
     filePath,
     workspaceFolderName,
-    modelDeclaration: parseFrontmatterScalar(parsed.fields.get("model")),
+    modelDeclaration: modelDeclarations[0],
+    modelDeclarations,
     toolDeclarations: parseFrontmatterStringList(parsed.fields.get("tools")),
     candidate: parseFrontmatterBoolean(parsed.fields.get("candidate")),
     experimental: parseFrontmatterBoolean(parsed.fields.get("experimental")),
@@ -684,6 +759,19 @@ function parseFrontmatterStringList(rawValue: string | undefined): string[] {
     .filter(Boolean);
 }
 
+function parseFrontmatterModelDeclarations(fields: Map<string, string>): string[] {
+  const modelDeclaration = parseFrontmatterScalar(fields.get("model"));
+  const modelDeclarations = parseFrontmatterStringList(fields.get("models"));
+  if (modelDeclaration && modelDeclarations.length > 0) {
+    throw new Error("Traceable agent frontmatter must not declare both model and models.");
+  }
+  return modelDeclarations.length > 0
+    ? uniqueStrings(modelDeclarations)
+    : modelDeclaration
+      ? [modelDeclaration]
+      : [];
+}
+
 function parseFrontmatterBoolean(rawValue: string | undefined): boolean {
   return /^true$/iu.test(rawValue?.trim() ?? "");
 }
@@ -718,6 +806,51 @@ function inferModelSelectorFromDeclaration(modelDeclaration: string | undefined)
     return undefined;
   }
   return { ...selector };
+}
+
+function inferModelSelectorsFromDeclarations(modelDeclarations: readonly string[]): TraceableModelSelector[] {
+  const selectors: TraceableModelSelector[] = [];
+  const seen = new Set<string>();
+  for (const declaration of modelDeclarations) {
+    const selector = inferModelSelectorFromDeclaration(declaration);
+    if (!hasExactModelSelector(selector)) {
+      continue;
+    }
+    const key = JSON.stringify(selector);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    selectors.push(selector);
+  }
+  return selectors;
+}
+
+function getTraceableModelPolicyDeclarations(): {
+  preferred: string[];
+  blocked: Set<string>;
+} {
+  try {
+    const config = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
+    return {
+      preferred: parseConfiguredStringList(config.get("traceablePreferredModels", [])),
+      blocked: new Set(
+        parseConfiguredStringList(config.get("traceableBlockedModels", [])).map((value) => normalizeHumanModelLabel(value))
+      )
+    };
+  } catch {
+    return {
+      preferred: [],
+      blocked: new Set<string>()
+    };
+  }
+}
+
+function filterBlockedModelDeclarations(modelDeclarations: readonly string[], blockedDeclarations: ReadonlySet<string>): string[] {
+  if (blockedDeclarations.size === 0) {
+    return [...modelDeclarations];
+  }
+  return modelDeclarations.filter((declaration) => !blockedDeclarations.has(normalizeHumanModelLabel(declaration)));
 }
 
 async function resolveExplicitAgentArtifactPath(filePath: string): Promise<string | undefined> {
@@ -809,7 +942,8 @@ async function resolveTraceableAgentArtifact(agentRole: TraceableAgentRole | und
   if (!description) {
     throw new Error(`Resolved traceable agent artifact is missing a description field: ${resolvedPath}`);
   }
-  const modelDeclaration = parseFrontmatterScalar(frontmatterFields.get("model"));
+  const modelDeclarations = parseFrontmatterModelDeclarations(frontmatterFields);
+  const modelDeclaration = modelDeclarations[0];
 
   return {
     requestedName: normalizedRole.name,
@@ -818,7 +952,8 @@ async function resolveTraceableAgentArtifact(agentRole: TraceableAgentRole | und
     rawFrontmatter,
     body,
     modelDeclaration,
-    modelSelector: inferModelSelectorFromDeclaration(modelDeclaration),
+    modelDeclarations,
+    modelSelector: inferModelSelectorsFromDeclarations(modelDeclarations)[0],
     toolDeclarations: parseFrontmatterStringList(frontmatterFields.get("tools")),
     candidate: parseFrontmatterBoolean(frontmatterFields.get("candidate")),
     experimental: parseFrontmatterBoolean(frontmatterFields.get("experimental")),
@@ -910,6 +1045,8 @@ export function buildTraceableSubagentRequestEnvelope(input: TraceableSubagentIn
   const normalizedAgentRole = normalizeAgentRole(input.agentRole);
   const normalizedInputMode = normalizeTraceableInputMode(input.inputMode);
   const normalizedValidationMode = normalizeTraceableValidationMode(input.validationMode);
+  const normalizedOutputMode = normalizeTraceableOutputMode(input.outputMode);
+  const exportToFolder = input.exportToFolder?.trim();
   const parentFrame = resolveTraceableParentFrame(input);
   const request: Record<string, unknown> = {
     userInput: input.userInput,
@@ -923,6 +1060,12 @@ export function buildTraceableSubagentRequestEnvelope(input: TraceableSubagentIn
   }
   if (normalizedValidationMode) {
     request.validationMode = normalizedValidationMode;
+  }
+  if (normalizedOutputMode) {
+    request.outputMode = normalizedOutputMode;
+  }
+  if (exportToFolder) {
+    request.exportToFolder = exportToFolder;
   }
 
   if (normalizedAgentRole) {
@@ -1010,7 +1153,7 @@ export function buildTraceableSubagentPromptSections(
         : "- If budget gets tight, emit the best bounded partial or unresolved JSON object you can from the evidence already gathered rather than rereading broad file slices.",
       "- Use tools only when they materially improve grounding.",
       `- Do not call ${TRACEABLE_SUBAGENT_TOOL_NAME} from inside this lane.`,
-      "- If you rely materially on native runSubagent, report that as opaque delegation.",
+      "- Do not call native runSubagent from inside this lane.",
       "- Final output must be one JSON object and nothing else.",
       "- The JSON object must contain: steps, expectedButMissing, stopReason, completionClaim, finalSummary, and optionally opaqueDelegations.",
       `- Wrapper policy is explicit and infrastructural only: ${JSON.stringify(wrapperPolicy)}.`
@@ -1295,10 +1438,6 @@ function summarizeToolError(error: unknown): { result: TraceableToolResult; note
     result: "failure",
     note: String(error)
   };
-}
-
-function isOpaqueNativeDelegationTool(toolName: string): boolean {
-  return /^runSubagent$/i.test(toolName) || /^run_subagent$/i.test(toolName);
 }
 
 function countConsumedToolBudget(toolCalls: TraceableSubagentToolCallRecord[]): number {
@@ -1594,6 +1733,7 @@ function fallbackResult(
 ): TraceableSubagentRunResult {
   return {
     request: buildTraceableSubagentRequestEnvelope(input),
+    outputMode: normalizeTraceableOutputMode(input.outputMode) ?? (input.exportToFolder?.trim() ? "summary-with-evidence-path" : undefined),
     model: extra.model ?? null,
     allowedToolNames: extra.allowedToolNames ?? [],
     toolCalls,
@@ -1770,8 +1910,15 @@ function buildTraceableSubagentModelSelectorsFromSources(
   input: Pick<TraceableSubagentInput, "modelSelector">,
   resolvedAgentArtifact?: ResolvedTraceableAgentArtifact
 ): vscode.LanguageModelChatSelector[] {
+  const policy = getTraceableModelPolicyDeclarations();
   if (hasExactModelSelector(resolvedAgentArtifact?.modelSelector)) {
-    return [resolvedAgentArtifact.modelSelector];
+    const allowedRoleDeclarations = filterBlockedModelDeclarations(resolvedAgentArtifact.modelDeclarations, policy.blocked);
+    return inferModelSelectorsFromDeclarations(allowedRoleDeclarations);
+  }
+  const configuredDeclarations = filterBlockedModelDeclarations(policy.preferred, policy.blocked);
+  const configuredSelectors = inferModelSelectorsFromDeclarations(configuredDeclarations);
+  if (configuredSelectors.length > 0) {
+    return configuredSelectors;
   }
   return buildTraceableSubagentModelSelectors(input);
 }
@@ -1788,7 +1935,7 @@ export function selectTraceableSubagentTools<T extends ToolLike>(availableTools:
     : undefined;
   const roleScoped = inheritedAllowedSet
     ? filtered.filter((tool) => inheritedAllowedSet.has(normalizeToolReferenceKey(tool.name)))
-    : [...filtered];
+    : filtered.filter((tool) => DEFAULT_TRACEABLE_ALLOWED_TOOL_KEYS.has(normalizeToolReferenceKey(tool.name)));
   if (explicitAllowed.length === 0) {
     return roleScoped;
   }
@@ -2016,8 +2163,8 @@ export async function runTraceableSubagent(
       input,
       toolCalls,
       resolvedAgentArtifact?.modelDeclaration
-        ? `Resolved traceable agent artifact ${JSON.stringify(resolvedAgentArtifact.resolvedName)} declared model ${JSON.stringify(resolvedAgentArtifact.modelDeclaration)}, but the runtime could not translate it into an exact model selector safely. availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`
-        : `Traceable subagent model selection is not configured safely. Provide modelSelector.id explicitly. The runtime refuses implicit auto-selection to avoid hidden model-cost drift, and the current LM tool invocation API does not expose the parent chat model to this tool. availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`,
+        ? `Resolved traceable agent artifact ${JSON.stringify(resolvedAgentArtifact.resolvedName)} declared models ${summarizeJson(resolvedAgentArtifact.modelDeclarations, 220)}, but no supported unblocked declaration could be translated into an exact model selector safely. Provide modelSelector.id explicitly, adjust the role's model/models declarations, or configure tiinex.aiVscodeTools.traceablePreferredModels. availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`
+        : `Traceable subagent model selection is not configured safely. Provide modelSelector.id explicitly or configure tiinex.aiVscodeTools.traceablePreferredModels with supported human-readable model declarations. The runtime refuses implicit auto-selection to avoid hidden model-cost drift, and the current LM tool invocation API does not expose the parent chat model to this tool. availableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.available)}; sendableRuntimeModels=${summarizeModelCandidates(broadRuntimeModels.sendable)}`,
       "tool_blocked",
       "unresolved",
       {
@@ -2523,6 +2670,33 @@ export async function runTraceableSubagent(
         }
         continue;
       }
+      if (/^runSubagent$/i.test(call.name) || /^run_subagent$/i.test(call.name)) {
+        const note = "runSubagent is blocked inside TRACEABLE lanes so parent-controlled traceability remains single-lane and explicit.";
+        toolCalls.push({
+          callId: call.callId,
+          toolName: call.name,
+          argsSummary: summarizeJson(call.input),
+          result: "failure",
+          note
+        });
+        toolResultParts.push(
+          new vscode.LanguageModelToolResultPart(call.callId, [new vscode.LanguageModelTextPart(note)])
+        );
+        try {
+          options.statusReporter?.recordToolCall?.({
+            callId: call.callId,
+            toolName: call.name,
+            phase: "failure",
+            input: isRecord(call.input) ? call.input : undefined,
+            note,
+            elapsedMs: 0,
+            occurredAt: toolOccurredAt
+          });
+        } catch {
+          // Best-effort UI status only; runtime correctness should not depend on it.
+        }
+        continue;
+      }
       try {
         const toolResult = await vscode.lm.invokeTool(call.name, {
           input: isRecord(call.input) ? call.input : {},
@@ -2531,13 +2705,6 @@ export async function runTraceableSubagent(
         const toolElapsedMs = Date.now() - toolStartedAtMs;
 
         runnableToolCallsThisIteration += 1;
-
-        if (isOpaqueNativeDelegationTool(call.name)) {
-          opaqueDelegations.push({
-            toolName: call.name,
-            note: "Native runSubagent delegation remains opaque from the parent trace lane."
-          });
-        }
 
         toolCalls.push({
           callId: call.callId,
@@ -2731,7 +2898,166 @@ export async function runTraceableSubagent(
   });
 }
 
-export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResult): string {
+function encodeMarkdownHrefPath(value: string): string {
+  return normalizeArtifactPath(value)
+    .split("/")
+    .map((segment) => segment === "." || segment === ".." ? segment : encodeURIComponent(segment))
+    .join("/");
+}
+
+function formatTraceablePathReference(
+  filePath: string | undefined,
+  options: TraceableMarkdownPathRenderOptions | undefined,
+  fallback = "-"
+): string {
+  const trimmed = filePath?.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const mode = options?.mode ?? "plain";
+  if (mode === "plain") {
+    return trimmed;
+  }
+  const label = path.basename(trimmed);
+  if (mode === "absolute-file-uri-markdown") {
+    return `[${label}](${vscode.Uri.file(trimmed).toString()})`;
+  }
+  const baseDir = options?.baseDir?.trim();
+  if (!baseDir) {
+    return trimmed;
+  }
+  const relativePath = path.relative(baseDir, trimmed);
+  if (!relativePath) {
+    return `[${label}](${encodeMarkdownHrefPath(path.join("..", label))})`;
+  }
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return `[${label}](${vscode.Uri.file(trimmed).toString()})`;
+  }
+  const normalizedRelativePath = encodeMarkdownHrefPath(relativePath);
+  return `[${label}](${normalizedRelativePath})`;
+}
+
+function mapPathLikeFields(value: unknown, options: TraceableMarkdownPathRenderOptions | undefined): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => mapPathLikeFields(entry, options));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const mapped: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (typeof entry === "string" && /(?:^|_)(file_path|filepath|debug_log_path|debuglogpath|export_to_folder|exporttofolder)$/iu.test(key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`))) {
+      mapped[key] = options?.mode === "relative-markdown"
+        ? (() => {
+          const relativePath = normalizeArtifactPath(path.relative(options.baseDir ?? path.dirname(entry), entry)) || path.basename(entry);
+          return relativePath.startsWith("..") ? vscode.Uri.file(entry).toString() : relativePath;
+        })()
+        : options?.mode === "absolute-file-uri-markdown"
+          ? vscode.Uri.file(entry).toString()
+          : entry;
+      continue;
+    }
+    mapped[key] = mapPathLikeFields(entry, options);
+  }
+  return mapped;
+}
+
+function collectTraceableTextRewritePaths(value: unknown, paths = new Set<string>(), parentKey?: string): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectTraceableTextRewritePaths(entry, paths, parentKey);
+    }
+    return paths;
+  }
+  if (!value || typeof value !== "object") {
+    return paths;
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, entry] of Object.entries(record)) {
+    const normalizedKey = key.replace(/[A-Z]/g, (match) => `_${match.toLowerCase()}`);
+    if (typeof entry === "string" && /(?:^|_)(file_path|filepath|debug_log_path|debuglogpath|export_to_folder|exporttofolder)$/iu.test(normalizedKey)) {
+      const trimmed = entry.trim();
+      if (trimmed) {
+        paths.add(trimmed);
+      }
+      continue;
+    }
+    collectTraceableTextRewritePaths(entry, paths, normalizedKey);
+  }
+  return paths;
+}
+
+function rewriteTraceableTextPathMentions(
+  text: string,
+  result: TraceableSubagentRunResult,
+  options: TraceableMarkdownPathRenderOptions | undefined
+): string {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const candidatePaths = Array.from(collectTraceableTextRewritePaths(result.request));
+  if (result.debugLogPath?.trim()) {
+    candidatePaths.push(result.debugLogPath.trim());
+  }
+  if (result.evidenceFile?.filePath?.trim()) {
+    const evidenceFilePath = result.evidenceFile.filePath.trim();
+    candidatePaths.push(evidenceFilePath, path.dirname(evidenceFilePath));
+  }
+  const uniqueCandidates = Array.from(new Set(candidatePaths
+    .filter(Boolean)
+    .flatMap((candidatePath) => candidatePath.includes("\\")
+      ? [candidatePath, candidatePath.replace(/\\/g, "\\\\")]
+      : [candidatePath]))).sort((left, right) => right.length - left.length);
+  let rewritten = trimmed;
+  for (const candidatePath of uniqueCandidates) {
+    const rendered = formatTraceablePathReference(candidatePath.replace(/\\\\/g, "\\"), options, candidatePath);
+    rewritten = rewritten.split(candidatePath).join(rendered);
+  }
+  return rewritten;
+}
+
+function summarizeEvidenceFile(state: TraceableSubagentEvidenceFileState | undefined, options?: TraceableMarkdownPathRenderOptions): string {
+  if (!state || state.status === "idle") {
+    return "-";
+  }
+  const parts: string[] = [state.status];
+  if (state.filePath) {
+    parts.push(formatTraceablePathReference(state.filePath, options));
+  }
+  if (state.error) {
+    parts.push(state.error);
+  }
+  return parts.join(" | ");
+}
+
+function renderTraceableSubagentEvidencePathOnly(result: TraceableSubagentRunResult, options?: TraceableMarkdownPathRenderOptions): string {
+  const evidenceFile = result.evidenceFile;
+  const finalSummary = rewriteTraceableTextPathMentions(result.finalSummary, result, options);
+  const lines = [
+    "# Traceable Subagent Result",
+    "",
+    `- Stop Reason: ${result.stopReason}`,
+    `- Completion Claim: ${result.completionClaim}`,
+    `- Final Summary: ${finalSummary}`,
+    `- Evidence File Status: ${evidenceFile?.status ?? "idle"}`,
+    `- Evidence File: ${formatTraceablePathReference(evidenceFile?.filePath, options)}`
+  ];
+  if (evidenceFile?.error) {
+    lines.push(`- Evidence File Error: ${evidenceFile.error}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResult, options?: TraceableMarkdownRenderOptions): string {
+  const outputMode = normalizeTraceableOutputMode(result.outputMode ?? result.request.outputMode);
+  if (outputMode === "full-markdown-with-evidence-path" && result.evidenceMarkdown?.trim()) {
+    return `${result.evidenceMarkdown.trimEnd()}\n`;
+  }
+  if (outputMode === "evidence-path-only") {
+    return renderTraceableSubagentEvidencePathOnly(result, options);
+  }
   const validationIssues = result.validationIssues ?? [];
   const recentSteps = result.steps.slice(0, 6);
   const completedStepCount = result.steps.filter((step) => step.status === "completed").length;
@@ -2739,8 +3065,9 @@ export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResu
   const iterationCount = result.iterationMetrics?.length ?? 0;
   const observedReadTargets = extractObservedReadTargets(result.toolCalls);
   const quickReadScope = summarizeObservedScope(observedReadTargets);
-  const quickReadConclusion = truncate(result.finalSummary.trim() || "No final summary recorded.", 180);
-  const quickReadMissing = summarizeMissingSignal(result.expectedButMissing);
+  const rewrittenFinalSummary = rewriteTraceableTextPathMentions(result.finalSummary, result, options);
+  const quickReadConclusion = truncate(rewrittenFinalSummary || "No final summary recorded.", 180);
+  const quickReadMissing = rewriteTraceableTextPathMentions(summarizeMissingSignal(result.expectedButMissing), result, options);
   const usageSummary = summarizeUsage(result);
   const elapsedSummary = formatElapsedMs(result.elapsedMs);
   const completedStepsSummary = result.steps.length > 0
@@ -2773,12 +3100,13 @@ export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResu
     `- Trace Status: ${result.traceStatus}`,
     `- Stop Reason: ${result.stopReason}`,
     `- Completion Claim: ${result.completionClaim}`,
-    `- Final Summary: ${result.finalSummary}`,
+    `- Final Summary: ${rewrittenFinalSummary}`,
     `- Validation Issues: ${validationIssues.length > 0 ? validationIssues.join(" | ") : "-"}`,
     `- Model: ${result.model ? `${result.model.vendor}/${result.model.family}/${result.model.id}` : "-"}`,
     `- Usage: ${usageSummary}`,
     `- Elapsed: ${elapsedSummary}`,
-    `- Debug Log: ${result.debugLogPath ?? "-"}`,
+    `- Output Mode: ${outputMode ?? "summary-without-export"}`,
+    `- Evidence File: ${summarizeEvidenceFile(result.evidenceFile, options)}`,
     `- Allowed Tool Count: ${result.allowedToolNames.length}`,
     `- Runtime Tool Calls: ${result.toolCalls.length}`,
     ""
@@ -2828,8 +3156,8 @@ export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResu
     lines.push("", "## Expected But Missing");
 
     for (const item of result.expectedButMissing) {
-      const label = item.label?.trim() || item.kind;
-      const reason = item.reason?.trim();
+      const label = rewriteTraceableTextPathMentions(item.label?.trim() || item.kind, result, options);
+      const reason = item.reason?.trim() ? rewriteTraceableTextPathMentions(item.reason.trim(), result, options) : undefined;
       lines.push(`- ${label}${reason ? `: ${reason}` : ""}`);
     }
   }
@@ -2857,7 +3185,15 @@ export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResu
     "",
   );
 
-  appendBoundedJsonPreview(lines, "### Request Contract Preview", result.request);
+  if (options?.includeSupportArtifacts !== false && result.debugLogPath?.trim()) {
+    lines.push(
+      "### Support Artifacts",
+      `- Debug Log: ${formatTraceablePathReference(result.debugLogPath, options)}`,
+      ""
+    );
+  }
+
+  appendBoundedJsonPreview(lines, "### Request Contract Preview", mapPathLikeFields(result.request, options));
   lines.push("");
   appendBoundedJsonPreview(lines, "### Runtime Tool Ledger Preview", result.toolCalls);
   lines.push("");
@@ -2872,7 +3208,7 @@ export function renderTraceableSubagentMarkdown(result: TraceableSubagentRunResu
     opaqueDelegations: result.opaqueDelegations,
     stopReason: result.stopReason,
     completionClaim: result.completionClaim,
-    finalSummary: result.finalSummary
+    finalSummary: rewrittenFinalSummary
   });
 
   if (result.rawModelText?.trim()) {

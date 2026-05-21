@@ -29,15 +29,19 @@ import { loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
 import { closeVisibleEditorChatTabsForSession } from "./chatInterop/editorTabLifecycle";
 import type { TraceableSubagentInput, TraceableSubagentRequestSummaryItem } from "./traceableSubagent";
+import { renderTraceableSubagentMarkdown } from "./traceableSubagent";
+import { parseTraceableEvidenceStateMarkdown, TraceableSubagentEvidenceController } from "./traceableSubagentEvidence";
 import { TraceableSubagentStatusBarController } from "./traceableSubagentStatusBar";
 import { TraceableSubagentStatusDetailController } from "./traceableSubagentStatusDetail";
 import {
   TRACEABLE_SUBAGENT_PANEL_CONTAINER_ID,
   TraceableSubagentStatusPanelProvider,
+  renderTraceableSubagentPanelHtml,
   TRACEABLE_SUBAGENT_PANEL_VIEW_ID
 } from "./traceableSubagentStatusPanel";
 
 const OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND = "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail";
+const OPEN_TRACEABLE_EVIDENCE_EDITOR_COMMAND = "tiinex.aiVscodeTools.openTraceableEvidenceEditor";
 const TRACEABLE_PANEL_VISIBLE_CONTEXT = "tiinex.aiVscodeTools.traceablePanelVisible";
 const TRACEABLE_PANEL_FALLBACK_COMMAND = "workbench.action.terminal.focus";
 
@@ -138,6 +142,37 @@ function describeTraceableModeSummary(
   return `${inputModeDescription}\n${validationModeDescription}\nDeclared mode code: ${formatTraceableModeSummaryValue(inputMode, validationMode)}`;
 }
 
+function describeTraceableOutputMode(mode: TraceableSubagentInput["outputMode"], exportToFolder: string | undefined): {
+  value: string;
+  title: string;
+} | undefined {
+  const normalizedFolder = exportToFolder?.trim();
+  switch (mode) {
+    case "summary-with-evidence-path":
+      return {
+        value: "summary + path",
+        title: `Return the compact TRACEABLE result and include evidence path metadata.${normalizedFolder ? `\nExport folder: ${normalizedFolder}` : "\nTool-triggered export requires exportToFolder. Use the Export button for interactive folder picking."}`
+      };
+    case "full-markdown-with-evidence-path":
+      return {
+        value: "full + path",
+        title: `Return the full raw evidence markdown inline and include evidence path metadata.${normalizedFolder ? `\nExport folder: ${normalizedFolder}` : "\nTool-triggered export requires exportToFolder. Use the Export button for interactive folder picking."}`
+      };
+    case "evidence-path-only":
+      return {
+        value: "path only",
+        title: `Return only the bounded completion summary plus evidence path metadata.${normalizedFolder ? `\nExport folder: ${normalizedFolder}` : "\nTool-triggered export requires exportToFolder. Use the Export button for interactive folder picking."}`
+      };
+    default:
+      return normalizedFolder
+        ? {
+          value: "summary + path",
+          title: `Evidence export requested with the default summary-with-evidence-path mode.\nExport folder: ${normalizedFolder}`
+        }
+        : undefined;
+  }
+}
+
 export function buildTraceableRequestSummary(input: TraceableSubagentInput): TraceableSubagentRequestSummaryItem[] {
   const summary: TraceableSubagentRequestSummaryItem[] = [];
   const parentFrame = input.parentFrame?.trim() || input.parentTask?.trim() || "";
@@ -170,6 +205,14 @@ export function buildTraceableRequestSummary(input: TraceableSubagentInput): Tra
       title: validationModeDescription
     });
     }
+  }
+  const outputModeSummary = describeTraceableOutputMode(input.outputMode, input.exportToFolder);
+  if (outputModeSummary) {
+    summary.push({
+      label: "Output",
+      value: outputModeSummary.value,
+      title: outputModeSummary.title
+    });
   }
   if (input.agentRole?.name?.trim()) {
     summary.push({
@@ -960,6 +1003,88 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let traceablePanelRestoreCommand: string | undefined;
   let traceablePanelPinnedOpen = false;
   const traceableStatusDetail = new TraceableSubagentStatusDetailController();
+  const traceableEvidence = new TraceableSubagentEvidenceController({
+    header: {
+      agentName: "Trace lane",
+      agentFilePath: "",
+      agentResolved: false,
+      modelLabel: "model",
+      candidate: false,
+      experimental: false,
+      humanRole: false,
+      toolsetNames: [],
+      selectedToolNames: [],
+      toolSelectionRestricted: false
+    },
+    status: { phase: "idle", message: "idle" },
+    evidenceFile: { status: "idle" },
+    requestSummary: [],
+    statusHistory: [],
+    recentTools: [],
+    startedAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString()
+  });
+  const openTraceableFile = async (filePath: string, startLine?: number, endLine?: number): Promise<void> => {
+    const normalizedPath = filePath.trim();
+    if (/\.md$/iu.test(normalizedPath) && !Number.isInteger(startLine) && !Number.isInteger(endLine)) {
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(normalizedPath));
+      return;
+    }
+    const targetLine = Number.isInteger(startLine) ? Math.max(0, (startLine ?? 1) - 1) : 0;
+    const targetEndLine = Number.isInteger(endLine) ? Math.max(targetLine, (endLine ?? startLine ?? 1) - 1) : targetLine;
+    await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(normalizedPath), {
+      preview: false,
+      preserveFocus: false,
+      selection: new vscode.Range(targetLine, 0, targetEndLine, 0)
+    });
+  };
+  const openTraceableEvidenceEditor = async (target?: vscode.Uri | string): Promise<void> => {
+    const resolvedUri = target instanceof vscode.Uri
+      ? target
+      : typeof target === "string" && target.trim()
+        ? vscode.Uri.file(target.trim())
+        : vscode.window.activeTextEditor?.document.uri;
+    if (!resolvedUri || resolvedUri.scheme !== "file" || !resolvedUri.fsPath.toLowerCase().endsWith(".trace.md")) {
+      void vscode.window.showWarningMessage("Open a .trace.md evidence file first, or pass one explicitly.");
+      return;
+    }
+    const markdown = await fs.readFile(resolvedUri.fsPath, "utf8");
+    const parsedState = parseTraceableEvidenceStateMarkdown(markdown);
+    if (!parsedState) {
+      void vscode.window.showErrorMessage("This TRACEABLE evidence file does not contain a readable Traceable State block.");
+      return;
+    }
+    const panel = vscode.window.createWebviewPanel(
+      "tiinexTraceableEvidenceEditor",
+      path.basename(resolvedUri.fsPath),
+      {
+        viewColumn: vscode.ViewColumn.Active,
+        preserveFocus: false
+      },
+      {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist")],
+        retainContextWhenHidden: true
+      }
+    );
+    const codiconCssHref = panel.webview.asWebviewUri(
+      vscode.Uri.joinPath(context.extensionUri, "node_modules", "@vscode", "codicons", "dist", "codicon.css")
+    ).toString();
+    panel.webview.html = renderTraceableSubagentPanelHtml(parsedState.snapshot, codiconCssHref, {
+      pinnedOpen: true,
+      hideToolbarControls: true
+    });
+    panel.webview.onDidReceiveMessage(async (message) => {
+      if (!message || typeof message.type !== "string") {
+        return;
+      }
+      if (message.type === "openFile" && typeof message.filePath === "string") {
+        const startLine = typeof message.startLine === "number" ? message.startLine : undefined;
+        const endLine = typeof message.endLine === "number" ? message.endLine : undefined;
+        await openTraceableFile(message.filePath, startLine, endLine);
+      }
+    });
+  };
   const hideTraceablePanel = async (options: { restoreFocus?: boolean; hideStatusBar?: boolean; resetKeepOpen?: boolean } = {}): Promise<void> => {
     await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
     if (options.hideStatusBar) {
@@ -976,17 +1101,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const traceableStatusPanel = new TraceableSubagentStatusPanelProvider(
     context.extensionUri,
     async () => {
-      await traceableStatusDetail.exportToDocument();
+      await traceableEvidence.exportCurrentSnapshotViaDialog();
+      const snapshot = traceableEvidence.getSnapshot();
+      traceableStatusDetail.update(snapshot);
+      traceableStatusPanel.update(snapshot);
     },
-    async (filePath, startLine, endLine) => {
-      const targetLine = Number.isInteger(startLine) ? Math.max(0, (startLine ?? 1) - 1) : 0;
-      const targetEndLine = Number.isInteger(endLine) ? Math.max(targetLine, (endLine ?? startLine ?? 1) - 1) : targetLine;
-      await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(filePath), {
-        preview: false,
-        preserveFocus: false,
-        selection: new vscode.Range(targetLine, 0, targetEndLine, 0)
-      });
-    },
+    openTraceableFile,
     async () => {
       await hideTraceablePanel({ restoreFocus: true, hideStatusBar: true, resetKeepOpen: true });
       traceableStatusPanel.setPinnedOpen(false);
@@ -1022,8 +1142,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await hideTraceablePanel();
     },
     updateDetailView: (snapshot) => {
-      traceableStatusDetail.update(snapshot);
-      traceableStatusPanel.update(snapshot);
+      const enrichedSnapshot = traceableEvidence.updateSnapshot(snapshot);
+      traceableStatusDetail.update(enrichedSnapshot);
+      traceableStatusPanel.update(enrichedSnapshot);
     }
   });
   const tree = new SessionInspectorTreeDataProvider(
@@ -1034,6 +1155,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider("tiinex-traceable-subagent-status", traceableStatusDetail),
     vscode.commands.registerCommand(OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND, async () => {
       await revealTraceablePanel("manual");
+    }),
+    vscode.commands.registerCommand(OPEN_TRACEABLE_EVIDENCE_EDITOR_COMMAND, async (target?: vscode.Uri | string) => {
+      await openTraceableEvidenceEditor(target);
     }),
     vscode.window.registerWebviewViewProvider(TRACEABLE_SUBAGENT_PANEL_VIEW_ID, traceableStatusPanel, {
       webviewOptions: { retainContextWhenHidden: true }
@@ -1081,7 +1205,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       modelLabel: input.modelSelector?.id
     });
     reporter.setRequestSummary?.(buildTraceableRequestSummary(input));
-    return reporter;
+    return {
+      statusReporter: reporter,
+      beforeRun: async () => {
+        await traceableEvidence.prepareRequestedExport(input);
+        const snapshot = traceableEvidence.getSnapshot();
+        traceableStatusDetail.update(snapshot);
+        traceableStatusPanel.update(snapshot);
+      },
+      afterRun: async (result) => {
+        const finalized = await traceableEvidence.finalizeRequestedExport(result, renderTraceableSubagentMarkdown(result));
+        const snapshot = traceableEvidence.getSnapshot();
+        traceableStatusDetail.update(snapshot);
+        traceableStatusPanel.update(snapshot);
+        return finalized;
+      }
+    };
   });
   registerCommands(context, adapter, tree, chatInterop);
 }

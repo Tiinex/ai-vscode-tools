@@ -17,6 +17,7 @@ const ALWAYS_ALLOWED_RUNTIME_FIELDS = new Set([
   "name",
   "description",
   "model",
+  "models",
   "target",
   "disable-model-invocation",
   "tools",
@@ -93,6 +94,9 @@ export function auditRuntimeAgentArtifactText(text: string): RuntimeArtifactAudi
       if (!ALWAYS_ALLOWED_RUNTIME_FIELDS.has(key) && !CONDITIONALLY_ALLOWED_RUNTIME_FIELDS.has(key)) {
         failureReasons.push(`unsupported_frontmatter_field:${key}`);
       }
+    }
+    if (frontmatterKeys.includes("model") && frontmatterKeys.includes("models")) {
+      failureReasons.push("conflicting_model_and_models_frontmatter");
     }
   }
 

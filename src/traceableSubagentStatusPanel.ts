@@ -1041,6 +1041,8 @@ function deriveStatusTransparencyNote(entry: Extract<PanelActivityEntry, { kind:
   switch (entry.message) {
     case "starting":
       return "Initializing trace lane state.";
+    case "queued":
+      return "Waiting for the traceable single-flight queue to hand this lane the active slot.";
     case "resolving role":
       return "Resolving the requested role artifact before the child lane starts.";
     case "selecting model":
@@ -1570,16 +1572,67 @@ function renderPanelEmptyState(snapshot: TraceableSubagentDetailSnapshot): strin
   ].join("");
 }
 
+function evidenceViewState(snapshot: TraceableSubagentDetailSnapshot): {
+  showExport: boolean;
+  showView: boolean;
+  buttonClass: string;
+  buttonTitle: string;
+  filePath?: string;
+  liveIndicator: boolean;
+} {
+  const evidenceFile = snapshot.evidenceFile;
+  const filePath = evidenceFile?.filePath?.trim();
+  const readableArtifact = Boolean(filePath);
+  if (!evidenceFile || evidenceFile.status === "idle") {
+    return {
+      showExport: true,
+      showView: false,
+      buttonClass: "toolbar-button",
+      buttonTitle: "Export raw markdown evidence",
+      liveIndicator: false
+    };
+  }
+  if (evidenceFile.status === "writing") {
+    return {
+      showExport: false,
+      showView: readableArtifact,
+      buttonClass: "toolbar-button toolbar-button-export-live",
+      buttonTitle: "View RAW markdown evidence file",
+      filePath,
+      liveIndicator: readableArtifact
+    };
+  }
+  if (evidenceFile.status === "ready") {
+    return {
+      showExport: false,
+      showView: readableArtifact,
+      buttonClass: "toolbar-button toolbar-button-export-ready",
+      buttonTitle: "View RAW markdown evidence file",
+      filePath,
+      liveIndicator: false
+    };
+  }
+  return {
+    showExport: !readableArtifact,
+    showView: readableArtifact,
+    buttonClass: "toolbar-button toolbar-button-export-failed",
+    buttonTitle: readableArtifact ? "View RAW markdown evidence file" : "Export raw markdown evidence",
+    filePath,
+    liveIndicator: false
+  };
+}
+
 export function renderTraceableSubagentPanelHtml(
   snapshot: TraceableSubagentDetailSnapshot,
   codiconCssHref?: string,
-  options: { pinnedOpen?: boolean } = {}
+  options: { pinnedOpen?: boolean; hideToolbarControls?: boolean } = {}
 ): string {
   const activities = buildActivityEntries(snapshot);
   const renderedEntries = groupActivityEntries(activities);
   const hasActivityFeed = renderedEntries.length > 0;
   const pinnedOpen = options.pinnedOpen === true;
-  const showExport = snapshot.status.phase !== "running";
+  const hideToolbarControls = options.hideToolbarControls === true;
+  const evidenceState = evidenceViewState(snapshot);
   const eventRows = hasActivityFeed
     ? renderedEntries.map((event) => renderActivityRow(event)).join("")
     : renderPanelEmptyState(snapshot);
@@ -1832,6 +1885,23 @@ export function renderTraceableSubagentPanelHtml(
       font: inherit;
     }
     .toolbar-button:hover { background: var(--chip-bg); }
+    .toolbar-button-export-live {
+      border-color: color-mix(in srgb, var(--vscode-errorForeground) 66%, var(--chip-border));
+    }
+    .toolbar-button-export-ready {
+      border-color: color-mix(in srgb, var(--vscode-terminal-ansiGreen) 60%, var(--chip-border));
+    }
+    .toolbar-button-export-failed {
+      border-color: color-mix(in srgb, var(--vscode-errorForeground) 40%, var(--chip-border));
+    }
+    .toolbar-live-indicator {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--vscode-errorForeground);
+      align-self: center;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-errorForeground) 20%, transparent);
+    }
     .meta {
       display: flex;
       flex-wrap: wrap;
@@ -2611,10 +2681,16 @@ export function renderTraceableSubagentPanelHtml(
           ${renderHeaderMetadataBadges(snapshot)}
         </div>
         <div class="toolbar">
-          ${showExport ? `<button class="toolbar-button" data-message='{"type":"exportMarkdown"}' title="Export full evidence as markdown">Export</button>` : ""}
+          ${hideToolbarControls
+            ? ""
+            : `${evidenceState.liveIndicator ? `<span class="toolbar-live-indicator" title="Evidence export is actively updating"></span>` : ""}
+          ${evidenceState.showExport ? `<button class="toolbar-button" data-message='{"type":"exportMarkdown"}' title="Export raw markdown evidence">Export</button>` : ""}
+          ${evidenceState.showView && evidenceState.filePath
+            ? `<button class="${evidenceState.buttonClass}" data-message='${escapeHtml(JSON.stringify({ type: "openFile", filePath: evidenceState.filePath }))}' title="${escapeHtml(evidenceState.buttonTitle)}">View</button>`
+            : ""}
           ${pinnedOpen
             ? `<button class="toolbar-button" data-message='{"type":"closePanel"}' title="Hide the traceable panel until it is reopened from the status bar">Close</button>`
-            : `<button class="toolbar-button" data-message='{"type":"stayOpen"}' title="Keep TRACEABLE open and suppress auto-hide until you close it manually">Stay</button>`}
+            : `<button class="toolbar-button" data-message='{"type":"stayOpen"}' title="Keep TRACEABLE open and suppress auto-hide until you close it manually">Stay</button>`}`}
         </div>
       </div>
       <div class="meta">

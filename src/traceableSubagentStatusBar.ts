@@ -171,6 +171,9 @@ function formatStatusSegments(message: string): string[] {
   if (!trimmed) {
     return ["working"];
   }
+  if (/^queued$/i.test(trimmed)) {
+    return ["queued"];
+  }
   const readingMatch = /^reading\s+(.+)$/i.exec(trimmed);
   if (readingMatch) {
     return ["reading", readingMatch[1].trim()];

@@ -127,6 +127,12 @@
       {
         "command": "tiinex.aiVscodeTools.sendMessageToLiveChat",
         "title": "Tiinex: Send Message To Local Chat"
+      },
+      {
+        "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
+        "title": "Tiinex: Open Reconstructed Traceable View",
+        "shortTitle": "Open Traceable View",
+        "icon": "$(open-preview)"
       }
     ],
     "views": {
@@ -202,10 +208,40 @@
           ],
           "default": "yes",
           "description": "Control whether TRACEABLE hides automatically when the transient status-bar run clears. `yes` hides the panel together with the transient status surface unless you explicitly reopened TRACEABLE to keep it open, and `no` leaves the panel open until you close it manually."
+        },
+        "tiinex.aiVscodeTools.traceablePreferredModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Ordered TRACEABLE fallback model declarations to try when a run does not provide modelSelector.id and the resolved agent role does not pin a supported model. Use the same human-readable declaration syntax as agent frontmatter model/models, for example `GPT-5 mini (copilot)` or `GPT-5.4 mini (copilot)`."
+        },
+        "tiinex.aiVscodeTools.traceableBlockedModels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "TRACEABLE model declarations to block from role-driven or settings-driven automatic selection. This does not override an explicit caller-provided modelSelector.id. Use the same human-readable declaration syntax as agent frontmatter model/models."
         }
       }
     },
     "menus": {
+      "explorer/context": [
+        {
+          "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
+          "when": "resourceFilename =~ /\\.trace\\.md$/",
+          "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
+          "when": "resourceFilename =~ /\\.trace\\.md$/",
+          "group": "navigation@-1000"
+        }
+      ],
       "view/title": [
         {
           "command": "tiinex.aiVscodeTools.refreshSessions",

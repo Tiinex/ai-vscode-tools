@@ -4,7 +4,7 @@ import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, t
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
 import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
-import { RejectingMutex } from "./chatInterop/mutex";
+import { QueuedMutex, RejectingMutex } from "./chatInterop/mutex";
 import { probeLocalReopenCandidates, renderLocalReopenProbeMarkdown } from "./chatInterop/reopenProbe";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
 import { getExactDeleteSelfTargetingReason, getExactDeleteTerminalBoundSessionId, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
@@ -41,6 +41,7 @@ import {
   renderTraceableSubagentMarkdown,
   runTraceableSubagent,
   TRACEABLE_SUBAGENT_TOOL_NAME,
+  type TraceableSubagentRunResult,
   type TraceableSubagentStatusReporter,
   type TraceableSubagentInput
 } from "./traceableSubagent";
@@ -50,6 +51,7 @@ type DetailLevel = "summary" | "full";
 type AnchorOccurrence = "first" | "last";
 
 const liveChatToolMutex = new RejectingMutex();
+const traceableSubagentToolMutex = new QueuedMutex();
 
 interface ToolContribution {
   name: string;
@@ -834,7 +836,7 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     name: TRACEABLE_SUBAGENT_TOOL_NAME,
     displayName: "Run Traceable Subagent",
     userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
-    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentFrame, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, and treats native runSubagent delegation as opaque rather than fully trace-supported. Prefer non-leading parent framing: use userInput as the source wording or material to inspect rather than the desired answer shape, and let parentFrame carry the bounded investigative contract without smuggling in the target conclusion. Legacy parentTask input is still accepted as a compatibility alias. When agentRole is provided, the runtime resolves a workspace .agent.md artifact and grounds the child from both its frontmatter and body. To avoid hidden model-cost drift, the runtime uses the agent artifact's declared model when it can translate it deterministically; otherwise it requires an exact model id in modelSelector.id and does not auto-select a fallback model. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
+    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentFrame, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, blocks native runSubagent delegation inside the lane, and serializes concurrent run_traceable_subagent invocations through a single-flight queue so traceability stays explicit even when parent agents try to parallelize. Prefer non-leading parent framing: use userInput as the source wording or material to inspect rather than the desired answer shape, and let parentFrame carry the bounded investigative contract without smuggling in the target conclusion. Legacy parentTask input is still accepted as a compatibility alias. When agentRole is provided, the runtime resolves a workspace .agent.md artifact and grounds the child from both its frontmatter and body. To avoid hidden model-cost drift, the runtime uses the agent artifact's declared model when it can translate it deterministically; otherwise it requires an exact model id in modelSelector.id and does not auto-select a fallback model. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
     toolReferenceName: "runTraceableSubagent",
     inputSchema: {
       type: "object",
@@ -860,6 +862,15 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
           type: "string",
           description: "Declarative validation mode for behavior-mode mismatches. WARN keeps the lane running but records a visible warning; ERROR stops before model execution. NON_LEADING_EPISTEMIC requires WARN or ERROR. Neither mode rewrites the original userInput or parentFrame text.",
           enum: ["NONE", "WARN", "ERROR"]
+        },
+        outputMode: {
+          type: "string",
+          description: "Controls what the parent receives back when evidence export is active. Tool-triggered export requires exportToFolder; interactive folder picking is reserved for the TRACEABLE Export button.",
+          enum: ["summary-with-evidence-path", "full-markdown-with-evidence-path", "evidence-path-only"]
+        },
+        exportToFolder: {
+          type: "string",
+          description: "Optional absolute folder path where the evidence markdown artifact should be created immediately. Required when outputMode requests tool-triggered export; otherwise use the TRACEABLE Export button for interactive folder picking."
         },
         reveal: {
           type: "boolean",
@@ -1822,6 +1833,34 @@ class ReadOnlyTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 }
 
+class QueuedReadOnlyTool<TInput> implements vscode.LanguageModelTool<TInput> {
+  constructor(
+    private readonly displayName: string,
+    private readonly invocationMessage: (input: TInput) => string,
+    private readonly invokeImpl: (input: TInput, budget: number, preparedState?: unknown) => Promise<string>,
+    private readonly mutex: QueuedMutex,
+    private readonly prepareInvoke?: (input: TInput) => Promise<unknown> | unknown
+  ) {}
+
+  prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<TInput>): vscode.PreparedToolInvocation {
+    return {
+      invocationMessage: this.invocationMessage(options.input)
+    };
+  }
+
+  async invoke(options: vscode.LanguageModelToolInvocationOptions<TInput>): Promise<vscode.LanguageModelToolResult> {
+    const preparedState = await this.prepareInvoke?.(options.input);
+    const lease = await this.mutex.acquire(`${this.displayName} invocation`);
+    const budget = outputBudget(options.tokenizationOptions?.tokenBudget);
+    try {
+      const content = await this.invokeImpl(options.input, budget, preparedState);
+      return textResult(content);
+    } finally {
+      lease.release();
+    }
+  }
+}
+
 class LiveChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   constructor(
     private readonly invocationMessage: (input: TInput) => string,
@@ -1890,7 +1929,11 @@ export function registerLanguageModelTools(
   context: vscode.ExtensionContext,
   adapter: SessionToolsAdapter,
   chatInterop?: ChatInteropApi,
-  createTraceableStatusReporter?: (input: TraceableSubagentInput) => TraceableSubagentStatusReporter | undefined
+  createTraceableRunHooks?: (input: TraceableSubagentInput) => {
+    statusReporter?: TraceableSubagentStatusReporter;
+    beforeRun?: () => Promise<void>;
+    afterRun?: (result: TraceableSubagentRunResult) => Promise<TraceableSubagentRunResult>;
+  } | undefined
 ): void {
   const currentWorkspaceStorageRoots = (() => {
     if (!context.storageUri) {
@@ -2254,16 +2297,25 @@ export function registerLanguageModelTools(
     ),
     vscode.lm.registerTool(
       TRACEABLE_SUBAGENT_TOOL_NAME,
-      new ReadOnlyTool<TraceableSubagentInput>(
+      new QueuedReadOnlyTool<TraceableSubagentInput>(
         "Run Traceable Subagent",
         (input) => traceableSubagentInvocationMessage(input),
-        async (input) => {
-          const statusReporter = createTraceableStatusReporter?.(input);
-          return renderTraceableSubagentMarkdown(await runTraceableSubagent(input, {
+        async (input, _budget, preparedState) => {
+          const runHooks = preparedState as ReturnType<NonNullable<typeof createTraceableRunHooks>> | undefined;
+          await runHooks?.beforeRun?.();
+          const result = await runTraceableSubagent(input, {
             accessInformation: context.languageModelAccessInformation,
             debugLogDir: context.globalStorageUri.fsPath,
-            statusReporter
-          }));
+            statusReporter: runHooks?.statusReporter
+          });
+          const finalResult = runHooks?.afterRun ? await runHooks.afterRun(result) : result;
+          return renderTraceableSubagentMarkdown(finalResult);
+        },
+        traceableSubagentToolMutex,
+        (input) => {
+          const runHooks = createTraceableRunHooks?.(input);
+          runHooks?.statusReporter?.update("queued");
+          return runHooks;
         }
       )
     ),
