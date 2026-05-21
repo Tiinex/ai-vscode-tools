@@ -83,10 +83,7 @@ const expectedLanguageModelToolNames = [
   "estimate_agent_context_breakdown",
   "get_agent_session_profile",
   "survey_agent_sessions",
-  "list_traceable_agents",
   "list_traceable_models",
-  "view_traceable_subagent",
-  "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
@@ -118,10 +115,7 @@ const expectedExtensionCommandNames = [
 ];
 
 const liveToolManifestParityNames = new Set([
-  "list_traceable_agents",
   "list_traceable_models",
-  "view_traceable_subagent",
-  "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
@@ -3476,6 +3470,29 @@ async function runOfflineLocalChatCleanupChecks() {
       this.id = id;
     }
   };
+  vscodeModule.workspace ??= {};
+  vscodeModule.window ??= {};
+  vscodeModule.commands ??= {};
+  vscodeModule.workspace.openTextDocument ??= async (value) => ({ uri: value });
+  vscodeModule.workspace.textDocuments ??= [];
+  vscodeModule.workspace.findFiles ??= async () => [];
+  vscodeModule.window.showTextDocument ??= async (document) => document;
+  vscodeModule.window.tabGroups ??= { activeTabGroup: { activeTab: undefined }, all: [] };
+  vscodeModule.window.tabGroups.activeTabGroup ??= { activeTab: undefined };
+  vscodeModule.window.tabGroups.all ??= [];
+  vscodeModule.commands.executeCommand ??= async () => undefined;
+  vscodeModule.Uri ??= {
+    file(value) {
+      return {
+        scheme: 'file',
+        fsPath: value,
+        path: value.replace(/\\/g, '/'),
+        toString() {
+          return `file://${this.path}`;
+        }
+      };
+    }
+  };
   const globalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-global");
   const directWorkspaceStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-workspace");
   const queuedIntegrationGlobalStorageDir = path.join(workspaceRoot, ".tmp-offline-cleanup-queued-global");
@@ -3986,15 +4003,15 @@ async function runRuntimeFileHygieneChecks() {
   try {
     const rollingLogPath = path.join(tempDir, "traceable-subagent-debug.jsonl");
     await hygieneModule.appendLineToRollingLog(rollingLogPath, JSON.stringify({ entry: "alpha", value: "1" }), {
-      maxBytes: 90,
+      maxBytes: 80,
       retainBytes: 60
     });
     await hygieneModule.appendLineToRollingLog(rollingLogPath, JSON.stringify({ entry: "beta", value: "2" }), {
-      maxBytes: 90,
+      maxBytes: 80,
       retainBytes: 60
     });
     await hygieneModule.appendLineToRollingLog(rollingLogPath, JSON.stringify({ entry: "gamma", value: "3" }), {
-      maxBytes: 90,
+      maxBytes: 80,
       retainBytes: 60
     });
 
@@ -4002,7 +4019,7 @@ async function runRuntimeFileHygieneChecks() {
     const rollingLogStat = await fs.stat(rollingLogPath);
     assert(rollingLogText.includes('"gamma"'), "Runtime file hygiene test did not retain the newest rolling-log entry.");
     assert(!rollingLogText.includes('"alpha"'), "Runtime file hygiene test did not trim the oldest rolling-log entry.");
-    assert(rollingLogStat.size <= 90, `Runtime file hygiene test let the rolling log exceed its max size. Got: ${rollingLogStat.size}`);
+    assert(rollingLogStat.size <= 80, `Runtime file hygiene test let the rolling log exceed its max size. Got: ${rollingLogStat.size}`);
 
     const globalStorageDir = path.join(tempDir, "global-storage");
     const reportsDir = cleanupModule.getOfflineLocalChatCleanupReportsDir(globalStorageDir);
@@ -7308,10 +7325,8 @@ async function runManifestChecks() {
   const rawSessionMenuEntry = viewItemContextMenu.find((item) => item.command === "tiinex.aiVscodeTools.openSessionFile");
 
   assert(windowTool?.inputSchema?.properties?.afterLatestCompact, "package.json window tool schema must expose afterLatestCompact.");
-  assert(traceablePanelView?.type === "webview", "package.json traceable panel view must remain a webview contribution.");
-  assert(traceablePanelView?.visibility === "hidden", "package.json traceable panel view must stay hidden until explicitly revealed from the status surface.");
-  assert(traceablePanelView?.when === "tiinex.aiVscodeTools.traceablePanelVisible", "package.json traceable panel view must stay gated behind the explicit traceable panel visibility context.");
-  assert(traceablePanelContainer?.title === "Traceable", "package.json traceable panel container must contribute the Traceable panel title.");
+  assert(traceablePanelView === undefined, "package.json must no longer contribute the moved TRACEABLE panel view.");
+  assert(traceablePanelContainer === undefined, "package.json must no longer contribute the moved TRACEABLE panel container.");
   assert(windowTool?.inputSchema?.properties?.anchorOccurrence, "package.json window tool schema must expose anchorOccurrence.");
   assert(!windowTool?.inputSchema?.required, "package.json window tool schema must not require anchorText when compaction-only windows are allowed.");
   assert(transcriptTool?.inputSchema?.properties?.maxBlocks, "package.json transcript tool schema must expose maxBlocks.");
@@ -7323,14 +7338,10 @@ async function runManifestChecks() {
   const traceableAutoHideSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceableAutoHide"];
   const traceablePreferredModelsSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceablePreferredModels"];
   const traceableBlockedModelsSetting = packageJson.contributes?.configuration?.properties?.["tiinex.aiVscodeTools.traceableBlockedModels"];
-  assert(traceableAutoRevealSetting?.default === "yes", "package.json TRACEABLE auto-reveal setting must default to yes.");
-  assert(Array.isArray(traceableAutoRevealSetting?.enum) && traceableAutoRevealSetting.enum.join(",") === "yes,no,always", "package.json TRACEABLE auto-reveal setting must expose yes/no/always enum values.");
-  assert(traceableAutoHideSetting?.default === "yes", "package.json TRACEABLE auto-hide setting must default to yes.");
-  assert(Array.isArray(traceableAutoHideSetting?.enum) && traceableAutoHideSetting.enum.join(",") === "yes,no", "package.json TRACEABLE auto-hide setting must expose yes/no enum values.");
-  assert(traceablePreferredModelsSetting?.type === "array" && Array.isArray(traceablePreferredModelsSetting?.default) && traceablePreferredModelsSetting.default.length === 0, "package.json TRACEABLE preferred-models setting must expose an empty array default.");
-  assert(traceablePreferredModelsSetting?.items?.type === "string", "package.json TRACEABLE preferred-models setting must store human-readable string declarations.");
-  assert(traceableBlockedModelsSetting?.type === "array" && Array.isArray(traceableBlockedModelsSetting?.default) && traceableBlockedModelsSetting.default.length === 0, "package.json TRACEABLE blocked-models setting must expose an empty array default.");
-  assert(traceableBlockedModelsSetting?.items?.type === "string", "package.json TRACEABLE blocked-models setting must store human-readable string declarations.");
+  assert(traceableAutoRevealSetting === undefined, "package.json must no longer own the moved TRACEABLE auto-reveal setting.");
+  assert(traceableAutoHideSetting === undefined, "package.json must no longer own the moved TRACEABLE auto-hide setting.");
+  assert(traceablePreferredModelsSetting === undefined, "package.json must no longer own the moved TRACEABLE preferred-models setting.");
+  assert(traceableBlockedModelsSetting === undefined, "package.json must no longer own the moved TRACEABLE blocked-models setting.");
   assert(rawSessionCommand?.title === "Tiinex: Open Raw Session File (Last Resort)", "package.json raw session command must remain explicitly marked as last resort.");
   assert(rawSessionMenuEntry?.group === "z_lastResort", "package.json session context menu must keep raw session file access in the last-resort group.");
 
@@ -7390,16 +7401,12 @@ async function runRoutingGuardChecks() {
     "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
   );
   assert(
-    readme.includes("run_traceable_subagent"),
-    "README must document the experimental traceable subagent LM tool."
+    readme.includes("TRACEABLE runtime, evidence ownership, and the traceable agent catalog helper now live in `ai-provenance`"),
+    "README must state that TRACEABLE runtime, evidence, and the agent catalog helper moved to ai-provenance."
   );
   assert(
-    readme.includes("prefer non-leading parent input"),
-    "README must keep the non-leading input guidance for run_traceable_subagent."
-  );
-  assert(
-    readme.includes("do not let raw user wording outweigh the child lane's bounded investigative contract"),
-    "README must keep the userInput versus parentTask weighting guidance for run_traceable_subagent."
+    readme.includes("provenance-side `list_traceable_agents`") && readme.includes("bounded traceable model catalog helper `list_traceable_models`"),
+    "README must document the split where list_traceable_agents lives on provenance and list_traceable_models remains on ai-vscode-tools."
   );
   assert(
     readme.includes("The canonical public live-chat workflow surface is the language-model tool family"),
@@ -8103,12 +8110,12 @@ async function runTraceableSubagentChecks() {
       toolsetNames: [
         "read/readFile",
         "gitkraken/git_blame",
-        "tiinexaivscodetools/estimateContextBreakdown"
+        "tiinex.aiVscodeTools/estimateContextBreakdown"
       ],
       selectedToolNames: [
         "read/readFile",
         "gitkraken/git_blame",
-        "tiinexaivscodetools/estimateContextBreakdown"
+        "tiinex.aiVscodeTools/estimateContextBreakdown"
       ],
       toolSelectionRestricted: false
     },
@@ -8125,10 +8132,12 @@ async function runTraceableSubagentChecks() {
   assert(
     renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/gitkraken\"")
       && renderedUndottedCustomNamespacePanelHtml.includes("title=\"gitkraken/git_blame\"")
-      && renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/tiinexaivscodetools\"")
-      && renderedUndottedCustomNamespacePanelHtml.includes("title=\"tiinexaivscodetools/estimateContextBreakdown\"")
+      && renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/tiinex\"")
+      && renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Extension Tools/tiinex/aiVscodeTools\"")
+      && renderedUndottedCustomNamespacePanelHtml.includes("title=\"tiinex.aiVscodeTools/estimateContextBreakdown\"")
       && !renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/gitkraken\"")
-      && !renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/tiinexaivscodetools\""),
+      && !renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/tiinex.aiVscodeTools\"")
+      && !renderedUndottedCustomNamespacePanelHtml.includes("data-namespace-id=\"Native Tools/tiinex/aiVscodeTools\""),
     `Traceable subagent panel must classify undotted extension namespaces under Extension Tools instead of treating them as native tools. Got: ${renderedUndottedCustomNamespacePanelHtml}`
   );
   const renderedIdleLandingPanelHtml = traceableSubagentStatusPanel.renderTraceableSubagentPanelHtml({
@@ -9421,90 +9430,6 @@ async function runTraceableSubagentChecks() {
     const fakeAdapter = new Proxy({}, { get: () => async () => "" });
     const fakeChatInterop = new Proxy({}, { get: () => async () => ({}) });
     languageModelToolsModule.registerLanguageModelTools(fakeContext, fakeAdapter, fakeChatInterop);
-
-    const viewTraceableTool = registeredTools.get("view_traceable_subagent");
-    assert(
-      viewTraceableTool && typeof viewTraceableTool.invoke === "function",
-      "Traceable view regression test could not capture the view_traceable_subagent tool registration."
-    );
-
-    const toolSummaryResult = await viewTraceableTool.invoke({
-      input: {
-        evidenceFilePath: viewEvidenceFilePath,
-        surface: "tool-summary",
-        maxItems: 5
-      },
-      tokenizationOptions: {
-        tokenBudget: 4000
-      }
-    });
-    const toolSummaryMarkdown = String(toolSummaryResult.content[0]?.value ?? "");
-    assert(
-      toolSummaryMarkdown.includes("# Traceable Evidence Tool Summary")
-        && toolSummaryMarkdown.includes("Distinct Tools: 2")
-        && toolSummaryMarkdown.includes("- copilot_readFile")
-        && toolSummaryMarkdown.includes("Total Calls: 2")
-        && toolSummaryMarkdown.includes("- search/textSearch"),
-      `view_traceable_subagent must expose an aggregated tool-summary surface for parent-agent recovery reads. Got: ${toolSummaryMarkdown}`
-    );
-
-    const fileSummaryResult = await viewTraceableTool.invoke({
-      input: {
-        evidenceFilePath: viewEvidenceFilePath,
-        surface: "file-summary",
-        maxItems: 5
-      },
-      tokenizationOptions: {
-        tokenBudget: 4000
-      }
-    });
-    const fileSummaryMarkdown = String(fileSummaryResult.content[0]?.value ?? "");
-    assert(
-      fileSummaryMarkdown.includes("# Traceable Evidence File Summary")
-        && fileSummaryMarkdown.includes("Distinct Read Targets: 2")
-        && fileSummaryMarkdown.includes("traceableSubagent.ts")
-        && fileSummaryMarkdown.includes("languageModelTools.ts"),
-      `view_traceable_subagent must expose an aggregated file-summary surface for parent-agent recovery reads. Got: ${fileSummaryMarkdown}`
-    );
-
-    const pagedToolLedgerResult = await viewTraceableTool.invoke({
-      input: {
-        evidenceFilePath: viewEvidenceFilePath,
-        surface: "tool-ledger",
-        maxItems: 1,
-        offset: 1
-      },
-      tokenizationOptions: {
-        tokenBudget: 4000
-      }
-    });
-    const pagedToolLedgerMarkdown = String(pagedToolLedgerResult.content[0]?.value ?? "");
-    assert(
-      pagedToolLedgerMarkdown.includes("# Traceable Evidence Tool Ledger")
-        && pagedToolLedgerMarkdown.includes("- search/textSearch")
-        && !pagedToolLedgerMarkdown.includes("- copilot_readFile\n  - Result: success\n  - Call Id: call-1")
-        && pagedToolLedgerMarkdown.includes("Showing tool calls 2-2 of 3."),
-      `view_traceable_subagent must support offset paging for list-like ledger surfaces. Got: ${pagedToolLedgerMarkdown}`
-    );
-
-    const pagedStatusHistoryResult = await viewTraceableTool.invoke({
-      input: {
-        evidenceFilePath: viewEvidenceFilePath,
-        surface: "status-history",
-        maxItems: 1,
-        offset: 1
-      },
-      tokenizationOptions: {
-        tokenBudget: 4000
-      }
-    });
-    const pagedStatusHistoryMarkdown = String(pagedStatusHistoryResult.content[0]?.value ?? "");
-    assert(
-      pagedStatusHistoryMarkdown.includes("# Traceable Evidence Status History")
-        && pagedStatusHistoryMarkdown.includes("- running | reading 1/2")
-        && pagedStatusHistoryMarkdown.includes("Showing status events 2-2 of 3."),
-      `view_traceable_subagent must support offset paging for status-history windows. Got: ${pagedStatusHistoryMarkdown}`
-    );
 
     const staleSelfReadController = new traceableSubagentEvidence.TraceableSubagentEvidenceController({
       header: {
@@ -11271,34 +11196,14 @@ async function runLiveToolMutexChecks() {
 
     const traceableTool = registeredTools.get("run_traceable_subagent");
     assert(
-      traceableTool && typeof traceableTool.prepareInvocation === "function",
-      "Live tool mutex test could not capture the run_traceable_subagent tool registration."
+      traceableTool === undefined,
+      "Live tool mutex test must not capture run_traceable_subagent here after ownership moved to ai-provenance."
     );
 
     const traceableModelsTool = registeredTools.get("list_traceable_models");
     assert(
       traceableModelsTool && typeof traceableModelsTool.prepareInvocation === "function",
       "Live tool mutex test could not capture the list_traceable_models tool registration."
-    );
-
-    const traceablePrepared = traceableTool.prepareInvocation({
-      input: {
-        userInput: "compare plan and implementation",
-        parentTask: "determine what crossed from plan into verified implementation and what remains open",
-        carriedContext: {
-          fileContext: ["a.ts", "b.ts"]
-        },
-        allowedToolNames: ["copilot_readFile"]
-      }
-    });
-
-    assert(
-      String(traceablePrepared?.invocationMessage ?? "") === "Trace lane: 2 files for gaps",
-      `Traceable subagent invocation message must stay short and action-shaped for anchored read runs. Got: ${String(traceablePrepared?.invocationMessage ?? "")}`
-    );
-    assert(
-      !String(traceablePrepared?.invocationMessage ?? "").includes("determine what crossed from plan into verified implementation"),
-      "Traceable subagent invocation message must avoid carrying long task prose into the collapsed running row for anchored runs."
     );
 
     const invocationOptions = {

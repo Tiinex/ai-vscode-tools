@@ -11,5 +11,6 @@ TEMP-*.md
 .github/instructions/*.temporary.instructions.md
 *.vsix
 *.out
+.copilot-*
 traceable-subagent-validation.log
 warning

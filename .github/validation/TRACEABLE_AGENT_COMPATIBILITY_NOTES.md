@@ -8,7 +8,7 @@ Status boundary:
 
 - This file is a candidate-compatibility note, not the current runtime claim.
 - `README.md` remains the primary current-status surface.
-- `list_traceable_agents` currently reflects the bounded workspace runtime surface implemented in this repo, not a claim of native Copilot Chat dropdown parity.
+- The bounded traceable agent catalog is exposed from the provenance-side `list_traceable_agents` surface, not from this repo's public tool namespace.
 
 Current bounded claim:
 

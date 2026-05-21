@@ -136,18 +136,15 @@ function normalizeTraceableEvidenceTabLabel(label: string | undefined): string |
 }
 
 export async function resolveActiveTraceableEvidenceUri(target?: vscode.Uri | string): Promise<vscode.Uri | undefined> {
-  if (target instanceof vscode.Uri && isTraceableEvidenceFileUri(target)) {
-    return target;
+  const directTargetUri = normalizePotentialTraceableUri(target);
+  if (isTraceableEvidenceFileUri(directTargetUri)) {
+    return directTargetUri;
   }
   if (typeof target === "string" && target.trim()) {
     const targetUri = vscode.Uri.file(target.trim());
     if (isTraceableEvidenceFileUri(targetUri)) {
       return targetUri;
     }
-  }
-  const normalizedTargetUri = normalizePotentialTraceableUri(target);
-  if (isTraceableEvidenceFileUri(normalizedTargetUri)) {
-    return normalizedTargetUri;
   }
   const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
   if (activeTab) {
@@ -1507,34 +1504,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await syncLiveChatInteropContext(chatInterop);
   }
 
-  registerLanguageModelTools(context, adapter, chatInterop, (input) => {
-    if (shouldAutoRevealTraceablePanel(input.reveal)) {
-      void (async () => {
-        await revealTraceablePanel("auto");
-      })();
-    }
-    const reporter = traceableStatusBar.startRun({
-      agentName: input.agentRole?.name,
-      modelLabel: input.modelSelector?.id
-    });
-    reporter.setRequestSummary?.(buildTraceableRequestSummary(input));
-    return {
-      statusReporter: reporter,
-      beforeRun: async () => {
-        await traceableEvidence.prepareRequestedExport(input);
-        const snapshot = traceableEvidence.getSnapshot();
-        traceableStatusDetail.update(snapshot);
-        traceableStatusPanel.update(snapshot);
-      },
-      afterRun: async (result) => {
-        const finalized = await traceableEvidence.finalizeRequestedExport(result, renderTraceableSubagentMarkdown(result));
-        const snapshot = traceableEvidence.getSnapshot();
-        traceableStatusDetail.update(snapshot);
-        traceableStatusPanel.update(snapshot);
-        return finalized;
-      }
-    };
-  }, {
+  registerLanguageModelTools(context, adapter, chatInterop, {
     revealEvidenceView: async ({ evidenceFilePath, reveal }) => {
       if (!reveal) {
         return { opened: false };

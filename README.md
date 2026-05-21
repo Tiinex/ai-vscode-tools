@@ -1,11 +1,11 @@
-# Tiinex — AI — VS Code — Tools
+# Tiinex AI Tools
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 - Canonical GitHub repo: https://github.com/Tiinex/ai-vscode-tools
 - Companion AI repo these tools primarily support: https://github.com/Tiinex/ai
 
-Tiinex — AI — VS Code — Tools is a VS Code extension for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging. It is built for people who need to understand what actually happened in Local chat state, recover from drift or compaction, and perform bounded operational actions without guessing.
+Tiinex AI Tools is a VS Code extension for persisted Local chat inspection, exact-target cleanup, and recovery-oriented Copilot debugging. It is built for people who need to understand what actually happened in Local chat state, recover from drift or compaction, and perform bounded operational actions without guessing.
 
 For everyday users, that means fast inspection and safer cleanup. For VS Code Copilot developers and developers targeting other IDEs, it also means there is a concrete, portable model here for how to separate persisted evidence, live-session operations, and offline cleanup.
 
@@ -15,28 +15,9 @@ In practice, these tools are primarily used to support the companion `ai` repo a
 
 As of May 2026, the persisted inspection and cleanup lanes are in active use and the focused repo checks pass, but the live Local chat tooling is not yet fully end-to-end validated on the current runtime surface. Treat the live tooling as in progress rather than fully release-proven until that final runtime validation is complete.
 
-An experimental `run_traceable_subagent` LM tool is now included for a bounded trace-first child lane. It is intentionally v1: it keeps `userInput` separate from `parentTask`, blocks self-reentry, and values explicit runtime trace over native `runSubagent` UX parity.
+TRACEABLE runtime, evidence ownership, and the traceable agent catalog helper now live in `ai-provenance`. This repo keeps the bounded traceable model catalog helper `list_traceable_models`, plus the Local-chat session-store inspection, exact cleanup, and other VS Code-specific live-chat/store hacks.
 
-For bounded preflight on the current traceable surface, use `list_traceable_agents` to inspect the workspace-supported traceable agent catalog and `list_traceable_models` to inspect the runtime-discoverable model catalog before calling `run_traceable_subagent`. These helper surfaces are intentionally bounded and truthful: they improve recoverability for role/model selection, but they do not claim native Copilot Chat dropdown parity.
-
-Recommended bounded call order:
-
-1. Call `list_traceable_agents` when you need an exact traceable role name that the current workspace runtime can resolve.
-2. Call `list_traceable_models` when you need an exact model id that the current runtime can see or send to.
-3. Call `run_traceable_subagent` only after the role/model choice is grounded enough for the current bounded lane.
-
-Minimal example shape:
-
-```text
-1. list_traceable_agents { "query": "anchor", "limit": 5 }
-2. list_traceable_models { "query": "gpt-5", "sendableOnly": true, "limit": 10 }
-3. run_traceable_subagent {
-		 "userInput": "Compare the current traceable runtime behavior against the README claims.",
-		 "parentTask": "Do a bounded read-only comparison and separate verified implementation from still-open claims.",
-		 "agentRole": { "name": "Anchor (GPT-5 mini) (Live Feedback Loop) (Experimental)" },
-		 "modelSelector": { "vendor": "copilot", "id": "gpt-5-mini" }
-	 }
-```
+For bounded preflight on the current traceable surface, use provenance-side `list_traceable_agents` to inspect the workspace-supported traceable agent catalog and `list_traceable_models` here to inspect the runtime-discoverable model catalog before using the provenance-side TRACEABLE runtime. These helper surfaces are intentionally bounded and truthful: they improve recoverability for role/model selection, but they do not claim native Copilot Chat dropdown parity.
 
 Compatibility notes for future agent-source broadening now live in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md` so that candidate parity work stays separate from the current bounded runtime claim.
 
@@ -47,6 +28,8 @@ As of the latest Windows host validation, `run_traceable_subagent` is now consid
 What is not yet claimed for `run_traceable_subagent` is native `runSubagent` UX parity inside Copilot Chat, or that the current repo files alone provide fully independent proof of every claimed manual Windows-host validation step without relying on the maintained status surfaces. Treat those as still-open or still-bounded claims rather than already-proven guarantees. The maintained scaffold for future repo-visible host-validation artifacts now lives in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
 
 The collapsed running row for `run_traceable_subagent` is still not considered meaningfully solved. Current code can shape the initial task-facing invocation label, including neutral lane-style variants such as `Trace lane: 5 files`, and the completed result can carry stronger observability, but recent Windows-host reruns still did not justify claiming native-like live-row clarity or progress feel for the third-party tool surface because the label remains static while only the host-owned phase row changes.
+
+Milestone 2 status for TRACEABLE evidence export is now functionally complete enough to treat the evidence artifact lifecycle as real product behavior on the current Windows host: exported `.trace.md` artifacts are created and updated during the run, while the reconstructed TRACEABLE evidence viewer UX and its source/preview reopen actions now live on the provenance side instead of remaining a first-class `ai-vscode-tools` surface.
 
 ## Why Install It
 
@@ -59,7 +42,7 @@ The collapsed running row for `run_traceable_subagent` is still not considered m
 
 Public VS Code surface:
 
-- Display name: `Tiinex — AI — VS Code — Tools`
+- Display name: `Tiinex AI Tools`
 - Command Palette prefix: `Tiinex:`
 - Command ID namespace: `tiinex.aiVscodeTools.*`
 - Settings namespace: `tiinex.aiVscodeTools.*`
@@ -160,7 +143,28 @@ This repo is not an agent-authoring framework and it does not claim a broad auto
 
 The shipped surface is intentionally Local-first. Persisted-session inspection is the strongest supported lane. Live Local chat actions are bounded operational tools, not a claim of perfect live-chat control.
 
-The experimental traceable-subagent lane is separate from the canonical Local-chat workflow. It exists for narrow grounded child investigations with explicit request contract, budget contract, and runtime tool ledger, not as a broad autonomous framework. In prompt references, use `#runTraceableSubagent`.
+The TRACEABLE runtime lane no longer ships from this extension. Use `ai-provenance` for `run_traceable_subagent`, the reconstructed `.trace.md` evidence viewer, and the live TRACEABLE panel/status runtime. This repo only keeps the bounded traceable catalog helpers that are still useful alongside the VS Code-specific Local-chat/store tooling.
+
+## Provenance Boundary
+
+Current split:
+
+- `ai-vscode-tools` remains the home for VS Code-specific Local-chat inspection, session-store interop, exact cleanup flows, and other host-shaped operational tooling that depends heavily on VS Code internals or current-store quirks.
+- `ai-provenance` now owns the TRACEABLE runtime lane, evidence-viewer UX, panel/status shell, and provenance-first artifact reading surfaces.
+
+Current bounded traceable helper still kept here:
+
+- `list_traceable_models`
+
+Still undecided:
+
+- whether feedback tooling should also migrate into `ai-provenance` or instead live in the `feedback` repo
+
+Explicit non-candidates right now:
+
+- Local-chat session-store inspection tied to VS Code workspace storage
+- destructive delete and offline cleanup flows tied to current VS Code artifacts
+- live-chat targeting or transport logic that still depends on VS Code-specific session behavior
 
 ## Portability For VS Code Copilot Developers And Other IDE Teams
 
@@ -377,28 +381,10 @@ Each platform lane below is tracked as a checklist.
 		- [x] Skill: create/send workflow guidance marks focused live-chat send as internal fallback transport rather than a second public route.
 		- [x] Skill Test: focused live-chat fallback guidance has been checked against current behavior.
 
-- Traceable subagent bounded read-only lane
-	- Windows
-		- [x] Use Case: bounded read-only child runs keep `userInput` separate from `parentTask`, ground against explicit task files, and fail closed when model or tool grounding is unsafe.
-		- [x] Use Case: a child run that would otherwise spend its full tool budget can defer excess tool calls, preserve a synthesis slot, and still produce a final bounded payload.
-		- [x] Use Case: the final regular iteration may schedule one tool-less recovery turn, and that recovery turn emits one final JSON object rather than raw tool-request text.
-		- [x] Use Case: when multiple anchored task files are provided, the child lane can cover each anchored file and reach grounded completion in a live Windows probe.
-		- [x] Use Case: when repeated anchored rereads are deferred before unread anchors are covered, the runtime can grant one bounded retry credit so a pure-defer turn does not consume the regular iteration budget and the child can still finish the anchored probe.
-		- [x] Unit Test: `traceable-subagent` passes with synthesis-reservation and final-recovery regressions in `tests/test.mjs`.
-		- [x] Manual Test: host validation confirmed bounded single-file and harder multi-file read-only probes reached correct final payloads on the current Windows surface.
-		- [x] Manual Test: after the repeated-read deferral and retry-credit fix, a four-anchor wiring probe completed on the current Windows surface and read `extension.ts`, `languageModelTools.ts`, `traceableSubagent.ts`, and `traceableSubagentStatusBar.ts` within budget.
-		- [x] Manual Test: same-lane follow-up behavior has been explicitly validated on the current Windows surface with a bounded same-file follow-up pair.
-		- [x] Manual Test: a broad non-leading multi-repo epistemic question has been validated on the current Windows surface and the child kept verified, open, and unsupported-claim buckets separate.
-		- [ ] UX: Copilot Chat rendering has reached near-native `runSubagent` observability without inventing a separate custom surface.
+## Traceable Boundary Note
 
-## Traceable Subagent Roadmap
-
-- Preserve the current bounded read-only reliability bar; do not regress fail-closed grounding, synthesis reservation, or final-recovery formatting.
-- Expand follow-up validation beyond the now-passing same-file bounded pair so the traceable lane is not only trusted for the narrowest follow-up shape.
-- Preserve the now-passing broad non-leading multi-repo epistemic probe shape so repo-local reliability is not mistaken for wider evidence orchestration; the current bounded probe shape lives in `ai/.github/transitions/TRACEABLE_SUBAGENT_RUNTIME_PLAN.md`.
-- Keep future agent-source compatibility work explicit and candidate-marked rather than silently broadening the current traceable catalog; the maintained note lives in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md`.
-- Improve Copilot Chat rendering toward a more native expander experience by shaping the existing tool result surface rather than inventing a separate UI; current host observation still shows a static collapsed invocation header with no user-perceived progress signal during third-party tool runs.
-- Keep README status, tests, and live validation aligned so the repo does not drift into claiming more than the host has actually proved.
+- TRACEABLE runtime validation, UX notes, and host-facing ownership now belong with `ai-provenance`, not in this README.
+- This repo may still carry low-level traceable helper code or catalog tests temporarily, but that does not make `ai-vscode-tools` the public TRACEABLE runtime owner.
 
 ## Validation Protocol
 
@@ -406,6 +392,7 @@ Each platform lane below is tracked as a checklist.
 - Use that file for Phase 1 and Phase 2 structure, live-pass criteria, and tooling definition-of-done expectations.
 - Maintained repo-visible host-validation evidence for the traceable lane, when carried independently of this README, belongs in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
 - Candidate source-compatibility notes for future traceable agent discovery broadening belong in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md`.
+- The old temporary milestone-2 export design note should not be treated as a second source of truth once maintained README and validation surfaces have been updated.
 
 ## Known Limits
 

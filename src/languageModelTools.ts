@@ -5,7 +5,7 @@ import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, t
 import { sendPromptToCopilotCliResource } from "./chatInterop/copilotCliDebug";
 import { captureCurrentChatFocusReport, focusLikelyEditorChat } from "./chatInterop/editorFocus";
 import { renderChatFocusDebugMarkdown, renderChatFocusReportMarkdown } from "./chatInterop/focusTargets";
-import { QueuedMutex, RejectingMutex } from "./chatInterop/mutex";
+import { RejectingMutex } from "./chatInterop/mutex";
 import { probeLocalReopenCandidates, renderLocalReopenProbeMarkdown } from "./chatInterop/reopenProbe";
 import { sendMessageToSession } from "./chatInterop/sessionSendWorkflow";
 import { getExactDeleteSelfTargetingReason, getExactDeleteTerminalBoundSessionId, getExactSelfTargetingReason, getFocusedSelfTargetingReason } from "./chatInterop/selfTargetGuard";
@@ -37,16 +37,11 @@ import {
 } from "./offlineLocalChatCleanup";
 import { appendLineToRollingLog } from "./runtimeFileHygiene";
 import {
-  listTraceableAgentCatalogEntries,
-  listTraceableAgentCatalogLintFindings,
   listTraceableModelCatalogEntries,
   normalizeTraceableOutputMode,
   renderTraceableSubagentMarkdown,
-  runTraceableSubagent,
-  TRACEABLE_SUBAGENT_TOOL_NAME,
   type TraceableSubagentOutputMode,
   type TraceableSubagentRunResult,
-  type TraceableSubagentStatusReporter,
   type TraceableSubagentInput
 } from "./traceableSubagent";
 import { parseTraceableEvidenceStateMarkdown, type ParsedTraceableEvidenceState } from "./traceableSubagentEvidence";
@@ -56,8 +51,6 @@ type DetailLevel = "summary" | "full";
 type AnchorOccurrence = "first" | "last";
 
 const liveChatToolMutex = new RejectingMutex();
-const traceableSubagentToolMutex = new QueuedMutex();
-
 interface ToolContribution {
   name: string;
   displayName: string;
@@ -123,11 +116,6 @@ interface SurveyInput {
 
 interface ListCopilotCliSessionsInput {
   sessionStateRoot?: string;
-  limit?: number;
-}
-
-interface ListTraceableAgentsInput {
-  query?: string;
   limit?: number;
 }
 
@@ -814,26 +802,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
-    name: "list_traceable_agents",
-    displayName: "List Traceable Agents",
-    userDescription: "List workspace-supported traceable agent display names and basic metadata.",
-    modelDescription: "List the currently supported traceable agent artifacts discoverable from workspace .github/agents folders. Use this before run_traceable_subagent when you need the exact display names the current workspace runtime can resolve without traversing repo files manually. This is read-only and returns a bounded markdown list. It reflects the current traceable runtime surface, not every host-private custom agent source that the native dropdown may know about.",
-    toolReferenceName: "listTraceableAgents",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "Optional display-name or stem filter for narrowing the returned traceable agents."
-        },
-        limit: {
-          type: "number",
-          description: "Maximum number of traceable agents to include."
-        }
-      }
-    }
-  },
-  {
     name: "list_traceable_models",
     displayName: "List Traceable Models",
     userDescription: "List runtime-discoverable models that traceable subagent selection can currently see.",
@@ -855,218 +823,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
           description: "When true, only include models that the current access information permits sending requests to."
         }
       }
-    }
-  },
-  {
-    name: "view_traceable_subagent",
-    displayName: "View Traceable Subagent",
-    userDescription: "Inspect a stored TRACEABLE evidence artifact with bounded output and optional reconstructed-view reveal.",
-    modelDescription: "Inspect one stored `.trace.md` TRACEABLE evidence artifact without rerunning the child lane. This tool is read-only: it parses the embedded Traceable State block, can optionally reveal the reconstructed TRACEABLE evidence view when the current `traceableAutoReveal` policy allows it, and returns a bounded surface instead of dumping the whole artifact by default. Reuse `outputMode` when you want the same parent-facing output policy shape as `run_traceable_subagent`; use `surface` when you want rendered output, request summary, outcome, tool ledger, status history, aggregated tool/file summaries, or bounded state JSON. Use `maxItems` with `offset` to page through list-like surfaces safely.",
-    toolReferenceName: "viewTraceableSubagent",
-    inputSchema: {
-      type: "object",
-      properties: {
-        evidenceFilePath: {
-          type: "string",
-          description: "Absolute or workspace-relative path to a `.trace.md` evidence artifact containing an embedded Traceable State block."
-        },
-        reveal: {
-          type: "boolean",
-          description: "When true, request opening the reconstructed TRACEABLE evidence view. The current `traceableAutoReveal` setting still wins and may suppress opening."
-        },
-        outputMode: {
-          type: "string",
-          description: "Optional parent-facing output mode to reuse when `surface` is omitted or set to `rendered-output`.",
-          enum: ["summary-with-evidence-path", "full-markdown-with-evidence-path", "evidence-path-only"]
-        },
-        surface: {
-          type: "string",
-          description: "Optional bounded surface to return instead of the default rendered TRACEABLE output.",
-          enum: ["rendered-output", "request-summary", "outcome", "tool-ledger", "status-history", "tool-summary", "file-summary", "state-json"]
-        },
-        maxItems: {
-          type: "number",
-          description: "Optional cap for bounded list-like surfaces such as tool-ledger and status-history."
-        },
-        offset: {
-          type: "number",
-          description: "Optional zero-based start offset for paging list-like surfaces such as request-summary, tool-ledger, status-history, tool-summary, and file-summary. When omitted, ledger/history keep the latest-items view."
-        }
-      },
-      required: ["evidenceFilePath"]
-    }
-  },
-  {
-    name: TRACEABLE_SUBAGENT_TOOL_NAME,
-    displayName: "Run Traceable Subagent",
-    userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
-    modelDescription: "Run an experimental Tiinex traceable subagent lane. This bounded child run keeps userInput separate from parentFrame, returns a compact runtime tool ledger plus child trace, blocks self-reentry for run_traceable_subagent, blocks native runSubagent delegation inside the lane, and serializes concurrent run_traceable_subagent invocations through a single-flight queue so traceability stays explicit even when parent agents try to parallelize. Prefer non-leading parent framing: use userInput as the source wording or material to inspect rather than the desired answer shape, and let parentFrame carry the bounded investigative contract without smuggling in the target conclusion. Legacy parentTask input is still accepted as a compatibility alias. When agentRole is provided, the runtime resolves a workspace .agent.md artifact and grounds the child from both its frontmatter and body. To avoid hidden model-cost drift, the runtime uses the agent artifact's declared model when it can translate it deterministically; otherwise it requires an exact model id in modelSelector.id and does not auto-select a fallback model. Prefer this for narrow grounded investigation slices rather than broad autonomous orchestration.",
-    toolReferenceName: "runTraceableSubagent",
-    inputSchema: {
-      type: "object",
-      properties: {
-        userInput: {
-          type: "string",
-          description: "The original or near-original user wording or source material for the task being delegated. Keep this distinct from parentFrame and do not rely on it as the desired answer shape."
-        },
-        parentFrame: {
-          type: "string",
-          description: "The exact bounded investigative frame that the parent wants the child lane to follow. Prefer non-leading wording that preserves inquiry without baking in the target conclusion."
-        },
-        parentTask: {
-          type: "string",
-          description: "Legacy compatibility alias for parentFrame. Prefer parentFrame for new calls."
-        },
-        inputMode: {
-          type: "string",
-          description: "Optional declarative behavior mode for how the parent intends the userInput and parentFrame pairing to be interpreted. This is framing metadata, not automatic rewriting. NON_LEADING_EPISTEMIC requires validationMode WARN or ERROR.",
-          enum: ["OPERATIVE", "EPISTEMIC", "NON_LEADING_EPISTEMIC"]
-        },
-        validationMode: {
-          type: "string",
-          description: "Declarative validation mode for behavior-mode mismatches. WARN keeps the lane running but records a visible warning; ERROR stops before model execution. NON_LEADING_EPISTEMIC requires WARN or ERROR. Neither mode rewrites the original userInput or parentFrame text.",
-          enum: ["NONE", "WARN", "ERROR"]
-        },
-        outputMode: {
-          type: "string",
-          description: "Controls what the parent receives back when evidence export is active. Tool-triggered export requires exportToFolder; interactive folder picking is reserved for the TRACEABLE Export button.",
-          enum: ["summary-with-evidence-path", "full-markdown-with-evidence-path", "evidence-path-only"]
-        },
-        exportToFolder: {
-          type: "string",
-          description: "Optional absolute folder path where the evidence markdown artifact should be created immediately. Required when outputMode requests tool-triggered export; otherwise use the TRACEABLE Export button for interactive folder picking."
-        },
-        reveal: {
-          type: "boolean",
-          description: "When true, reveal the TRACEABLE panel at invocation start so the current lane becomes visible immediately in the UI."
-        },
-        agentRole: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "Optional agent role label or machine-facing agent stem to resolve to a workspace .agent.md artifact. When provided, the runtime grounds the child from that artifact's frontmatter and body."
-            },
-            filePath: {
-              type: "string",
-              description: "Optional absolute or workspace-relative .agent.md path to use instead of resolving by role name."
-            }
-          }
-        },
-        parentExpectations: {
-          type: "object",
-          properties: {
-            expectedSteps: {
-              type: "array",
-              description: "Optional expected investigative steps the parent wants before trusting a strong conclusion. Use this for process checks rather than desired answers.",
-              items: {
-                type: "string"
-              }
-            },
-            expectedToolFamilies: {
-              type: "array",
-              description: "Optional tool families or specific tools the parent expects to appear in the trace as process evidence, not as proof that a particular conclusion is correct.",
-              items: {
-                type: "string"
-              }
-            },
-            disallowStrongConclusionWithoutEvidence: {
-              type: "boolean",
-              description: "When true, the child should avoid strong completion tone without grounded evidence."
-            }
-          }
-        },
-        carriedContext: {
-          type: "object",
-          properties: {
-            priorTurnsSummary: {
-              type: "string",
-              description: "Optional bounded summary of prior turns carried into the child run."
-            },
-            fileContext: {
-              type: "array",
-              description: "Optional file paths or file-context labels carried into the child run.",
-              items: {
-                type: "string"
-              }
-            },
-            reductions: {
-              type: "array",
-              description: "Optional compacted reductions or constraints that should remain explicit to the child.",
-              items: {
-                type: "string"
-              }
-            }
-          }
-        },
-        wrapperPolicy: {
-          type: "object",
-          properties: {
-            name: {
-              type: "string",
-              description: "Optional explicit lane name for the runtime wrapper."
-            },
-            closureMode: {
-              type: "string",
-              description: "Closure contract for the child lane output.",
-              enum: ["open", "bounded-summary", "explicit-final"]
-            }
-          }
-        },
-        budgetPolicy: {
-          type: "object",
-          properties: {
-            maxIterations: {
-              type: "number",
-              description: "Maximum number of model iterations for the child lane."
-            },
-            maxToolCalls: {
-              type: "number",
-              description: "Maximum number of runtime-observed tool calls before the lane must stop or report notRun."
-            }
-          }
-        },
-        modelSelector: {
-          type: "object",
-          properties: {
-            vendor: {
-              type: "string",
-              description: "Optional model vendor to pair with an exact model id for the child run."
-            },
-            family: {
-              type: "string",
-              description: "Optional model family to pair with an exact model id for the child run."
-            },
-            id: {
-              type: "string",
-              description: "Exact model id selector for the child run. If agentRole resolves to a model-bearing agent artifact, that role model wins when it can be translated deterministically. Otherwise, if this field is omitted, the runtime stops instead of auto-selecting a model implicitly."
-            },
-            version: {
-              type: "string",
-              description: "Optional model version to pair with an exact model id for the child run."
-            }
-          }
-        },
-        allowedToolNames: {
-          type: "array",
-          description: "Optional tool allowlist for the child lane. Entries may use host runtime tool names or prompt-reference aliases such as tiinex.ai-vscode-tools/listAgentSessions. When an agent role declares tools, this allowlist only narrows that inherited role surface and cannot add tools beyond it. When no role tool constraint exists, the allowlist narrows the host tool list minus the default blocked set.",
-          items: {
-            type: "string"
-          }
-        },
-        blockedToolNames: {
-          type: "array",
-          description: "Optional extra tool names to block for this run in addition to the default self/mutation blocklist. Entries may use host runtime tool names or prompt-reference aliases. This list is subtractive only and cannot expand the inherited or host tool surface.",
-          items: {
-            type: "string"
-          }
-        }
-      },
-      required: ["userInput"],
-      anyOf: [
-        { required: ["parentFrame"] },
-        { required: ["parentTask"] }
-      ]
     }
   },
   {
@@ -1451,78 +1207,9 @@ const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
 
 function isEnabledToolContribution(toolName: string): boolean {
   return isFirstSliceSessionTool(toolName)
-    || toolName === "list_traceable_agents"
     || toolName === "list_traceable_models"
-    || toolName === "view_traceable_subagent"
-    || toolName === TRACEABLE_SUBAGENT_TOOL_NAME
     || (LOCAL_CHAT_CONTROL_SURFACES_ENABLED && LOCAL_CHAT_CONTROL_TOOL_NAMES.has(toolName))
     || (LOCAL_CHAT_MUTATION_SURFACES_ENABLED && LOCAL_CHAT_MUTATION_TOOL_NAMES.has(toolName));
-}
-
-function renderTraceableAgentCatalogMarkdown(entries: Awaited<ReturnType<typeof listTraceableAgentCatalogEntries>>, input: ListTraceableAgentsInput): string {
-  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
-  const filteredEntries = normalizedQuery
-    ? entries.filter((entry) => entry.displayName.toLowerCase().includes(normalizedQuery) || entry.artifactStem.toLowerCase().includes(normalizedQuery))
-    : entries;
-  const limitedEntries = filteredEntries.slice(0, input.limit ?? 20);
-  const lines = [
-    "# Traceable Agent Catalog",
-    "",
-    "- Scope: workspace-supported `.github/agents/*.agent.md` runtime artifacts.",
-    "- Purpose: provide exact display names for `run_traceable_subagent` without manual workspace traversal.",
-    `- Total matching agents: ${filteredEntries.length}`
-  ];
-  if (normalizedQuery) {
-    lines.push(`- Query: ${input.query?.trim()}`);
-  }
-  if (limitedEntries.length === 0) {
-    lines.push("", "No matching traceable agents found in the current workspace runtime surface.");
-    return `${lines.join("\n")}\n`;
-  }
-  lines.push("");
-  for (const entry of limitedEntries) {
-    const tags = [
-      entry.workspaceFolderName,
-      entry.candidate ? "candidate" : undefined,
-      entry.experimental ? "experimental" : undefined,
-      entry.humanRole ? "human-role" : undefined,
-      entry.modelDeclaration ? `model=${entry.modelDeclaration}` : undefined
-    ].filter(Boolean);
-    lines.push(`- ${entry.displayName}`);
-    lines.push(`  - Stem: ${entry.artifactStem}`);
-    lines.push(`  - File: ${entry.filePath}`);
-    lines.push(`  - Tags: ${tags.join(", ") || "-"}`);
-  }
-  if (limitedEntries.length < filteredEntries.length) {
-    lines.push("", `Showing ${limitedEntries.length}/${filteredEntries.length} matching agents.`);
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-function renderTraceableAgentCatalogMarkdownWithLint(
-  entries: Awaited<ReturnType<typeof listTraceableAgentCatalogEntries>>,
-  lintFindings: Awaited<ReturnType<typeof listTraceableAgentCatalogLintFindings>>,
-  input: ListTraceableAgentsInput
-): string {
-  const baseMarkdown = renderTraceableAgentCatalogMarkdown(entries, input).trimEnd();
-  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
-  const filteredLintFindings = normalizedQuery
-    ? lintFindings.filter((finding) => finding.artifactStem.toLowerCase().includes(normalizedQuery) || finding.filePath.toLowerCase().includes(normalizedQuery))
-    : lintFindings;
-  if (filteredLintFindings.length === 0) {
-    return `${baseMarkdown}\n`;
-  }
-  const lines = [baseMarkdown, "", "## Frontmatter Lint Findings", ""];
-  for (const finding of filteredLintFindings.slice(0, input.limit ?? 20)) {
-    lines.push(`- ${finding.artifactStem}`);
-    lines.push(`  - File: ${finding.filePath}`);
-    lines.push(`  - Workspace: ${finding.workspaceFolderName}`);
-    lines.push(`  - Error: ${finding.message}`);
-  }
-  if (filteredLintFindings.length > (input.limit ?? 20)) {
-    lines.push("", `Showing ${Math.min(filteredLintFindings.length, input.limit ?? 20)}/${filteredLintFindings.length} lint findings.`);
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 function renderTraceableModelCatalogMarkdown(entries: Awaited<ReturnType<typeof listTraceableModelCatalogEntries>>, input: ListTraceableModelsInput): string {
@@ -2367,34 +2054,6 @@ class ReadOnlyTool<TInput> implements vscode.LanguageModelTool<TInput> {
   }
 }
 
-class QueuedReadOnlyTool<TInput> implements vscode.LanguageModelTool<TInput> {
-  constructor(
-    private readonly displayName: string,
-    private readonly invocationMessage: (input: TInput) => string,
-    private readonly invokeImpl: (input: TInput, budget: number, preparedState?: unknown) => Promise<string>,
-    private readonly mutex: QueuedMutex,
-    private readonly prepareInvoke?: (input: TInput) => Promise<unknown> | unknown
-  ) {}
-
-  prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<TInput>): vscode.PreparedToolInvocation {
-    return {
-      invocationMessage: this.invocationMessage(options.input)
-    };
-  }
-
-  async invoke(options: vscode.LanguageModelToolInvocationOptions<TInput>): Promise<vscode.LanguageModelToolResult> {
-    const preparedState = await this.prepareInvoke?.(options.input);
-    const lease = await this.mutex.acquire(`${this.displayName} invocation`);
-    const budget = outputBudget(options.tokenizationOptions?.tokenBudget);
-    try {
-      const content = await this.invokeImpl(options.input, budget, preparedState);
-      return textResult(content);
-    } finally {
-      lease.release();
-    }
-  }
-}
-
 class LiveChatTool<TInput> implements vscode.LanguageModelTool<TInput> {
   constructor(
     private readonly invocationMessage: (input: TInput) => string,
@@ -2463,11 +2122,6 @@ export function registerLanguageModelTools(
   context: vscode.ExtensionContext,
   adapter: SessionToolsAdapter,
   chatInterop?: ChatInteropApi,
-  createTraceableRunHooks?: (input: TraceableSubagentInput) => {
-    statusReporter?: TraceableSubagentStatusReporter;
-    beforeRun?: () => Promise<void>;
-    afterRun?: (result: TraceableSubagentRunResult) => Promise<TraceableSubagentRunResult>;
-  } | undefined,
   traceableEvidenceViewHooks?: TraceableEvidenceViewHooks
 ): void {
   const currentWorkspaceStorageRoots = (() => {
@@ -2812,18 +2466,6 @@ export function registerLanguageModelTools(
 
   context.subscriptions.push(
     vscode.lm.registerTool(
-      "list_traceable_agents",
-      new ReadOnlyTool<ListTraceableAgentsInput>(
-        "List Traceable Agents",
-        (input) => `List traceable agents${input.query ? ` matching ${JSON.stringify(input.query)}` : ""}`,
-        async (input) => renderTraceableAgentCatalogMarkdownWithLint(
-          await listTraceableAgentCatalogEntries(),
-          await listTraceableAgentCatalogLintFindings(),
-          input
-        )
-      )
-    ),
-    vscode.lm.registerTool(
       "list_traceable_models",
       new ReadOnlyTool<ListTraceableModelsInput>(
         "List Traceable Models",
@@ -2832,56 +2474,6 @@ export function registerLanguageModelTools(
           await listTraceableModelCatalogEntries(context.languageModelAccessInformation),
           input
         )
-      )
-    ),
-    vscode.lm.registerTool(
-      "view_traceable_subagent",
-      new ReadOnlyTool<ViewTraceableSubagentInput>(
-        "View Traceable Subagent",
-        (input) => `View TRACEABLE evidence from ${JSON.stringify(input.evidenceFilePath)}${input.surface ? ` as ${input.surface}` : ""}`,
-        async (input, budget) => {
-          const resolvedEvidenceFilePath = await resolveTraceableEvidenceFilePath(input.evidenceFilePath);
-          if (!resolvedEvidenceFilePath.toLowerCase().endsWith(".trace.md")) {
-            throw new Error(`TRACEABLE evidence view requires a .trace.md file. Got ${JSON.stringify(resolvedEvidenceFilePath)}.`);
-          }
-          const markdown = await fs.readFile(resolvedEvidenceFilePath, "utf8");
-          const parsed = parseTraceableEvidenceStateMarkdown(markdown);
-          if (!parsed) {
-            throw new Error(`TRACEABLE evidence file ${JSON.stringify(resolvedEvidenceFilePath)} does not contain a readable Traceable State block.`);
-          }
-          const revealResult = await traceableEvidenceViewHooks?.revealEvidenceView?.({
-            evidenceFilePath: resolvedEvidenceFilePath,
-            reveal: input.reveal
-          });
-          return truncateTraceableViewOutput(
-            renderViewTraceableSubagentMarkdown(resolvedEvidenceFilePath, markdown, parsed, input, revealResult),
-            budget
-          );
-        }
-      )
-    ),
-    vscode.lm.registerTool(
-      TRACEABLE_SUBAGENT_TOOL_NAME,
-      new QueuedReadOnlyTool<TraceableSubagentInput>(
-        "Run Traceable Subagent",
-        (input) => traceableSubagentInvocationMessage(input),
-        async (input, _budget, preparedState) => {
-          const runHooks = preparedState as ReturnType<NonNullable<typeof createTraceableRunHooks>> | undefined;
-          await runHooks?.beforeRun?.();
-          const result = await runTraceableSubagent(input, {
-            accessInformation: context.languageModelAccessInformation,
-            debugLogDir: context.globalStorageUri.fsPath,
-            statusReporter: runHooks?.statusReporter
-          });
-          const finalResult = runHooks?.afterRun ? await runHooks.afterRun(result) : result;
-          return renderTraceableSubagentMarkdown(finalResult);
-        },
-        traceableSubagentToolMutex,
-        (input) => {
-          const runHooks = createTraceableRunHooks?.(input);
-          runHooks?.statusReporter?.update("queued");
-          return runHooks;
-        }
       )
     ),
     vscode.lm.registerTool(
