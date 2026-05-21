@@ -3645,9 +3645,49 @@ async function runOfflineLocalChatCleanupChecks() {
     'TRACEABLE evidence tab matching must not treat the reconstructed TRACEABLE webview itself as a source/preview tab to replace.'
   );
   assert(
-    extensionModule.resolveActiveTraceableEvidenceUri(traceableEvidenceUri)?.fsPath === traceableEvidenceUri.fsPath,
+    (await extensionModule.resolveActiveTraceableEvidenceUri(traceableEvidenceUri))?.fsPath === traceableEvidenceUri.fsPath,
     'TRACEABLE evidence target resolution must preserve an explicit URI target.'
   );
+  assert(
+    (await extensionModule.resolveActiveTraceableEvidenceUri({ scheme: 'file', fsPath: traceableEvidenceUri.fsPath }))?.fsPath === traceableEvidenceUri.fsPath,
+    'TRACEABLE evidence target resolution must accept URI-like command arguments from editor title actions.'
+  );
+  const originalExtensionOpenTextDocument = vscodeModule.workspace.openTextDocument;
+  const originalExtensionShowTextDocument = vscodeModule.window.showTextDocument;
+  const originalExtensionExecuteCommand = vscodeModule.commands.executeCommand;
+  const sourceBackedPreviewOpens = [];
+  const sourceBackedPreviewShows = [];
+  const sourceBackedPreviewCommands = [];
+  try {
+    vscodeModule.workspace.openTextDocument = async (value) => {
+      sourceBackedPreviewOpens.push(value);
+      return { uri: value };
+    };
+    vscodeModule.window.showTextDocument = async (document, options) => {
+      sourceBackedPreviewShows.push({ document, options });
+      return document;
+    };
+    vscodeModule.commands.executeCommand = async (command, ...args) => {
+      sourceBackedPreviewCommands.push({ command, args });
+      return undefined;
+    };
+    await extensionModule.openMarkdownPreviewLikeSource(traceableEvidenceUri);
+    assert(
+      sourceBackedPreviewOpens.length === 1
+        && sourceBackedPreviewOpens[0].fsPath === traceableEvidenceUri.fsPath
+        && sourceBackedPreviewShows.length === 1
+        && sourceBackedPreviewShows[0].document.uri.fsPath === traceableEvidenceUri.fsPath
+        && sourceBackedPreviewShows[0].options?.preview === false
+        && sourceBackedPreviewCommands.length === 1
+        && sourceBackedPreviewCommands[0].command === 'reopenActiveEditorWith'
+        && sourceBackedPreviewCommands[0].args?.[0] === 'vscode.markdown.preview.editor',
+      `TRACEABLE markdown evidence opening must follow the source-backed preview path before opening preview. Got opens=${JSON.stringify(sourceBackedPreviewOpens)}, shows=${JSON.stringify(sourceBackedPreviewShows)}, commands=${JSON.stringify(sourceBackedPreviewCommands)}`
+    );
+  } finally {
+    vscodeModule.workspace.openTextDocument = originalExtensionOpenTextDocument;
+    vscodeModule.window.showTextDocument = originalExtensionShowTextDocument;
+    vscodeModule.commands.executeCommand = originalExtensionExecuteCommand;
+  }
   const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
   const originalActiveTextEditorDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'activeTextEditor');
   let visibleTabs = [
@@ -3724,9 +3764,23 @@ async function runOfflineLocalChatCleanupChecks() {
         }
       }
     ];
+    vscodeModule.workspace.textDocuments = [{ uri: traceableEvidenceUri }];
+    vscodeModule.workspace.findFiles = async () => [];
+    Object.defineProperty(vscodeModule.window, 'activeTextEditor', {
+      configurable: true,
+      value: {
+        document: {
+          uri: vscodeModule.Uri.file(path.join(packageRoot, 'README.md'))
+        }
+      }
+    });
     assert(
-      extensionModule.resolveActiveTraceableEvidenceUri()?.fsPath === traceableEvidenceUri.fsPath,
-      'TRACEABLE evidence target resolution must recover the .trace.md source URI from the active markdown preview tab.'
+      (await extensionModule.resolveActiveTraceableEvidenceUri())?.fsPath === traceableEvidenceUri.fsPath,
+      'TRACEABLE evidence target resolution must prioritize the active markdown preview tab over an unrelated activeTextEditor.'
+    );
+    assert(
+      (await extensionModule.resolveActiveTraceableEvidenceUri({ scheme: 'vscode-webview', fsPath: '/markdown-preview/06-leo.trace.md' }))?.fsPath === traceableEvidenceUri.fsPath,
+      'TRACEABLE evidence target resolution must ignore non-evidence URI-like command args from markdown preview title actions and still recover the active .trace.md preview target.'
     );
 
     visibleTabs = [

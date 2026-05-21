@@ -43,6 +43,7 @@ import {
 const OPEN_TRACEABLE_SUBAGENT_STATUS_DETAIL_COMMAND = "tiinex.aiVscodeTools.openTraceableSubagentStatusDetail";
 const OPEN_TRACEABLE_EVIDENCE_EDITOR_COMMAND = "tiinex.aiVscodeTools.openTraceableEvidenceEditor";
 const REOPEN_TRACEABLE_EVIDENCE_SOURCE_COMMAND = "tiinex.aiVscodeTools.reopenTraceableEvidenceSource";
+const REOPEN_TRACEABLE_EVIDENCE_PREVIEW_COMMAND = "tiinex.aiVscodeTools.reopenTraceableEvidencePreview";
 const TRACEABLE_PANEL_VISIBLE_CONTEXT = "tiinex.aiVscodeTools.traceablePanelVisible";
 const TRACEABLE_PANEL_FALLBACK_COMMAND = "workbench.action.terminal.focus";
 const TRACEABLE_EVIDENCE_REFRESH_DEBOUNCE_MS = 250;
@@ -88,6 +89,24 @@ function readTabInputViewType(input: unknown): string | undefined {
   return typeof viewType === "string" ? viewType : undefined;
 }
 
+function normalizePotentialTraceableUri(value: unknown): vscode.Uri | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Partial<vscode.Uri> & { path?: string };
+  if (typeof candidate.fsPath === "string" && typeof candidate.scheme === "string") {
+    return candidate as vscode.Uri;
+  }
+  if (typeof candidate.path === "string" && typeof candidate.scheme === "string" && candidate.scheme === "file") {
+    return vscode.Uri.file(candidate.path);
+  }
+  return undefined;
+}
+
+function isTraceableEvidenceFileUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
+  return Boolean(uri && uri.scheme === "file" && uri.fsPath.toLowerCase().endsWith(".trace.md"));
+}
+
 export function isRelatedTraceableEvidenceTab(tab: { label?: string; input?: unknown }, resolvedUri: vscode.Uri): boolean {
   const input = tab.input;
   const resolvedKey = getTraceableEvidenceResourceKey(resolvedUri);
@@ -107,22 +126,93 @@ export function isRelatedTraceableEvidenceTab(tab: { label?: string; input?: unk
   return normalizedLabel === resolvedBaseName || normalizedLabel === `preview ${resolvedBaseName}`;
 }
 
-export function resolveActiveTraceableEvidenceUri(target?: vscode.Uri | string): vscode.Uri | undefined {
-  if (target instanceof vscode.Uri) {
+function normalizeTraceableEvidenceTabLabel(label: string | undefined): string | undefined {
+  const trimmed = label?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutPreviewPrefix = trimmed.replace(/^preview\s+/iu, "").trim();
+  return withoutPreviewPrefix.toLowerCase().endsWith(".trace.md") ? withoutPreviewPrefix : undefined;
+}
+
+export async function resolveActiveTraceableEvidenceUri(target?: vscode.Uri | string): Promise<vscode.Uri | undefined> {
+  if (target instanceof vscode.Uri && isTraceableEvidenceFileUri(target)) {
     return target;
   }
   if (typeof target === "string" && target.trim()) {
-    return vscode.Uri.file(target.trim());
+    const targetUri = vscode.Uri.file(target.trim());
+    if (isTraceableEvidenceFileUri(targetUri)) {
+      return targetUri;
+    }
   }
-  const activeEditorUri = vscode.window.activeTextEditor?.document.uri;
-  if (activeEditorUri) {
-    return activeEditorUri;
+  const normalizedTargetUri = normalizePotentialTraceableUri(target);
+  if (isTraceableEvidenceFileUri(normalizedTargetUri)) {
+    return normalizedTargetUri;
   }
   const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
-  if (!activeTab) {
-    return undefined;
+  if (activeTab) {
+    const directUri = readTabInputUri(activeTab.input, "uri") ?? readTabInputUri(activeTab.input, "modified");
+    if (isTraceableEvidenceFileUri(directUri)) {
+      return directUri;
+    }
+    const normalizedLabel = normalizeTraceableEvidenceTabLabel(activeTab.label);
+    if (normalizedLabel) {
+      const openDocumentMatch = vscode.workspace.textDocuments.find((document) => (
+        document.uri.scheme === "file"
+        && path.basename(document.uri.fsPath).toLowerCase() === normalizedLabel.toLowerCase()
+      ));
+      if (openDocumentMatch) {
+        return openDocumentMatch.uri;
+      }
+      const workspaceMatches = await vscode.workspace.findFiles("**/*.trace.md", undefined, 50);
+      const basenameMatches = workspaceMatches.filter((candidate) => path.basename(candidate.fsPath).toLowerCase() === normalizedLabel.toLowerCase());
+      if (basenameMatches.length === 1) {
+        return basenameMatches[0];
+      }
+    }
   }
-  return readTabInputUri(activeTab.input, "uri") ?? readTabInputUri(activeTab.input, "modified");
+  const visibleTraceableTabLabels = (vscode.window.tabGroups.all ?? [])
+    .flatMap((group) => group.tabs)
+    .map((tab) => normalizeTraceableEvidenceTabLabel(tab.label))
+    .filter((label): label is string => Boolean(label));
+  const uniqueVisibleTraceableLabels = [...new Set(visibleTraceableTabLabels)];
+  if (uniqueVisibleTraceableLabels.length === 1) {
+    const visibleLabel = uniqueVisibleTraceableLabels[0];
+    const openDocumentMatch = vscode.workspace.textDocuments.find((document) => (
+      document.uri.scheme === "file"
+      && path.basename(document.uri.fsPath).toLowerCase() === visibleLabel.toLowerCase()
+    ));
+    if (openDocumentMatch) {
+      return openDocumentMatch.uri;
+    }
+    const workspaceMatches = await vscode.workspace.findFiles("**/*.trace.md", undefined, 50);
+    const basenameMatches = workspaceMatches.filter((candidate) => path.basename(candidate.fsPath).toLowerCase() === visibleLabel.toLowerCase());
+    if (basenameMatches.length === 1) {
+      return basenameMatches[0];
+    }
+  }
+  const activeEditorUri = vscode.window.activeTextEditor?.document.uri;
+  if (isTraceableEvidenceFileUri(activeEditorUri)) {
+    return activeEditorUri;
+  }
+  return undefined;
+}
+
+export async function openMarkdownPreviewLikeSource(target: vscode.Uri): Promise<void> {
+  const document = await vscode.workspace.openTextDocument(target);
+  await vscode.window.showTextDocument(document, {
+    preview: false,
+    preserveFocus: false
+  });
+  try {
+    await vscode.commands.executeCommand("reopenActiveEditorWith", "vscode.markdown.preview.editor");
+  } catch {
+    try {
+      await vscode.commands.executeCommand("markdown.reopenAsPreview");
+    } catch {
+      await vscode.commands.executeCommand("markdown.showPreview", target);
+    }
+  }
 }
 
 function compactTraceableSummaryText(value: string, maxLength: number): string {
@@ -1137,7 +1227,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const openTraceableFile = async (filePath: string, startLine?: number, endLine?: number): Promise<void> => {
     const normalizedPath = filePath.trim();
     if (/\.md$/iu.test(normalizedPath) && !Number.isInteger(startLine) && !Number.isInteger(endLine)) {
-      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(normalizedPath));
+      await openMarkdownPreviewLikeSource(vscode.Uri.file(normalizedPath));
       return;
     }
     const targetLine = Number.isInteger(startLine) ? Math.max(0, (startLine ?? 1) - 1) : 0;
@@ -1166,8 +1256,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     panel.dispose();
   };
+  const reopenTraceableEvidencePreview = async (): Promise<void> => {
+    const panelKey = activeTraceableEvidencePanelKey;
+    if (!panelKey) {
+      void vscode.window.showWarningMessage("Open a TRACEABLE evidence view first.");
+      return;
+    }
+    const sourceUri = traceableEvidencePanelSources.get(panelKey);
+    const panel = traceableEvidencePanels.get(panelKey);
+    if (!sourceUri || !panel) {
+      void vscode.window.showWarningMessage("The active TRACEABLE evidence view is no longer available.");
+      return;
+    }
+    await openMarkdownPreviewLikeSource(sourceUri);
+    panel.dispose();
+  };
   const openTraceableEvidenceEditor = async (target?: vscode.Uri | string): Promise<void> => {
-    const resolvedUri = resolveActiveTraceableEvidenceUri(target);
+    const resolvedUri = await resolveActiveTraceableEvidenceUri(target);
     if (!resolvedUri || resolvedUri.scheme !== "file" || !resolvedUri.fsPath.toLowerCase().endsWith(".trace.md")) {
       void vscode.window.showWarningMessage("Open a .trace.md evidence file first, or pass one explicitly.");
       return;
@@ -1363,6 +1468,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand(REOPEN_TRACEABLE_EVIDENCE_SOURCE_COMMAND, async () => {
       await reopenTraceableEvidenceSource();
+    }),
+    vscode.commands.registerCommand(REOPEN_TRACEABLE_EVIDENCE_PREVIEW_COMMAND, async () => {
+      await reopenTraceableEvidencePreview();
     }),
     vscode.window.registerWebviewViewProvider(TRACEABLE_SUBAGENT_PANEL_VIEW_ID, traceableStatusPanel, {
       webviewOptions: { retainContextWhenHidden: true }

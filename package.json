@@ -142,6 +142,12 @@
         "title": "Reopen as Source File",
         "shortTitle": "Source",
         "icon": "$(go-to-file)"
+      },
+      {
+        "command": "tiinex.aiVscodeTools.reopenTraceableEvidencePreview",
+        "title": "Reopen as Markdown Preview",
+        "shortTitle": "Preview",
+        "icon": "$(open-preview)"
       }
     ],
     "views": {
@@ -247,13 +253,18 @@
       "editor/title": [
         {
           "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
-          "when": "resourceExtname == .md && resourcePath =~ /\\.trace\\.md$/",
+          "when": "resourceExtname == .md && resourcePath =~ /\\.trace\\.md$/ && activeWebviewPanelId != markdown.preview && activeCustomEditorId != vscode.markdown.preview.editor",
           "group": "navigation@-1000"
         },
         {
           "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
-          "when": "activeWebviewPanelId == markdown.preview",
+          "when": "activeWebviewPanelId == markdown.preview || activeCustomEditorId == vscode.markdown.preview.editor",
           "group": "navigation@-1000"
+        },
+        {
+          "command": "tiinex.aiVscodeTools.reopenTraceableEvidencePreview",
+          "when": "activeWebviewPanelId == tiinexTraceableEvidenceEditor",
+          "group": "navigation@-975"
         },
         {
           "command": "tiinex.aiVscodeTools.reopenTraceableEvidenceSource",
