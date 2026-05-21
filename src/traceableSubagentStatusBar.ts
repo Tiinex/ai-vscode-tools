@@ -147,6 +147,11 @@ interface TrailItemState {
   item: vscode.StatusBarItem;
 }
 
+interface ObservedToolState {
+  event: TraceableSubagentToolStatusEvent;
+  priority: number;
+}
+
 interface StatusPresentationState {
   phase: "running" | "completed" | "warning" | "error";
   message: string;
@@ -208,6 +213,7 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
   private activeRunId = 0;
   private clearTimer: NodeJS.Timeout | undefined;
   private trailItems = new Map<string, TrailItemState>();
+  private observedTools = new Map<string, ObservedToolState>();
   private nextTrailPriority = TRAIL_ITEM_BASE_PRIORITY;
   private currentStatus: StatusPresentationState = {
     phase: "running",
@@ -234,7 +240,7 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
   startRun(initialHeader: TraceableSubagentStatusHeader = {}): TraceableSubagentStatusReporter {
     const runId = ++this.activeRunId;
     this.clearPendingTimer();
-    this.resetTrailItems();
+    this.resetToolState(false);
     this.currentStartedAt = new Date().toISOString();
     this.currentHeader = defaultHeaderState();
     this.currentRequestSummary = [];
@@ -288,7 +294,7 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
 
   dispose(): void {
     this.clearPendingTimer();
-    this.resetTrailItems();
+    this.resetToolState(false);
     this.item.dispose();
   }
 
@@ -374,19 +380,22 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
 
   private recordToolEvent(event: TraceableSubagentToolStatusEvent): void {
     const existing = this.trailItems.get(event.callId);
+    const existingObserved = this.observedTools.get(event.callId);
     const normalizedEvent: TraceableSubagentToolStatusEvent = {
       ...event,
-      occurredAt: event.occurredAt?.trim() || existing?.event.occurredAt || new Date().toISOString()
+      occurredAt: event.occurredAt?.trim() || existing?.event.occurredAt || existingObserved?.event.occurredAt || new Date().toISOString()
     };
+    const priority = existingObserved?.priority ?? this.nextTrailPriority++;
     existing?.item.hide();
     existing?.item.dispose();
-    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, this.nextTrailPriority++);
+    const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, priority);
     item.name = "Traceable Subagent Tool Call";
     item.text = `${iconForToolPhase(normalizedEvent.phase)} ${summarizeToolCallLabel(normalizedEvent)}`;
     item.tooltip = buildToolCallTooltip(normalizedEvent);
     item.command = this.detailCommandId;
     item.show();
     this.trailItems.set(normalizedEvent.callId, { event: normalizedEvent, item });
+    this.observedTools.set(normalizedEvent.callId, { event: normalizedEvent, priority });
     this.item.tooltip = this.buildMainTooltip();
     this.publishDetailView();
   }
@@ -405,14 +414,23 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
     });
   }
 
-  private resetTrailItems(): void {
+  private resetToolState(publish = true): void {
     for (const entry of this.trailItems.values()) {
       entry.item.hide();
       entry.item.dispose();
     }
     this.trailItems.clear();
+    this.observedTools.clear();
     this.nextTrailPriority = TRAIL_ITEM_BASE_PRIORITY;
-    this.publishDetailView();
+    if (publish) {
+      this.publishDetailView();
+    }
+  }
+
+  private getObservedToolEvents(): TraceableSubagentToolStatusEvent[] {
+    return [...this.observedTools.values()]
+      .sort((left, right) => right.priority - left.priority)
+      .map(({ event }) => event);
   }
 
   private scheduleHide(runId: number, keepMs: number): void {
@@ -452,10 +470,9 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
     if (this.currentStatus.detail) {
       lines.push(`Detail: ${this.currentStatus.detail}`);
     }
-    const recentEvents = [...this.trailItems.values()]
-      .sort((left, right) => (right.item.priority ?? 0) - (left.item.priority ?? 0))
+    const recentEvents = this.getObservedToolEvents()
       .slice(0, 3)
-      .map(({ event }) => `${iconForToolPhase(event.phase)} ${summarizeToolCallLabel(event)}`);
+      .map((event) => `${iconForToolPhase(event.phase)} ${summarizeToolCallLabel(event)}`);
     if (recentEvents.length > 0) {
       lines.push("Recent tools:");
       lines.push(...recentEvents.map((entry) => `- ${entry}`));
@@ -469,9 +486,7 @@ export class TraceableSubagentStatusBarController implements vscode.Disposable {
       status: this.toDetailStatus(this.currentStatus),
       requestSummary: [...this.currentRequestSummary],
       statusHistory: [...this.statusHistory],
-      recentTools: [...this.trailItems.values()]
-        .sort((left, right) => (right.item.priority ?? 0) - (left.item.priority ?? 0))
-        .map(({ event }) => event),
+      recentTools: this.getObservedToolEvents(),
       startedAt: this.currentStartedAt,
       updatedAt: new Date().toISOString()
     });

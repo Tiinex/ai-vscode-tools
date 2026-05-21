@@ -62,6 +62,51 @@ type DiscoveryScope = "current-workspace" | "all-local";
 type TraceableAutoRevealMode = "yes" | "no" | "always";
 type TraceableAutoHideMode = "yes" | "no";
 
+function getTraceableEvidenceResourceKey(uri: vscode.Uri): string {
+  return path.normalize(uri.fsPath).toLowerCase();
+}
+
+function readTabInputUri(input: unknown, key: "uri" | "modified"): vscode.Uri | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const candidate = (input as Record<string, unknown>)[key];
+  if (!candidate || typeof candidate !== "object") {
+    return undefined;
+  }
+  const uriLike = candidate as Partial<vscode.Uri>;
+  return typeof uriLike.fsPath === "string" && typeof uriLike.scheme === "string"
+    ? uriLike as vscode.Uri
+    : undefined;
+}
+
+function readTabInputViewType(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const viewType = (input as Record<string, unknown>).viewType;
+  return typeof viewType === "string" ? viewType : undefined;
+}
+
+export function isRelatedTraceableEvidenceTab(tab: { label?: string; input?: unknown }, resolvedUri: vscode.Uri): boolean {
+  const input = tab.input;
+  const resolvedKey = getTraceableEvidenceResourceKey(resolvedUri);
+  const sourceUri = readTabInputUri(input, "uri");
+  if (sourceUri?.scheme === resolvedUri.scheme && getTraceableEvidenceResourceKey(sourceUri) === resolvedKey) {
+    return true;
+  }
+  const modifiedUri = readTabInputUri(input, "modified");
+  if (modifiedUri?.scheme === resolvedUri.scheme && getTraceableEvidenceResourceKey(modifiedUri) === resolvedKey) {
+    return true;
+  }
+  if (readTabInputViewType(input) === "tiinexTraceableEvidenceEditor") {
+    return false;
+  }
+  const normalizedLabel = typeof tab.label === "string" ? tab.label.trim().toLowerCase() : "";
+  const resolvedBaseName = path.basename(resolvedUri.fsPath).toLowerCase();
+  return normalizedLabel === resolvedBaseName || normalizedLabel === `preview ${resolvedBaseName}`;
+}
+
 function compactTraceableSummaryText(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
   if (compact.length <= maxLength) {
@@ -1029,7 +1074,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const traceableEvidencePanels = new Map<string, vscode.WebviewPanel>();
   const traceableEvidencePanelSources = new Map<string, vscode.Uri>();
   let activeTraceableEvidencePanelKey: string | undefined;
-  const getTraceableEvidencePanelKey = (uri: vscode.Uri): string => path.normalize(uri.fsPath).toLowerCase();
+  const getTraceableEvidencePanelKey = (uri: vscode.Uri): string => getTraceableEvidenceResourceKey(uri);
   const readTraceableEvidenceState = async (resolvedUri: vscode.Uri): Promise<{
     sourceDocument: vscode.TextDocument | undefined;
     parsedState: ReturnType<typeof parseTraceableEvidenceStateMarkdown>;
@@ -1066,30 +1111,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     renderTraceableEvidencePanel(panel, latestState.parsedState.snapshot);
     return true;
   };
-  const getActiveTraceableTabToReplace = (resolvedUri: vscode.Uri): vscode.Tab | undefined => {
-    const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
-    if (!activeTab) {
-      return undefined;
-    }
-    const input = activeTab.input;
-    const resolvedKey = getTraceableEvidencePanelKey(resolvedUri);
-    const resolvedBaseName = path.basename(resolvedUri.fsPath).toLowerCase();
-    const activeTabLabel = activeTab.label.trim().toLowerCase();
-    const matchesTextInput = input instanceof vscode.TabInputText
-      && input.uri.scheme === resolvedUri.scheme
-      && getTraceableEvidencePanelKey(input.uri) === resolvedKey;
-    const matchesDiffInput = input instanceof vscode.TabInputTextDiff
-      && input.modified.scheme === resolvedUri.scheme
-      && getTraceableEvidencePanelKey(input.modified) === resolvedKey;
-    const matchesRelatedActiveTab = activeTabLabel === resolvedBaseName
-      || activeTabLabel.endsWith(` ${resolvedBaseName}`)
-      || activeTabLabel.includes(resolvedBaseName);
-    return matchesTextInput || matchesDiffInput || matchesRelatedActiveTab ? activeTab : undefined;
+  const getRelatedTraceableTabsToReplace = (resolvedUri: vscode.Uri): vscode.Tab[] => {
+    return (vscode.window.tabGroups.all ?? [])
+      .flatMap((group) => group.tabs)
+      .filter((tab) => isRelatedTraceableEvidenceTab(tab, resolvedUri));
   };
   const openTraceableFile = async (filePath: string, startLine?: number, endLine?: number): Promise<void> => {
     const normalizedPath = filePath.trim();
     if (/\.md$/iu.test(normalizedPath) && !Number.isInteger(startLine) && !Number.isInteger(endLine)) {
-      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(normalizedPath));
+      const sourceUri = vscode.Uri.file(normalizedPath);
+      await vscode.commands.executeCommand("vscode.open", sourceUri, {
+        preview: false,
+        preserveFocus: true
+      });
+      await vscode.commands.executeCommand("markdown.showPreview", sourceUri);
       return;
     }
     const targetLine = Number.isInteger(startLine) ? Math.max(0, (startLine ?? 1) - 1) : 0;
@@ -1134,7 +1169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showErrorMessage("This TRACEABLE evidence file does not contain a readable Traceable State block.");
       return;
     }
-    const tabToReplace = getActiveTraceableTabToReplace(resolvedUri);
+    const tabsToReplace = getRelatedTraceableTabsToReplace(resolvedUri);
     const existingPanel = traceableEvidencePanels.get(panelKey);
     if (existingPanel) {
       traceableEvidencePanelSources.set(panelKey, resolvedUri);
@@ -1142,8 +1177,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       existingPanel.title = path.basename(resolvedUri.fsPath);
       renderTraceableEvidencePanel(existingPanel, parsedState.snapshot);
       existingPanel.reveal(vscode.ViewColumn.Active, false);
-      if (tabToReplace && !sourceDocument?.isDirty) {
-        await vscode.window.tabGroups.close(tabToReplace, false);
+      if (tabsToReplace.length > 0 && !sourceDocument?.isDirty) {
+        await vscode.window.tabGroups.close(tabsToReplace, false);
       }
       return;
     }
@@ -1239,8 +1274,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await openTraceableFile(message.filePath, startLine, endLine);
       }
     });
-    if (tabToReplace && !sourceDocument?.isDirty) {
-      await vscode.window.tabGroups.close(tabToReplace, false);
+    if (tabsToReplace.length > 0 && !sourceDocument?.isDirty) {
+      await vscode.window.tabGroups.close(tabsToReplace, false);
     }
   };
   const hideTraceablePanel = async (options: { restoreFocus?: boolean; hideStatusBar?: boolean; resetKeepOpen?: boolean } = {}): Promise<void> => {

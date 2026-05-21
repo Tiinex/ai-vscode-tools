@@ -2967,7 +2967,7 @@ function formatTraceablePathReference(
   if (!relativePath) {
     return `[${label}](${encodeMarkdownHrefPath(path.join("..", label))})`;
   }
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+  if (path.isAbsolute(relativePath)) {
     return `[${label}](${vscode.Uri.file(trimmed).toString()})`;
   }
   const normalizedRelativePath = encodeMarkdownHrefPath(relativePath);
@@ -2988,7 +2988,7 @@ function mapPathLikeFields(value: unknown, options: TraceableMarkdownPathRenderO
       mapped[key] = options?.mode === "relative-markdown"
         ? (() => {
           const relativePath = normalizeArtifactPath(path.relative(options.baseDir ?? path.dirname(entry), entry)) || path.basename(entry);
-          return relativePath.startsWith("..") ? vscode.Uri.file(entry).toString() : relativePath;
+          return path.isAbsolute(relativePath) ? vscode.Uri.file(entry).toString() : relativePath;
         })()
         : options?.mode === "absolute-file-uri-markdown"
           ? vscode.Uri.file(entry).toString()

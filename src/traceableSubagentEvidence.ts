@@ -385,7 +385,7 @@ function formatTraceablePathReference(filePath: string | undefined, options: Tra
   if (!relativePath) {
     return `[${label}](${encodeMarkdownHrefPath(path.join("..", label))})`;
   }
-  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+  if (path.isAbsolute(relativePath)) {
     return `[${label}](${vscode.Uri.file(trimmed).toString()})`;
   }
   return `[${label}](${encodeMarkdownHrefPath(relativePath)})`;
@@ -464,8 +464,16 @@ export class TraceableSubagentEvidenceController {
   }
 
   updateSnapshot(snapshot: TraceableSubagentDetailSnapshot): TraceableSubagentDetailSnapshot {
+    if (this.activeRunId && snapshot.startedAt !== this.activeRunId) {
+      this.exportState = { status: "idle" };
+      this.lastResultMarkdown = undefined;
+      this.lastResult = undefined;
+      this.activeRunId = undefined;
+    }
     this.snapshot = snapshot;
-    if (this.exportState.filePath && (this.exportState.status === "writing" || this.exportState.status === "ready")) {
+    if (this.activeRunId === snapshot.startedAt
+      && this.exportState.filePath
+      && (this.exportState.status === "writing" || this.exportState.status === "ready")) {
       void this.persistCurrentEvidence();
     }
     return this.getSnapshot();

@@ -2797,27 +2797,30 @@ export function renderTraceableSubagentPanelHtml(
       const timerKind = timerNode.dataset.timerKind || '';
       const startedAt = timerNode.dataset.startedAt || '';
       const updatedAt = timerNode.dataset.updatedAt || referenceIso;
+      const effectiveReferenceIso = timerNode.dataset.running === 'true'
+        ? (referenceIso || updatedAt || new Date().toISOString())
+        : (updatedAt || referenceIso || new Date().toISOString());
       const baseElapsedMs = Number(timerNode.dataset.baseElapsedMs || '0');
       const activeStarts = parseActiveStarts(timerNode.dataset.activeStarts || '');
       if (timerKind === 'total') {
         const startedAtMs = parseTimestampMs(startedAt);
-        const referenceAtMs = parseTimestampMs(referenceIso);
+        const referenceAtMs = parseTimestampMs(effectiveReferenceIso);
         return Number.isFinite(startedAtMs) && Number.isFinite(referenceAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0;
       }
       if (timerKind === 'tools') {
-        return Math.max(0, baseElapsedMs + computeActiveToolElapsedMs(activeStarts, referenceIso));
+        return Math.max(0, baseElapsedMs + computeActiveToolElapsedMs(activeStarts, effectiveReferenceIso));
       }
       if (timerKind === 'think') {
         const startedAtMs = parseTimestampMs(startedAt);
-        const referenceAtMs = parseTimestampMs(referenceIso);
+        const referenceAtMs = parseTimestampMs(effectiveReferenceIso);
         const totalElapsedMs = Number.isFinite(startedAtMs) && Number.isFinite(referenceAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0;
-        const toolElapsedMs = Math.max(0, baseElapsedMs + computeActiveToolElapsedMs(activeStarts, referenceIso));
+        const toolElapsedMs = Math.max(0, baseElapsedMs + computeActiveToolElapsedMs(activeStarts, effectiveReferenceIso));
         return Math.max(0, totalElapsedMs - toolElapsedMs);
       }
       if (timerKind === 'event') {
         if (timerNode.dataset.running === 'true') {
           const startedAtMs = parseTimestampMs(startedAt);
-          const referenceAtMs = parseTimestampMs(referenceIso);
+          const referenceAtMs = parseTimestampMs(effectiveReferenceIso);
           return Number.isFinite(startedAtMs) && Number.isFinite(referenceAtMs) ? Math.max(0, referenceAtMs - startedAtMs) : 0;
         }
         return Math.max(0, baseElapsedMs);

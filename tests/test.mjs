@@ -3613,6 +3613,37 @@ async function runOfflineLocalChatCleanupChecks() {
       && String(carrySummaryItem.title ?? '').includes('Reductions: stay read-only | prefer exact file anchors first'),
     `TRACEABLE request summary must surface carried prior context for later panel and export evidence. Got: ${JSON.stringify(carryRequestSummary)}`
   );
+  const traceableEvidenceUri = vscodeModule.Uri.file(path.join(packageRoot, '..', 'feedback', 'topics', '01-leo.trace.md'));
+  assert(
+    extensionModule.isRelatedTraceableEvidenceTab({
+      label: '01-leo.trace.md',
+      input: {
+        constructor: { name: 'TabInputText' },
+        uri: traceableEvidenceUri
+      }
+    }, traceableEvidenceUri) === true,
+    'TRACEABLE evidence tab matching must recognize the exact source markdown tab for the same .trace.md resource.'
+  );
+  assert(
+    extensionModule.isRelatedTraceableEvidenceTab({
+      label: 'Preview 01-leo.trace.md',
+      input: {
+        constructor: { name: 'TabInputWebview' },
+        viewType: 'markdown.preview.editor'
+      }
+    }, traceableEvidenceUri) === true,
+    'TRACEABLE evidence tab matching must recognize the built-in markdown preview tab for the same .trace.md resource.'
+  );
+  assert(
+    extensionModule.isRelatedTraceableEvidenceTab({
+      label: '01-leo.trace.md',
+      input: {
+        constructor: { name: 'TabInputWebview' },
+        viewType: 'tiinexTraceableEvidenceEditor'
+      }
+    }, traceableEvidenceUri) === false,
+    'TRACEABLE evidence tab matching must not treat the reconstructed TRACEABLE webview itself as a source/preview tab to replace.'
+  );
   const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
   let visibleTabs = [
     {
@@ -7861,6 +7892,8 @@ async function runTraceableSubagentChecks() {
       && renderedPanelHtml.includes(`const currentRunId = ${JSON.stringify(panelSnapshot.startedAt)};`)
       && renderedPanelHtml.includes("const requestRow = document.querySelector('.event-request[data-request-expandable=\"true\"]');")
       && renderedPanelHtml.includes("window.addEventListener('message'")
+      && renderedPanelHtml.includes("const effectiveReferenceIso = timerNode.dataset.running === 'true'")
+      && renderedPanelHtml.includes(": (updatedAt || referenceIso || new Date().toISOString());")
       && renderedPanelHtml.includes("followLatest: isNearBottom()")
       && renderedPanelHtml.includes("setTimeout(applyScroll, 120);"),
     `Traceable subagent status panel must preserve panel state and follow-latest wiring. Got: ${renderedPanelHtml}`
@@ -9001,9 +9034,9 @@ async function runTraceableSubagentChecks() {
     "Traceable subagent markdown renderer must bound oversized technical JSON blocks instead of emitting one giant blob."
   );
   assert(
-    markdown.includes("[traceable-subagent-debug.jsonl](file:///tmp/traceable-subagent-debug.jsonl)")
+    markdown.includes("[traceable-subagent-debug.jsonl](../traceable-subagent-debug.jsonl)")
       && markdown.includes("ready | [01-anchor.trace.md](01-anchor.trace.md)"),
-    "Traceable subagent markdown renderer must surface path references as markdown links when a relative evidence render base is provided."
+    "Traceable subagent markdown renderer must preserve parent-directory relative markdown links when a relative evidence render base is provided."
   );
 
   const evidenceTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "traceable-evidence-"));
@@ -9029,7 +9062,19 @@ async function runTraceableSubagentChecks() {
       evidenceFile: { status: "idle" },
       requestSummary: [],
       statusHistory: [],
-      recentTools: [],
+      recentTools: [
+        {
+          callId: "call-export-1",
+          toolName: "copilot_readFile",
+          phase: "success",
+          input: {
+            filePath: path.join(packageRoot, "src", "traceableSubagentStatusBar.ts"),
+            startLine: 1,
+            endLine: 120
+          },
+          occurredAt: "2026-05-21T01:20:50.000Z"
+        }
+      ],
       startedAt: "2026-05-21T01:20:25.634Z",
       updatedAt: "2026-05-21T01:21:12.235Z"
     });
@@ -9108,8 +9153,51 @@ async function runTraceableSubagentChecks() {
     assert(
       parsedEvidenceState?.snapshot?.header?.modelLabel === "GPT-5 mini"
         && parsedEvidenceState?.snapshot?.evidenceFile?.fileName?.endsWith(".trace.md")
-        && parsedEvidenceState?.result?.completionClaim === "complete",
+        && parsedEvidenceState?.result?.completionClaim === "complete"
+        && parsedEvidenceState?.snapshot?.recentTools?.length === 1
+        && parsedEvidenceState?.snapshot?.recentTools?.[0]?.callId === "call-export-1",
       `Traceable evidence export must be parseable back into a reusable traceable state snapshot and result. Got: ${JSON.stringify(parsedEvidenceState)}`
+    );
+    const expectedSiblingRepoRelativePath = path.relative(
+      path.dirname(exportedResult.evidenceFile.filePath),
+      path.join(packageRoot, "src", "traceableSubagentStatusBar.ts")
+    ).replace(/\\/g, "/");
+    assert(
+      exportedEvidenceMarkdown.includes(`[traceableSubagentStatusBar.ts](${expectedSiblingRepoRelativePath})`),
+      `Traceable evidence export must preserve relative markdown links for sibling-repo paths instead of forcing absolute file URIs. Got: ${exportedEvidenceMarkdown}`
+    );
+    evidenceController.updateSnapshot({
+      header: {
+        agentName: "Trace lane",
+        agentFilePath: "",
+        agentResolved: false,
+        modelLabel: "GPT-5 mini",
+        candidate: false,
+        experimental: false,
+        humanRole: false,
+        toolsetNames: [],
+        selectedToolNames: [],
+        toolSelectionRestricted: false
+      },
+      status: {
+        phase: "running",
+        message: "starting"
+      },
+      evidenceFile: { status: "idle" },
+      requestSummary: [],
+      statusHistory: [],
+      recentTools: [],
+      startedAt: "2026-05-21T01:30:00.000Z",
+      updatedAt: "2026-05-21T01:30:01.000Z"
+    });
+    const preservedEvidenceMarkdown = await fs.readFile(exportedResult.evidenceFile.filePath, "utf8");
+    const preservedEvidenceState = traceableSubagentEvidence.parseTraceableEvidenceStateMarkdown(preservedEvidenceMarkdown);
+    assert(
+      preservedEvidenceState?.snapshot?.startedAt === "2026-05-21T01:20:25.634Z"
+        && preservedEvidenceState?.snapshot?.recentTools?.length === 1
+        && preservedEvidenceState?.snapshot?.recentTools?.[0]?.callId === "call-export-1"
+        && evidenceController.getSnapshot().evidenceFile?.status === "idle",
+      `Traceable evidence export must stay bound to the run that created it instead of being overwritten by later live snapshots. Got snapshot=${JSON.stringify(preservedEvidenceState?.snapshot)} current=${JSON.stringify(evidenceController.getSnapshot())}`
     );
 
     const viewEvidenceFilePath = path.join(evidenceTempDir, "02-view-summary.trace.md");
