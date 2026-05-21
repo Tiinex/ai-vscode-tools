@@ -107,6 +107,24 @@ export function isRelatedTraceableEvidenceTab(tab: { label?: string; input?: unk
   return normalizedLabel === resolvedBaseName || normalizedLabel === `preview ${resolvedBaseName}`;
 }
 
+export function resolveActiveTraceableEvidenceUri(target?: vscode.Uri | string): vscode.Uri | undefined {
+  if (target instanceof vscode.Uri) {
+    return target;
+  }
+  if (typeof target === "string" && target.trim()) {
+    return vscode.Uri.file(target.trim());
+  }
+  const activeEditorUri = vscode.window.activeTextEditor?.document.uri;
+  if (activeEditorUri) {
+    return activeEditorUri;
+  }
+  const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  if (!activeTab) {
+    return undefined;
+  }
+  return readTabInputUri(activeTab.input, "uri") ?? readTabInputUri(activeTab.input, "modified");
+}
+
 function compactTraceableSummaryText(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
   if (compact.length <= maxLength) {
@@ -1119,12 +1137,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const openTraceableFile = async (filePath: string, startLine?: number, endLine?: number): Promise<void> => {
     const normalizedPath = filePath.trim();
     if (/\.md$/iu.test(normalizedPath) && !Number.isInteger(startLine) && !Number.isInteger(endLine)) {
-      const sourceUri = vscode.Uri.file(normalizedPath);
-      await vscode.commands.executeCommand("vscode.open", sourceUri, {
-        preview: false,
-        preserveFocus: true
-      });
-      await vscode.commands.executeCommand("markdown.showPreview", sourceUri);
+      await vscode.commands.executeCommand("markdown.showPreview", vscode.Uri.file(normalizedPath));
       return;
     }
     const targetLine = Number.isInteger(startLine) ? Math.max(0, (startLine ?? 1) - 1) : 0;
@@ -1154,11 +1167,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     panel.dispose();
   };
   const openTraceableEvidenceEditor = async (target?: vscode.Uri | string): Promise<void> => {
-    const resolvedUri = target instanceof vscode.Uri
-      ? target
-      : typeof target === "string" && target.trim()
-        ? vscode.Uri.file(target.trim())
-        : vscode.window.activeTextEditor?.document.uri;
+    const resolvedUri = resolveActiveTraceableEvidenceUri(target);
     if (!resolvedUri || resolvedUri.scheme !== "file" || !resolvedUri.fsPath.toLowerCase().endsWith(".trace.md")) {
       void vscode.window.showWarningMessage("Open a .trace.md evidence file first, or pass one explicitly.");
       return;

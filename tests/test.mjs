@@ -3644,7 +3644,12 @@ async function runOfflineLocalChatCleanupChecks() {
     }, traceableEvidenceUri) === false,
     'TRACEABLE evidence tab matching must not treat the reconstructed TRACEABLE webview itself as a source/preview tab to replace.'
   );
+  assert(
+    extensionModule.resolveActiveTraceableEvidenceUri(traceableEvidenceUri)?.fsPath === traceableEvidenceUri.fsPath,
+    'TRACEABLE evidence target resolution must preserve an explicit URI target.'
+  );
   const originalTabGroupsDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'tabGroups');
+  const originalActiveTextEditorDescriptor = Object.getOwnPropertyDescriptor(vscodeModule.window, 'activeTextEditor');
   let visibleTabs = [
     {
       label: 'Deleted Session Tab',
@@ -3683,11 +3688,20 @@ async function runOfflineLocalChatCleanupChecks() {
     }
   ];
   try {
+    Object.defineProperty(vscodeModule.window, 'activeTextEditor', {
+      configurable: true,
+      value: undefined
+    });
     Object.defineProperty(vscodeModule.window, 'tabGroups', {
       configurable: true,
       value: {
         get all() {
           return [{ isActive: true, viewColumn: 1, tabs: visibleTabs }];
+        },
+        activeTabGroup: {
+          get activeTab() {
+            return visibleTabs.find((tab) => tab.isActive);
+          }
         },
         close: async (tabs) => {
           const labelsToClose = new Set(tabs.map((tab) => tab.label));
@@ -3695,6 +3709,63 @@ async function runOfflineLocalChatCleanupChecks() {
         }
       }
     });
+
+    visibleTabs = [
+      {
+        label: 'Preview 01-leo.trace.md',
+        isActive: true,
+        isDirty: false,
+        isPinned: false,
+        isPreview: true,
+        input: {
+          constructor: { name: 'TabInputWebview' },
+          viewType: 'markdown.preview',
+          uri: traceableEvidenceUri
+        }
+      }
+    ];
+    assert(
+      extensionModule.resolveActiveTraceableEvidenceUri()?.fsPath === traceableEvidenceUri.fsPath,
+      'TRACEABLE evidence target resolution must recover the .trace.md source URI from the active markdown preview tab.'
+    );
+
+    visibleTabs = [
+      {
+        label: 'Deleted Session Tab',
+        isActive: true,
+        isDirty: false,
+        isPinned: false,
+        isPreview: false,
+        input: {
+          constructor: { name: 'ChatEditorInput' },
+          viewType: 'chat-view',
+          uri: { toString: () => `vscode-chat-session://local/${Buffer.from('session-drop-1').toString('base64')}` }
+        }
+      },
+      {
+        label: 'Keep Session Tab',
+        isActive: false,
+        isDirty: false,
+        isPinned: false,
+        isPreview: false,
+        input: {
+          constructor: { name: 'ChatEditorInput' },
+          viewType: 'chat-view',
+          uri: { toString: () => `vscode-chat-session://local/${Buffer.from('session-keep').toString('base64')}` }
+        }
+      },
+      {
+        label: 'Title Only Session Drop',
+        isActive: false,
+        isDirty: false,
+        isPinned: false,
+        isPreview: false,
+        input: {
+          constructor: { name: 'ChatEditorInput' },
+          viewType: 'chat-view'
+        }
+      }
+    ];
 
     const reconcileResult = await extensionModule.reconcileOfflineLocalChatCleanupUx({
       reportFilePaths: [],
@@ -3712,6 +3783,9 @@ async function runOfflineLocalChatCleanupChecks() {
   } finally {
     if (originalTabGroupsDescriptor) {
       Object.defineProperty(vscodeModule.window, 'tabGroups', originalTabGroupsDescriptor);
+    }
+    if (originalActiveTextEditorDescriptor) {
+      Object.defineProperty(vscodeModule.window, 'activeTextEditor', originalActiveTextEditorDescriptor);
     }
   }
 

@@ -251,6 +251,11 @@
           "group": "navigation@-1000"
         },
         {
+          "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
+          "when": "activeWebviewPanelId == markdown.preview",
+          "group": "navigation@-1000"
+        },
+        {
           "command": "tiinex.aiVscodeTools.reopenTraceableEvidenceSource",
           "when": "activeWebviewPanelId == tiinexTraceableEvidenceEditor",
           "group": "navigation@-950"
