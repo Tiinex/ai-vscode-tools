@@ -69,6 +69,7 @@ const DEFAULT_TRACEABLE_ALLOWED_TOOL_NAMES = [
   "get_errors",
   "list_traceable_agents",
   "list_traceable_models",
+  "view_traceable_subagent",
   "list_agent_sessions",
   "get_agent_session_index",
   "get_agent_session_window",
@@ -380,6 +381,13 @@ export interface TraceableAgentCatalogEntry {
   humanRole: boolean;
 }
 
+export interface TraceableAgentCatalogLintFinding {
+  artifactStem: string;
+  filePath: string;
+  workspaceFolderName: string;
+  message: string;
+}
+
 export interface TraceableModelCatalogEntry {
   vendor?: string;
   family?: string;
@@ -564,8 +572,12 @@ async function readTraceableAgentCatalogEntry(filePath: string, workspaceFolderN
   };
 }
 
-export async function listTraceableAgentCatalogEntries(): Promise<TraceableAgentCatalogEntry[]> {
+async function scanTraceableAgentCatalog(): Promise<{
+  entries: TraceableAgentCatalogEntry[];
+  lintFindings: TraceableAgentCatalogLintFinding[];
+}> {
   const entries: TraceableAgentCatalogEntry[] = [];
+  const lintFindings: TraceableAgentCatalogLintFinding[] = [];
   for (const folder of vscode.workspace.workspaceFolders ?? []) {
     const agentDir = path.join(folder.uri.fsPath, ".github", "agents");
     let dirEntries: string[];
@@ -579,22 +591,47 @@ export async function listTraceableAgentCatalogEntries(): Promise<TraceableAgent
         continue;
       }
       const candidate = path.join(agentDir, entry);
-      const catalogEntry = await readTraceableAgentCatalogEntry(candidate, folder.name);
-      if (!catalogEntry) {
-        continue;
-      }
-      if (!entries.some((item) => item.filePath === catalogEntry.filePath)) {
-        entries.push(catalogEntry);
+      try {
+        const catalogEntry = await readTraceableAgentCatalogEntry(candidate, folder.name);
+        if (!catalogEntry) {
+          lintFindings.push({
+            artifactStem: path.basename(candidate, ".agent.md"),
+            filePath: candidate,
+            workspaceFolderName: folder.name,
+            message: "Missing required traceable-agent frontmatter or description; artifact is not runnable on the current runtime surface."
+          });
+          continue;
+        }
+        if (!entries.some((item) => item.filePath === catalogEntry.filePath)) {
+          entries.push(catalogEntry);
+        }
+      } catch (error) {
+        lintFindings.push({
+          artifactStem: path.basename(candidate, ".agent.md"),
+          filePath: candidate,
+          workspaceFolderName: folder.name,
+          message: error instanceof Error ? error.message : String(error)
+        });
       }
     }
   }
-  return entries.sort((left, right) => {
+  entries.sort((left, right) => {
     const displayNameComparison = left.displayName.localeCompare(right.displayName, undefined, { sensitivity: "base" });
     if (displayNameComparison !== 0) {
       return displayNameComparison;
     }
     return left.filePath.localeCompare(right.filePath, undefined, { sensitivity: "base" });
   });
+  lintFindings.sort((left, right) => left.filePath.localeCompare(right.filePath, undefined, { sensitivity: "base" }));
+  return { entries, lintFindings };
+}
+
+export async function listTraceableAgentCatalogEntries(): Promise<TraceableAgentCatalogEntry[]> {
+  return (await scanTraceableAgentCatalog()).entries;
+}
+
+export async function listTraceableAgentCatalogLintFindings(): Promise<TraceableAgentCatalogLintFinding[]> {
+  return (await scanTraceableAgentCatalog()).lintFindings;
 }
 
 function findSuggestedTraceableAgents(roleName: string, catalog: readonly TraceableAgentCatalogEntry[], maxResults = 8): TraceableAgentCatalogEntry[] {

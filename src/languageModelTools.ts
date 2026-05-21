@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import * as vscode from "vscode";
 import { type ChatCommandResult, type ChatInteropApi, type ChatSessionSummary, type CreateChatRequest, type SendChatMessageRequest } from "./chatInterop";
@@ -37,14 +38,18 @@ import {
 import { appendLineToRollingLog } from "./runtimeFileHygiene";
 import {
   listTraceableAgentCatalogEntries,
+  listTraceableAgentCatalogLintFindings,
   listTraceableModelCatalogEntries,
+  normalizeTraceableOutputMode,
   renderTraceableSubagentMarkdown,
   runTraceableSubagent,
   TRACEABLE_SUBAGENT_TOOL_NAME,
+  type TraceableSubagentOutputMode,
   type TraceableSubagentRunResult,
   type TraceableSubagentStatusReporter,
   type TraceableSubagentInput
 } from "./traceableSubagent";
+import { parseTraceableEvidenceStateMarkdown, type ParsedTraceableEvidenceState } from "./traceableSubagentEvidence";
 
 type JsonSchema = Record<string, unknown>;
 type DetailLevel = "summary" | "full";
@@ -130,6 +135,26 @@ interface ListTraceableModelsInput {
   query?: string;
   limit?: number;
   sendableOnly?: boolean;
+}
+
+type TraceableViewSurface = "rendered-output" | "request-summary" | "outcome" | "tool-ledger" | "status-history" | "tool-summary" | "file-summary" | "state-json";
+
+interface ViewTraceableSubagentInput {
+  evidenceFilePath: string;
+  reveal?: boolean;
+  outputMode?: TraceableSubagentOutputMode;
+  surface?: TraceableViewSurface;
+  maxItems?: number;
+  offset?: number;
+}
+
+interface TraceableEvidenceViewRevealResult {
+  opened: boolean;
+  note?: string;
+}
+
+interface TraceableEvidenceViewHooks {
+  revealEvidenceView?: (input: { evidenceFilePath: string; reveal?: boolean }) => Promise<TraceableEvidenceViewRevealResult | undefined>;
 }
 
 interface InspectCopilotCliSessionInput {
@@ -833,6 +858,45 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: "view_traceable_subagent",
+    displayName: "View Traceable Subagent",
+    userDescription: "Inspect a stored TRACEABLE evidence artifact with bounded output and optional reconstructed-view reveal.",
+    modelDescription: "Inspect one stored `.trace.md` TRACEABLE evidence artifact without rerunning the child lane. This tool is read-only: it parses the embedded Traceable State block, can optionally reveal the reconstructed TRACEABLE evidence view when the current `traceableAutoReveal` policy allows it, and returns a bounded surface instead of dumping the whole artifact by default. Reuse `outputMode` when you want the same parent-facing output policy shape as `run_traceable_subagent`; use `surface` when you want rendered output, request summary, outcome, tool ledger, status history, aggregated tool/file summaries, or bounded state JSON. Use `maxItems` with `offset` to page through list-like surfaces safely.",
+    toolReferenceName: "viewTraceableSubagent",
+    inputSchema: {
+      type: "object",
+      properties: {
+        evidenceFilePath: {
+          type: "string",
+          description: "Absolute or workspace-relative path to a `.trace.md` evidence artifact containing an embedded Traceable State block."
+        },
+        reveal: {
+          type: "boolean",
+          description: "When true, request opening the reconstructed TRACEABLE evidence view. The current `traceableAutoReveal` setting still wins and may suppress opening."
+        },
+        outputMode: {
+          type: "string",
+          description: "Optional parent-facing output mode to reuse when `surface` is omitted or set to `rendered-output`.",
+          enum: ["summary-with-evidence-path", "full-markdown-with-evidence-path", "evidence-path-only"]
+        },
+        surface: {
+          type: "string",
+          description: "Optional bounded surface to return instead of the default rendered TRACEABLE output.",
+          enum: ["rendered-output", "request-summary", "outcome", "tool-ledger", "status-history", "tool-summary", "file-summary", "state-json"]
+        },
+        maxItems: {
+          type: "number",
+          description: "Optional cap for bounded list-like surfaces such as tool-ledger and status-history."
+        },
+        offset: {
+          type: "number",
+          description: "Optional zero-based start offset for paging list-like surfaces such as request-summary, tool-ledger, status-history, tool-summary, and file-summary. When omitted, ledger/history keep the latest-items view."
+        }
+      },
+      required: ["evidenceFilePath"]
+    }
+  },
+  {
     name: TRACEABLE_SUBAGENT_TOOL_NAME,
     displayName: "Run Traceable Subagent",
     userDescription: "Run an experimental trace-first child lane with explicit request, budget, and tool-ledger output.",
@@ -1389,6 +1453,7 @@ function isEnabledToolContribution(toolName: string): boolean {
   return isFirstSliceSessionTool(toolName)
     || toolName === "list_traceable_agents"
     || toolName === "list_traceable_models"
+    || toolName === "view_traceable_subagent"
     || toolName === TRACEABLE_SUBAGENT_TOOL_NAME
     || (LOCAL_CHAT_CONTROL_SURFACES_ENABLED && LOCAL_CHAT_CONTROL_TOOL_NAMES.has(toolName))
     || (LOCAL_CHAT_MUTATION_SURFACES_ENABLED && LOCAL_CHAT_MUTATION_TOOL_NAMES.has(toolName));
@@ -1430,6 +1495,32 @@ function renderTraceableAgentCatalogMarkdown(entries: Awaited<ReturnType<typeof 
   }
   if (limitedEntries.length < filteredEntries.length) {
     lines.push("", `Showing ${limitedEntries.length}/${filteredEntries.length} matching agents.`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableAgentCatalogMarkdownWithLint(
+  entries: Awaited<ReturnType<typeof listTraceableAgentCatalogEntries>>,
+  lintFindings: Awaited<ReturnType<typeof listTraceableAgentCatalogLintFindings>>,
+  input: ListTraceableAgentsInput
+): string {
+  const baseMarkdown = renderTraceableAgentCatalogMarkdown(entries, input).trimEnd();
+  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
+  const filteredLintFindings = normalizedQuery
+    ? lintFindings.filter((finding) => finding.artifactStem.toLowerCase().includes(normalizedQuery) || finding.filePath.toLowerCase().includes(normalizedQuery))
+    : lintFindings;
+  if (filteredLintFindings.length === 0) {
+    return `${baseMarkdown}\n`;
+  }
+  const lines = [baseMarkdown, "", "## Frontmatter Lint Findings", ""];
+  for (const finding of filteredLintFindings.slice(0, input.limit ?? 20)) {
+    lines.push(`- ${finding.artifactStem}`);
+    lines.push(`  - File: ${finding.filePath}`);
+    lines.push(`  - Workspace: ${finding.workspaceFolderName}`);
+    lines.push(`  - Error: ${finding.message}`);
+  }
+  if (filteredLintFindings.length > (input.limit ?? 20)) {
+    lines.push("", `Showing ${Math.min(filteredLintFindings.length, input.limit ?? 20)}/${filteredLintFindings.length} lint findings.`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -1479,6 +1570,449 @@ function renderTraceableModelCatalogMarkdown(entries: Awaited<ReturnType<typeof 
     lines.push("", `Showing ${limitedEntries.length}/${filteredEntries.length} matching models.`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+function normalizeTraceableViewSurface(value: unknown): TraceableViewSurface | undefined {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  switch (normalized) {
+    case "rendered-output":
+    case "request-summary":
+    case "outcome":
+    case "tool-ledger":
+    case "status-history":
+    case "tool-summary":
+    case "file-summary":
+    case "state-json":
+      return normalized;
+    default:
+      return undefined;
+  }
+}
+
+function clampTraceableViewItems(maxItems: number | undefined, fallback = 8): number {
+  if (!Number.isFinite(maxItems)) {
+    return fallback;
+  }
+  return Math.max(1, Math.min(50, Math.floor(maxItems as number)));
+}
+
+function clampTraceableViewOffset(offset: number | undefined): number | undefined {
+  if (!Number.isFinite(offset)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(offset as number));
+}
+
+function selectTraceableWindow<T>(items: T[], maxItems: number, offset: number | undefined): { items: T[]; label: string } {
+  if (items.length === 0) {
+    return { items: [], label: "Showing 0/0 items." };
+  }
+  if (offset === undefined) {
+    const selected = items.slice(-maxItems);
+    return {
+      items: selected,
+      label: selected.length < items.length
+        ? `Showing latest ${selected.length}/${items.length} items.`
+        : `Showing ${selected.length}/${items.length} items.`
+    };
+  }
+  const start = Math.min(offset, items.length);
+  const selected = items.slice(start, start + maxItems);
+  const endExclusive = Math.min(start + selected.length, items.length);
+  return {
+    items: selected,
+    label: `Showing items ${selected.length === 0 ? start : start + 1}-${endExclusive} of ${items.length}.`
+  };
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveTraceableEvidenceFilePath(evidenceFilePath: string): Promise<string> {
+  const normalized = evidenceFilePath.trim();
+  if (!normalized) {
+    throw new Error("view_traceable_subagent requires a non-empty evidenceFilePath.");
+  }
+  if (path.isAbsolute(normalized)) {
+    return path.resolve(normalized);
+  }
+  const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+  const candidates: string[] = [];
+  for (const folder of workspaceFolders) {
+    const candidate = path.resolve(folder.uri.fsPath, normalized);
+    if (await pathExists(candidate)) {
+      candidates.push(candidate);
+    }
+  }
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+  if (candidates.length > 1) {
+    throw new Error(`Relative evidenceFilePath ${JSON.stringify(normalized)} matched multiple workspace files. Provide an absolute path instead.`);
+  }
+  throw new Error(`Could not resolve evidenceFilePath ${JSON.stringify(normalized)} under any open workspace folder. Provide an absolute path instead.`);
+}
+
+function truncateTraceableViewOutput(content: string, budget: number): string {
+  if (content.length <= budget) {
+    return content.endsWith("\n") ? content : `${content}\n`;
+  }
+  const suffix = "\n\n[truncated to fit tool output budget]\n";
+  const headBudget = Math.max(0, budget - suffix.length);
+  return `${content.slice(0, headBudget).trimEnd()}${suffix}`;
+}
+
+function renderTraceableEvidenceRequestSummaryMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  maxItems: number,
+  offset: number | undefined,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const lines = [
+    "# Traceable Evidence Request Summary",
+    "",
+    `- Evidence File: ${filePath}`,
+    `- Requested Summary Items: ${parsed.snapshot.requestSummary.length}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  const window = selectTraceableWindow(parsed.snapshot.requestSummary, maxItems, offset);
+  const items = offset === undefined ? parsed.snapshot.requestSummary.slice(0, maxItems) : window.items;
+  if (items.length === 0) {
+    lines.push("", "No request summary items were captured in this evidence artifact.");
+    return `${lines.join("\n")}\n`;
+  }
+  lines.push("");
+  for (const item of items) {
+    lines.push(`- ${item.label}: ${item.title ?? item.value}`);
+  }
+  if (items.length < parsed.snapshot.requestSummary.length || offset !== undefined) {
+    lines.push("", offset === undefined
+      ? `Showing ${items.length}/${parsed.snapshot.requestSummary.length} request summary items.`
+      : window.label);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableEvidenceOutcomeMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const result = parsed.result;
+  const lines = [
+    "# Traceable Evidence Outcome",
+    "",
+    `- Evidence File: ${filePath}`,
+    `- Updated At: ${parsed.snapshot.updatedAt}`,
+    `- Current Status: ${parsed.snapshot.status.phase} | ${parsed.snapshot.status.message}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  if (!result) {
+    lines.push(
+      `- Evidence File Status: ${parsed.snapshot.evidenceFile?.status ?? "idle"}`,
+      "- Final Run Result: unavailable in this evidence artifact"
+    );
+    return `${lines.join("\n")}\n`;
+  }
+  lines.push(
+    `- Trace Status: ${result.traceStatus}`,
+    `- Stop Reason: ${result.stopReason}`,
+    `- Completion Claim: ${result.completionClaim}`,
+    `- Final Summary: ${result.finalSummary}`,
+    `- Model: ${result.model ? `${result.model.vendor}/${result.model.family}/${result.model.id}` : "-"}`,
+    `- Evidence File Status: ${result.evidenceFile?.status ?? parsed.snapshot.evidenceFile?.status ?? "idle"}`
+  );
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableEvidenceToolLedgerMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  maxItems: number,
+  offset: number | undefined,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const toolCalls = parsed.result?.toolCalls ?? [];
+  const lines = [
+    "# Traceable Evidence Tool Ledger",
+    "",
+    `- Evidence File: ${filePath}`,
+    `- Tool Calls Recorded: ${toolCalls.length}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  if (toolCalls.length === 0) {
+    lines.push("", "No tool call ledger was captured in this evidence artifact.");
+    return `${lines.join("\n")}\n`;
+  }
+  const window = selectTraceableWindow(toolCalls, maxItems, offset);
+  const selected = window.items;
+  lines.push("");
+  for (const toolCall of selected) {
+    lines.push(`- ${toolCall.toolName}`);
+    lines.push(`  - Result: ${toolCall.result}`);
+    lines.push(`  - Call Id: ${toolCall.callId}`);
+    lines.push(`  - Args: ${toolCall.argsSummary || "-"}`);
+    lines.push(`  - Note: ${toolCall.note || "-"}`);
+  }
+  if (selected.length < toolCalls.length || offset !== undefined) {
+    lines.push("", window.label.replace("items", "tool calls"));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableEvidenceStatusHistoryMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  maxItems: number,
+  offset: number | undefined,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const history = parsed.snapshot.statusHistory;
+  const lines = [
+    "# Traceable Evidence Status History",
+    "",
+    `- Evidence File: ${filePath}`,
+    `- Status Events Recorded: ${history.length}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  if (history.length === 0) {
+    lines.push("", "No status history was captured in this evidence artifact.");
+    return `${lines.join("\n")}\n`;
+  }
+  const window = selectTraceableWindow(history, maxItems, offset);
+  const selected = window.items;
+  lines.push("");
+  for (const event of selected) {
+    lines.push(`- ${event.phase} | ${event.message}`);
+    lines.push(`  - Occurred At: ${event.occurredAt}`);
+    lines.push(`  - Detail: ${event.detail || "-"}`);
+  }
+  if (selected.length < history.length || offset !== undefined) {
+    lines.push("", window.label.replace("items", "status events"));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function summarizeTraceableToolCalls(toolCalls: TraceableSubagentRunResult["toolCalls"]): Array<{
+  toolName: string;
+  totalCalls: number;
+  successCount: number;
+  failureCount: number;
+  notRunCount: number;
+}> {
+  const summaries = new Map<string, {
+    toolName: string;
+    totalCalls: number;
+    successCount: number;
+    failureCount: number;
+    notRunCount: number;
+  }>();
+  for (const toolCall of toolCalls) {
+    const existing = summaries.get(toolCall.toolName) ?? {
+      toolName: toolCall.toolName,
+      totalCalls: 0,
+      successCount: 0,
+      failureCount: 0,
+      notRunCount: 0
+    };
+    existing.totalCalls += 1;
+    if (toolCall.result === "success") {
+      existing.successCount += 1;
+    } else if (toolCall.result === "notRun") {
+      existing.notRunCount += 1;
+    } else {
+      existing.failureCount += 1;
+    }
+    summaries.set(toolCall.toolName, existing);
+  }
+  return [...summaries.values()].sort((left, right) => right.totalCalls - left.totalCalls || left.toolName.localeCompare(right.toolName));
+}
+
+function extractTraceableReadFilePath(argsSummary: string): string | undefined {
+  try {
+    const parsed = JSON.parse(argsSummary);
+    if (parsed && typeof parsed === "object" && typeof (parsed as { filePath?: unknown }).filePath === "string") {
+      const filePath = (parsed as { filePath: string }).filePath.trim();
+      return filePath || undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function summarizeTraceableReadTargets(toolCalls: TraceableSubagentRunResult["toolCalls"]): Array<{
+  filePath: string;
+  readCount: number;
+}> {
+  const summaries = new Map<string, number>();
+  for (const toolCall of toolCalls) {
+    if (!/readfile/i.test(toolCall.toolName)) {
+      continue;
+    }
+    const filePath = extractTraceableReadFilePath(toolCall.argsSummary);
+    if (!filePath) {
+      continue;
+    }
+    summaries.set(filePath, (summaries.get(filePath) ?? 0) + 1);
+  }
+  return [...summaries.entries()]
+    .map(([filePath, readCount]) => ({ filePath, readCount }))
+    .sort((left, right) => right.readCount - left.readCount || left.filePath.localeCompare(right.filePath));
+}
+
+function renderTraceableEvidenceToolSummaryMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  maxItems: number,
+  offset: number | undefined,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const summaries = summarizeTraceableToolCalls(parsed.result?.toolCalls ?? []);
+  const lines = [
+    "# Traceable Evidence Tool Summary",
+    "",
+    `- Evidence File: ${filePath}`,
+    `- Distinct Tools: ${summaries.length}`,
+    `- Tool Calls Recorded: ${parsed.result?.toolCalls.length ?? 0}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  if (summaries.length === 0) {
+    lines.push("", "No tool call summary was available in this evidence artifact.");
+    return `${lines.join("\n")}\n`;
+  }
+  const window = selectTraceableWindow(summaries, maxItems, offset);
+  lines.push("");
+  for (const summary of window.items) {
+    lines.push(`- ${summary.toolName}`);
+    lines.push(`  - Total Calls: ${summary.totalCalls}`);
+    lines.push(`  - Success: ${summary.successCount}`);
+    lines.push(`  - Failure/Timeout/Input Needed: ${summary.failureCount}`);
+    lines.push(`  - Not Run: ${summary.notRunCount}`);
+  }
+  if (window.items.length < summaries.length || offset !== undefined) {
+    lines.push("", window.label.replace("items", "tool summaries"));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableEvidenceFileSummaryMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  maxItems: number,
+  offset: number | undefined,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const summaries = summarizeTraceableReadTargets(parsed.result?.toolCalls ?? []);
+  const lines = [
+    "# Traceable Evidence File Summary",
+    "",
+    `- Evidence File: ${filePath}`,
+    `- Distinct Read Targets: ${summaries.length}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  if (summaries.length === 0) {
+    lines.push("", "No read-file targets were surfaced in this evidence artifact.");
+    return `${lines.join("\n")}\n`;
+  }
+  const window = selectTraceableWindow(summaries, maxItems, offset);
+  lines.push("");
+  for (const summary of window.items) {
+    lines.push(`- ${summary.filePath}`);
+    lines.push(`  - Read Count: ${summary.readCount}`);
+  }
+  if (window.items.length < summaries.length || offset !== undefined) {
+    lines.push("", window.label.replace("items", "file summaries"));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function renderTraceableEvidenceStateJsonMarkdown(
+  filePath: string,
+  parsed: ParsedTraceableEvidenceState,
+  revealResult?: TraceableEvidenceViewRevealResult
+): string {
+  const envelope = {
+    snapshot: parsed.snapshot,
+    result: parsed.result
+  };
+  const lines = [
+    "# Traceable Evidence State JSON",
+    "",
+    `- Evidence File: ${filePath}`
+  ];
+  if (revealResult?.note) {
+    lines.push(`- Reveal: ${revealResult.note}`);
+  }
+  lines.push("", "```json", JSON.stringify(envelope, null, 2), "```");
+  return `${lines.join("\n")}\n`;
+}
+
+function renderViewTraceableSubagentMarkdown(
+  filePath: string,
+  markdown: string,
+  parsed: ParsedTraceableEvidenceState,
+  input: ViewTraceableSubagentInput,
+  revealResult: TraceableEvidenceViewRevealResult | undefined
+): string {
+  const surface = normalizeTraceableViewSurface(input.surface) ?? "rendered-output";
+  const maxItems = clampTraceableViewItems(input.maxItems);
+  const offset = clampTraceableViewOffset(input.offset);
+  switch (surface) {
+    case "request-summary":
+      return renderTraceableEvidenceRequestSummaryMarkdown(filePath, parsed, maxItems, offset, revealResult);
+    case "outcome":
+      return renderTraceableEvidenceOutcomeMarkdown(filePath, parsed, revealResult);
+    case "tool-ledger":
+      return renderTraceableEvidenceToolLedgerMarkdown(filePath, parsed, maxItems, offset, revealResult);
+    case "status-history":
+      return renderTraceableEvidenceStatusHistoryMarkdown(filePath, parsed, maxItems, offset, revealResult);
+    case "tool-summary":
+      return renderTraceableEvidenceToolSummaryMarkdown(filePath, parsed, maxItems, offset, revealResult);
+    case "file-summary":
+      return renderTraceableEvidenceFileSummaryMarkdown(filePath, parsed, maxItems, offset, revealResult);
+    case "state-json":
+      return renderTraceableEvidenceStateJsonMarkdown(filePath, parsed, revealResult);
+    case "rendered-output":
+    default: {
+      if (!parsed.result) {
+        return renderTraceableEvidenceOutcomeMarkdown(filePath, parsed, revealResult);
+      }
+      const outputMode = normalizeTraceableOutputMode(input.outputMode)
+        ?? normalizeTraceableOutputMode(parsed.result.outputMode ?? parsed.result.request.outputMode)
+        ?? "summary-with-evidence-path";
+      if (outputMode === "full-markdown-with-evidence-path") {
+        return markdown.trimEnd().concat("\n");
+      }
+      const rendered = renderTraceableSubagentMarkdown({
+        ...parsed.result,
+        outputMode
+      });
+      if (!revealResult?.note) {
+        return rendered;
+      }
+      return [`# Traceable Evidence View`, "", `- Reveal: ${revealResult.note}`, "", rendered.trimEnd()].join("\n").concat("\n");
+    }
+  }
 }
 export const EXTENSION_TOOL_CONTRIBUTIONS: ToolContribution[] = FIRST_SLICE_INTERACTIVE_SURFACES_ENABLED
   ? ALL_TOOL_CONTRIBUTIONS
@@ -1933,7 +2467,8 @@ export function registerLanguageModelTools(
     statusReporter?: TraceableSubagentStatusReporter;
     beforeRun?: () => Promise<void>;
     afterRun?: (result: TraceableSubagentRunResult) => Promise<TraceableSubagentRunResult>;
-  } | undefined
+  } | undefined,
+  traceableEvidenceViewHooks?: TraceableEvidenceViewHooks
 ): void {
   const currentWorkspaceStorageRoots = (() => {
     if (!context.storageUri) {
@@ -2281,7 +2816,11 @@ export function registerLanguageModelTools(
       new ReadOnlyTool<ListTraceableAgentsInput>(
         "List Traceable Agents",
         (input) => `List traceable agents${input.query ? ` matching ${JSON.stringify(input.query)}` : ""}`,
-        async (input) => renderTraceableAgentCatalogMarkdown(await listTraceableAgentCatalogEntries(), input)
+        async (input) => renderTraceableAgentCatalogMarkdownWithLint(
+          await listTraceableAgentCatalogEntries(),
+          await listTraceableAgentCatalogLintFindings(),
+          input
+        )
       )
     ),
     vscode.lm.registerTool(
@@ -2293,6 +2832,32 @@ export function registerLanguageModelTools(
           await listTraceableModelCatalogEntries(context.languageModelAccessInformation),
           input
         )
+      )
+    ),
+    vscode.lm.registerTool(
+      "view_traceable_subagent",
+      new ReadOnlyTool<ViewTraceableSubagentInput>(
+        "View Traceable Subagent",
+        (input) => `View TRACEABLE evidence from ${JSON.stringify(input.evidenceFilePath)}${input.surface ? ` as ${input.surface}` : ""}`,
+        async (input, budget) => {
+          const resolvedEvidenceFilePath = await resolveTraceableEvidenceFilePath(input.evidenceFilePath);
+          if (!resolvedEvidenceFilePath.toLowerCase().endsWith(".trace.md")) {
+            throw new Error(`TRACEABLE evidence view requires a .trace.md file. Got ${JSON.stringify(resolvedEvidenceFilePath)}.`);
+          }
+          const markdown = await fs.readFile(resolvedEvidenceFilePath, "utf8");
+          const parsed = parseTraceableEvidenceStateMarkdown(markdown);
+          if (!parsed) {
+            throw new Error(`TRACEABLE evidence file ${JSON.stringify(resolvedEvidenceFilePath)} does not contain a readable Traceable State block.`);
+          }
+          const revealResult = await traceableEvidenceViewHooks?.revealEvidenceView?.({
+            evidenceFilePath: resolvedEvidenceFilePath,
+            reveal: input.reveal
+          });
+          return truncateTraceableViewOutput(
+            renderViewTraceableSubagentMarkdown(resolvedEvidenceFilePath, markdown, parsed, input, revealResult),
+            budget
+          );
+        }
       )
     ),
     vscode.lm.registerTool(

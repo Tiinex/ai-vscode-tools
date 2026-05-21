@@ -2470,6 +2470,7 @@ export function renderTraceableSubagentPanelHtml(
     }
     .event-status-group-summary {
       cursor: pointer;
+      grid-template-columns: minmax(16rem, 1fr) auto;
     }
     .event-status-group-summary .event-body {
       min-width: 0;

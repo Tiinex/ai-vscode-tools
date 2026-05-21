@@ -132,7 +132,16 @@
         "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
         "title": "Tiinex: Open Reconstructed Traceable View",
         "shortTitle": "Open Traceable View",
-        "icon": "$(open-preview)"
+        "icon": {
+          "light": "assets/logo-transparent.png",
+          "dark": "assets/logo-transparent.png"
+        }
+      },
+      {
+        "command": "tiinex.aiVscodeTools.reopenTraceableEvidenceSource",
+        "title": "Reopen as Source File",
+        "shortTitle": "Source",
+        "icon": "$(go-to-file)"
       }
     ],
     "views": {
@@ -231,15 +240,20 @@
       "explorer/context": [
         {
           "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
-          "when": "resourceFilename =~ /\\.trace\\.md$/",
+          "when": "resourceExtname == .md && resourcePath =~ /\\.trace\\.md$/",
           "group": "navigation"
         }
       ],
       "editor/title": [
         {
           "command": "tiinex.aiVscodeTools.openTraceableEvidenceEditor",
-          "when": "resourceFilename =~ /\\.trace\\.md$/",
+          "when": "resourceExtname == .md && resourcePath =~ /\\.trace\\.md$/",
           "group": "navigation@-1000"
+        },
+        {
+          "command": "tiinex.aiVscodeTools.reopenTraceableEvidenceSource",
+          "when": "activeWebviewPanelId == tiinexTraceableEvidenceEditor",
+          "group": "navigation@-950"
         }
       ],
       "view/title": [
@@ -904,6 +918,61 @@
               "description": "When true, only include models that the current access information permits sending requests to."
             }
           }
+        }
+      },
+      {
+        "name": "view_traceable_subagent",
+        "displayName": "View Traceable Subagent",
+        "userDescription": "Inspect a stored TRACEABLE evidence artifact with bounded output and optional reconstructed-view reveal.",
+        "modelDescription": "Inspect one stored `.trace.md` TRACEABLE evidence artifact without rerunning the child lane. This tool is read-only: it parses the embedded Traceable State block, can optionally reveal the reconstructed TRACEABLE evidence view when the current `traceableAutoReveal` policy allows it, and returns a bounded surface instead of dumping the whole artifact by default. Reuse `outputMode` when you want the same parent-facing output policy shape as `run_traceable_subagent`; use `surface` when you want rendered output, request summary, outcome, tool ledger, status history, aggregated tool/file summaries, or bounded state JSON. Use `maxItems` with `offset` to page through list-like surfaces safely.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "viewTraceableSubagent",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "evidenceFilePath": {
+              "type": "string",
+              "description": "Absolute or workspace-relative path to a `.trace.md` evidence artifact containing an embedded Traceable State block."
+            },
+            "reveal": {
+              "type": "boolean",
+              "description": "When true, request opening the reconstructed TRACEABLE evidence view. The current `traceableAutoReveal` setting still wins and may suppress opening."
+            },
+            "outputMode": {
+              "type": "string",
+              "description": "Optional parent-facing output mode to reuse when `surface` is omitted or set to `rendered-output`.",
+              "enum": [
+                "summary-with-evidence-path",
+                "full-markdown-with-evidence-path",
+                "evidence-path-only"
+              ]
+            },
+            "surface": {
+              "type": "string",
+              "description": "Optional bounded surface to return instead of the default rendered TRACEABLE output.",
+              "enum": [
+                "rendered-output",
+                "request-summary",
+                "outcome",
+                "tool-ledger",
+                "status-history",
+                "tool-summary",
+                "file-summary",
+                "state-json"
+              ]
+            },
+            "maxItems": {
+              "type": "number",
+              "description": "Optional cap for bounded list-like surfaces such as tool-ledger and status-history."
+            },
+            "offset": {
+              "type": "number",
+              "description": "Optional zero-based start offset for paging list-like surfaces such as request-summary, tool-ledger, status-history, tool-summary, and file-summary. When omitted, ledger/history keep the latest-items view."
+            }
+          },
+          "required": [
+            "evidenceFilePath"
+          ]
         }
       },
       {

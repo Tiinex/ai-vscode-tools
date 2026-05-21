@@ -421,6 +421,16 @@ function renderEvidenceMarkdown(
     "## Final Output",
     ""
   ];
+  const selfReconciliationNote = exportState.status === "ready"
+    && typeof finalOutputMarkdown === "string"
+    && /_Pending final result\._|evidenceFile\.status\s*==\s*"writing"|Final Output shows:\s*_Pending final result\._/u.test(finalOutputMarkdown)
+      ? [
+        "> Note: this lane inspected its own evidence file while it was still being written.",
+        "> The authoritative artifact state for this final export is the metadata and `Traceable State` block in this file, which are now finalized as `ready`.",
+        ""
+      ]
+      : [];
+  lines.push(...selfReconciliationNote);
   if (finalOutputMarkdown?.trim()) {
     lines.push(finalOutputMarkdown.trim());
   } else {

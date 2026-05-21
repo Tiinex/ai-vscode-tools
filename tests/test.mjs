@@ -85,6 +85,7 @@ const expectedLanguageModelToolNames = [
   "survey_agent_sessions",
   "list_traceable_agents",
   "list_traceable_models",
+  "view_traceable_subagent",
   "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
@@ -119,6 +120,7 @@ const expectedExtensionCommandNames = [
 const liveToolManifestParityNames = new Set([
   "list_traceable_agents",
   "list_traceable_models",
+  "view_traceable_subagent",
   "run_traceable_subagent",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
@@ -7320,6 +7322,11 @@ async function runTraceableSubagentChecks() {
       this.value = value;
     }
   };
+  vscode.LanguageModelToolResult = vscode.LanguageModelToolResult || class LanguageModelToolResult {
+    constructor(content) {
+      this.content = content;
+    }
+  };
   vscode.LanguageModelToolCallPart = vscode.LanguageModelToolCallPart || class LanguageModelToolCallPart {
     constructor(callId, name, input) {
       this.callId = callId;
@@ -7438,6 +7445,7 @@ async function runTraceableSubagentChecks() {
   const traceableSubagentStatusBar = await import(`${pathToFileURL(distTraceableSubagentStatusBar).href}?traceable-subagent-status-bar=${Date.now()}`);
   const traceableSubagentStatusDetail = await import(`${pathToFileURL(distTraceableSubagentStatusDetail).href}?traceable-subagent-status-detail=${Date.now()}`);
   const traceableSubagentStatusPanel = await import(`${pathToFileURL(distTraceableSubagentStatusPanel).href}?traceable-subagent-status-panel=${Date.now()}`);
+  const languageModelToolsModule = await import(`${pathToFileURL(distLanguageModelTools).href}?language-model-tools=${Date.now()}`);
   const toolNameNormalization = await import(`${pathToFileURL(distToolNameNormalization).href}?tool-name-normalization=${Date.now()}`);
 
   const detailController = new traceableSubagentStatusDetail.TraceableSubagentStatusDetailController();
@@ -9103,6 +9111,255 @@ async function runTraceableSubagentChecks() {
         && parsedEvidenceState?.result?.completionClaim === "complete",
       `Traceable evidence export must be parseable back into a reusable traceable state snapshot and result. Got: ${JSON.stringify(parsedEvidenceState)}`
     );
+
+    const viewEvidenceFilePath = path.join(evidenceTempDir, "02-view-summary.trace.md");
+    await fs.writeFile(viewEvidenceFilePath, [
+      "# View Summary Evidence",
+      "",
+      "## Traceable State",
+      "```json",
+      JSON.stringify({
+        schema: traceableSubagentEvidence.TRACEABLE_EVIDENCE_STATE_SCHEMA,
+        snapshot: {
+          ...parsedEvidenceState.snapshot,
+          status: {
+            phase: "completed",
+            message: "completed"
+          },
+          statusHistory: [
+            {
+              id: "status-1",
+              phase: "running",
+              message: "starting",
+              occurredAt: "2026-05-21T01:20:25.634Z"
+            },
+            {
+              id: "status-2",
+              phase: "running",
+              message: "reading 1/2",
+              occurredAt: "2026-05-21T01:20:40.000Z"
+            },
+            {
+              id: "status-3",
+              phase: "completed",
+              message: "completed",
+              occurredAt: "2026-05-21T01:21:12.235Z"
+            }
+          ]
+        },
+        result: {
+          ...parsedEvidenceState.result,
+          toolCalls: [
+            {
+              callId: "call-1",
+              toolName: "copilot_readFile",
+              argsSummary: JSON.stringify({
+                filePath: path.join(packageRoot, "src", "traceableSubagent.ts"),
+                startLine: 1,
+                endLine: 120
+              }),
+              result: "success",
+              note: "Read the main runtime entry."
+            },
+            {
+              callId: "call-2",
+              toolName: "search/textSearch",
+              argsSummary: JSON.stringify({
+                query: "Traceable State"
+              }),
+              result: "failure",
+              note: "No exact match in the first pass."
+            },
+            {
+              callId: "call-3",
+              toolName: "copilot_readFile",
+              argsSummary: JSON.stringify({
+                filePath: path.join(packageRoot, "src", "languageModelTools.ts"),
+                startLine: 1600,
+                endLine: 1800
+              }),
+              result: "success",
+              note: "Read the traceable view renderer."
+            }
+          ]
+        }
+      }, null, 2),
+      "```",
+      ""
+    ].join("\n"), "utf8");
+
+    const registeredTools = new Map();
+    vscode.lm.registerTool = (name, tool) => {
+      registeredTools.set(name, tool);
+      return { dispose() {} };
+    };
+    const fakeContext = {
+      subscriptions: [],
+      storageUri: {
+        fsPath: path.join(evidenceTempDir, "workspaceStorage")
+      },
+      globalStorageUri: {
+        fsPath: path.join(evidenceTempDir, "globalStorage")
+      }
+    };
+    const fakeAdapter = new Proxy({}, { get: () => async () => "" });
+    const fakeChatInterop = new Proxy({}, { get: () => async () => ({}) });
+    languageModelToolsModule.registerLanguageModelTools(fakeContext, fakeAdapter, fakeChatInterop);
+
+    const viewTraceableTool = registeredTools.get("view_traceable_subagent");
+    assert(
+      viewTraceableTool && typeof viewTraceableTool.invoke === "function",
+      "Traceable view regression test could not capture the view_traceable_subagent tool registration."
+    );
+
+    const toolSummaryResult = await viewTraceableTool.invoke({
+      input: {
+        evidenceFilePath: viewEvidenceFilePath,
+        surface: "tool-summary",
+        maxItems: 5
+      },
+      tokenizationOptions: {
+        tokenBudget: 4000
+      }
+    });
+    const toolSummaryMarkdown = String(toolSummaryResult.content[0]?.value ?? "");
+    assert(
+      toolSummaryMarkdown.includes("# Traceable Evidence Tool Summary")
+        && toolSummaryMarkdown.includes("Distinct Tools: 2")
+        && toolSummaryMarkdown.includes("- copilot_readFile")
+        && toolSummaryMarkdown.includes("Total Calls: 2")
+        && toolSummaryMarkdown.includes("- search/textSearch"),
+      `view_traceable_subagent must expose an aggregated tool-summary surface for parent-agent recovery reads. Got: ${toolSummaryMarkdown}`
+    );
+
+    const fileSummaryResult = await viewTraceableTool.invoke({
+      input: {
+        evidenceFilePath: viewEvidenceFilePath,
+        surface: "file-summary",
+        maxItems: 5
+      },
+      tokenizationOptions: {
+        tokenBudget: 4000
+      }
+    });
+    const fileSummaryMarkdown = String(fileSummaryResult.content[0]?.value ?? "");
+    assert(
+      fileSummaryMarkdown.includes("# Traceable Evidence File Summary")
+        && fileSummaryMarkdown.includes("Distinct Read Targets: 2")
+        && fileSummaryMarkdown.includes("traceableSubagent.ts")
+        && fileSummaryMarkdown.includes("languageModelTools.ts"),
+      `view_traceable_subagent must expose an aggregated file-summary surface for parent-agent recovery reads. Got: ${fileSummaryMarkdown}`
+    );
+
+    const pagedToolLedgerResult = await viewTraceableTool.invoke({
+      input: {
+        evidenceFilePath: viewEvidenceFilePath,
+        surface: "tool-ledger",
+        maxItems: 1,
+        offset: 1
+      },
+      tokenizationOptions: {
+        tokenBudget: 4000
+      }
+    });
+    const pagedToolLedgerMarkdown = String(pagedToolLedgerResult.content[0]?.value ?? "");
+    assert(
+      pagedToolLedgerMarkdown.includes("# Traceable Evidence Tool Ledger")
+        && pagedToolLedgerMarkdown.includes("- search/textSearch")
+        && !pagedToolLedgerMarkdown.includes("- copilot_readFile\n  - Result: success\n  - Call Id: call-1")
+        && pagedToolLedgerMarkdown.includes("Showing tool calls 2-2 of 3."),
+      `view_traceable_subagent must support offset paging for list-like ledger surfaces. Got: ${pagedToolLedgerMarkdown}`
+    );
+
+    const pagedStatusHistoryResult = await viewTraceableTool.invoke({
+      input: {
+        evidenceFilePath: viewEvidenceFilePath,
+        surface: "status-history",
+        maxItems: 1,
+        offset: 1
+      },
+      tokenizationOptions: {
+        tokenBudget: 4000
+      }
+    });
+    const pagedStatusHistoryMarkdown = String(pagedStatusHistoryResult.content[0]?.value ?? "");
+    assert(
+      pagedStatusHistoryMarkdown.includes("# Traceable Evidence Status History")
+        && pagedStatusHistoryMarkdown.includes("- running | reading 1/2")
+        && pagedStatusHistoryMarkdown.includes("Showing status events 2-2 of 3."),
+      `view_traceable_subagent must support offset paging for status-history windows. Got: ${pagedStatusHistoryMarkdown}`
+    );
+
+    const staleSelfReadController = new traceableSubagentEvidence.TraceableSubagentEvidenceController({
+      header: {
+        agentName: "Trace lane",
+        agentFilePath: "",
+        agentResolved: false,
+        modelLabel: "GPT-5 mini",
+        candidate: false,
+        experimental: false,
+        humanRole: false,
+        toolsetNames: [],
+        selectedToolNames: [],
+        toolSelectionRestricted: false
+      },
+      status: { phase: "running", message: "requesting analysis" },
+      evidenceFile: { status: "idle" },
+      requestSummary: [],
+      statusHistory: [],
+      recentTools: [],
+      startedAt: "2026-05-21T02:05:34.559Z",
+      updatedAt: "2026-05-21T02:06:00.747Z"
+    });
+    await staleSelfReadController.prepareRequestedExport({
+      outputMode: "summary-with-evidence-path",
+      exportToFolder: evidenceTempDir
+    });
+    const staleSelfReadResult = await staleSelfReadController.finalizeRequestedExport({
+      request: {},
+      outputMode: "summary-with-evidence-path",
+      model: {
+        vendor: "copilot",
+        family: "gpt-5-mini",
+        id: "gpt-5-mini",
+        version: "test"
+      },
+      allowedToolNames: [],
+      toolCalls: [],
+      iterationMetrics: [],
+      traceStatus: "trace-supported",
+      steps: [],
+      expectedButMissing: [
+        {
+          kind: "step",
+          label: "Finalized run output (Final Output shows: _Pending final result._)",
+          reason: "Reported by the child lane while it was still reading its own writing-state evidence file."
+        }
+      ],
+      stopReason: "completed",
+      completionClaim: "partial",
+      finalSummary: "Self-read captured evidenceFile.status == \"writing\" before finalization.",
+      validationIssues: [],
+      opaqueDelegations: [],
+      elapsedMs: 1000,
+      evidenceFile: {
+        status: "writing"
+      }
+    }, [
+      "# Traceable Subagent Result",
+      "",
+      "## Outcome",
+      "",
+      "- Final Summary: Self-read captured evidenceFile.status == \"writing\" before finalization.",
+      "- Missing: Final Output shows: _Pending final result._"
+    ].join("\n"));
+    const staleSelfReadMarkdown = await fs.readFile(staleSelfReadResult.evidenceFile.filePath, "utf8");
+    assert(
+      staleSelfReadMarkdown.includes("this lane inspected its own evidence file while it was still being written")
+        && staleSelfReadMarkdown.includes("The authoritative artifact state")
+        && staleSelfReadMarkdown.includes("Export Status: ready"),
+      `Traceable evidence export must reconcile stale self-read writing-state claims once the final artifact is ready. Got: ${staleSelfReadMarkdown}`
+    );
   } finally {
     await fs.rm(evidenceTempDir, { recursive: true, force: true });
   }
@@ -9119,6 +9376,43 @@ async function runTraceableSubagentChecks() {
   const originalChatMessage = vscode.LanguageModelChatMessage;
   const tempRoots = [];
   const traceableConfig = {};
+
+  const traceableLintRoot = await fs.mkdtemp(path.join(workspaceRoot, ".tmp-traceable-agent-lint-"));
+  tempRoots.push(traceableLintRoot);
+  const traceableLintAgentsDir = path.join(traceableLintRoot, ".github", "agents");
+  await fs.mkdir(traceableLintAgentsDir, { recursive: true });
+  await fs.writeFile(path.join(traceableLintAgentsDir, "valid.agent.md"), [
+    "---",
+    "name: Valid",
+    "description: Valid traceable agent.",
+    "model: GPT-5 mini (copilot)",
+    "---",
+    "",
+    "You are valid."
+  ].join("\n"), "utf8");
+  await fs.writeFile(path.join(traceableLintAgentsDir, "invalid.agent.md"), [
+    "---",
+    "name: Invalid",
+    "description: Invalid traceable agent.",
+    "model: GPT-5 mini (copilot)",
+    "models: [GPT-5.4 mini (copilot)]",
+    "---",
+    "",
+    "You are invalid."
+  ].join("\n"), "utf8");
+  vscode.workspace.workspaceFolders = [{ uri: { fsPath: traceableLintRoot }, name: "traceable-lint" }];
+  const lintCatalogEntries = await traceableSubagent.listTraceableAgentCatalogEntries();
+  const lintFindings = await traceableSubagent.listTraceableAgentCatalogLintFindings();
+  assert(
+    lintCatalogEntries.some((entry) => entry.artifactStem === "valid")
+      && !lintCatalogEntries.some((entry) => entry.artifactStem === "invalid"),
+    `Traceable agent catalog scan must keep valid agents while excluding invalid frontmatter artifacts from the runnable catalog. Got: ${JSON.stringify(lintCatalogEntries)}`
+  );
+  assert(
+    lintFindings.some((finding) => finding.artifactStem === "invalid" && finding.message.includes("must not declare both model and models")),
+    `Traceable agent catalog scan must surface invalid agent frontmatter as explicit lint findings instead of silently dropping the artifact. Got: ${JSON.stringify(lintFindings)}`
+  );
+  vscode.workspace.workspaceFolders = originalWorkspaceFolders;
 
   vscode.LanguageModelChatToolMode = { Auto: "auto" };
   vscode.LanguageModelTextPart = class LanguageModelTextPart {
