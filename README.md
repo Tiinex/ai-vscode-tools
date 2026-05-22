@@ -15,9 +15,9 @@ In practice, these tools are primarily used to support the companion `ai` repo a
 
 As of May 2026, the persisted inspection and cleanup lanes are in active use and the focused repo checks pass, but the live Local chat tooling is not yet fully end-to-end validated on the current runtime surface. Treat the live tooling as in progress rather than fully release-proven until that final runtime validation is complete.
 
-TRACEABLE runtime, evidence ownership, and the traceable agent catalog helper now live in `ai-provenance`. This repo keeps the bounded traceable model catalog helper `list_traceable_models`, plus the Local-chat session-store inspection, exact cleanup, and other VS Code-specific live-chat/store hacks.
+TRACEABLE runtime, evidence ownership, the traceable agent catalog helper, and the traceable model catalog helper now live in `ai-provenance`. This repo keeps the Local-chat session-store inspection, exact cleanup, and other VS Code-specific live-chat/store hacks.
 
-For bounded preflight on the current traceable surface, use provenance-side `list_traceable_agents` to inspect the workspace-supported traceable agent catalog and `list_traceable_models` here to inspect the runtime-discoverable model catalog before using the provenance-side TRACEABLE runtime. These helper surfaces are intentionally bounded and truthful: they improve recoverability for role/model selection, but they do not claim native Copilot Chat dropdown parity.
+For bounded preflight on the current traceable surface, use provenance-side `list_traceable_agents` to inspect the workspace-supported traceable agent catalog and provenance-side `list_traceable_models` to inspect the runtime-discoverable model catalog before using the provenance-side TRACEABLE runtime. These helper surfaces are intentionally bounded and truthful: they improve recoverability for role/model selection, but they do not claim native Copilot Chat dropdown parity.
 
 Compatibility notes for future agent-source broadening now live in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md` so that candidate parity work stays separate from the current bounded runtime claim.
 
@@ -152,9 +152,9 @@ Current split:
 - `ai-vscode-tools` remains the home for VS Code-specific Local-chat inspection, session-store interop, exact cleanup flows, and other host-shaped operational tooling that depends heavily on VS Code internals or current-store quirks.
 - `ai-provenance` now owns the TRACEABLE runtime lane, evidence-viewer UX, panel/status shell, and provenance-first artifact reading surfaces.
 
-Current bounded traceable helper still kept here:
+Current bounded traceable helpers kept here:
 
-- `list_traceable_models`
+- none
 
 Still undecided:
 

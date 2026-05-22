@@ -83,7 +83,6 @@ const expectedLanguageModelToolNames = [
   "estimate_agent_context_breakdown",
   "get_agent_session_profile",
   "survey_agent_sessions",
-  "list_traceable_models",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
@@ -115,7 +114,6 @@ const expectedExtensionCommandNames = [
 ];
 
 const liveToolManifestParityNames = new Set([
-  "list_traceable_models",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "create_live_agent_chat",
@@ -7401,12 +7399,12 @@ async function runRoutingGuardChecks() {
     "README routing guard must keep bounded inspection surfaces preferred over raw session JSONL."
   );
   assert(
-    readme.includes("TRACEABLE runtime, evidence ownership, and the traceable agent catalog helper now live in `ai-provenance`"),
-    "README must state that TRACEABLE runtime, evidence, and the agent catalog helper moved to ai-provenance."
+    readme.includes("TRACEABLE runtime, evidence ownership, the traceable agent catalog helper, and the traceable model catalog helper now live in `ai-provenance`"),
+    "README must state that TRACEABLE runtime, evidence, and both traceable catalog helpers moved to ai-provenance."
   );
   assert(
-    readme.includes("provenance-side `list_traceable_agents`") && readme.includes("bounded traceable model catalog helper `list_traceable_models`"),
-    "README must document the split where list_traceable_agents lives on provenance and list_traceable_models remains on ai-vscode-tools."
+    readme.includes("provenance-side `list_traceable_agents`") && readme.includes("provenance-side `list_traceable_models`"),
+    "README must document that both traceable catalog helpers now live on ai-provenance."
   );
   assert(
     readme.includes("The canonical public live-chat workflow surface is the language-model tool family"),
@@ -11198,12 +11196,6 @@ async function runLiveToolMutexChecks() {
     assert(
       traceableTool === undefined,
       "Live tool mutex test must not capture run_traceable_subagent here after ownership moved to ai-provenance."
-    );
-
-    const traceableModelsTool = registeredTools.get("list_traceable_models");
-    assert(
-      traceableModelsTool && typeof traceableModelsTool.prepareInvocation === "function",
-      "Live tool mutex test could not capture the list_traceable_models tool registration."
     );
 
     const invocationOptions = {

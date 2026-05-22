@@ -37,7 +37,6 @@ import {
 } from "./offlineLocalChatCleanup";
 import { appendLineToRollingLog } from "./runtimeFileHygiene";
 import {
-  listTraceableModelCatalogEntries,
   normalizeTraceableOutputMode,
   renderTraceableSubagentMarkdown,
   type TraceableSubagentOutputMode,
@@ -117,12 +116,6 @@ interface SurveyInput {
 interface ListCopilotCliSessionsInput {
   sessionStateRoot?: string;
   limit?: number;
-}
-
-interface ListTraceableModelsInput {
-  query?: string;
-  limit?: number;
-  sendableOnly?: boolean;
 }
 
 type TraceableViewSurface = "rendered-output" | "request-summary" | "outcome" | "tool-ledger" | "status-history" | "tool-summary" | "file-summary" | "state-json";
@@ -802,30 +795,6 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
-    name: "list_traceable_models",
-    displayName: "List Traceable Models",
-    userDescription: "List runtime-discoverable models that traceable subagent selection can currently see.",
-    modelDescription: "List the language models visible to the current VS Code language-model runtime using the same broad model discovery surface that traceable-subagent recovery uses. This is read-only and bounded. Use it to preflight exact model ids before calling run_traceable_subagent instead of waiting for a model-selection failure.",
-    toolReferenceName: "listTraceableModels",
-    inputSchema: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "Optional filter against model id, vendor, family, or version."
-        },
-        limit: {
-          type: "number",
-          description: "Maximum number of models to include."
-        },
-        sendableOnly: {
-          type: "boolean",
-          description: "When true, only include models that the current access information permits sending requests to."
-        }
-      }
-    }
-  },
-  {
     name: "inspect_copilot_cli_session",
     displayName: "Inspect Copilot CLI Session",
     userDescription: "Render a bounded inspection of one Copilot CLI session-state entry.",
@@ -1207,56 +1176,8 @@ const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
 
 function isEnabledToolContribution(toolName: string): boolean {
   return isFirstSliceSessionTool(toolName)
-    || toolName === "list_traceable_models"
     || (LOCAL_CHAT_CONTROL_SURFACES_ENABLED && LOCAL_CHAT_CONTROL_TOOL_NAMES.has(toolName))
     || (LOCAL_CHAT_MUTATION_SURFACES_ENABLED && LOCAL_CHAT_MUTATION_TOOL_NAMES.has(toolName));
-}
-
-function renderTraceableModelCatalogMarkdown(entries: Awaited<ReturnType<typeof listTraceableModelCatalogEntries>>, input: ListTraceableModelsInput): string {
-  const normalizedQuery = input.query?.trim().toLowerCase() ?? "";
-  const filteredEntries = entries.filter((entry) => {
-    if (input.sendableOnly && !entry.sendable) {
-      return false;
-    }
-    if (!normalizedQuery) {
-      return true;
-    }
-    const haystack = [entry.id, entry.vendor, entry.family, entry.version]
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(normalizedQuery);
-  });
-  const limitedEntries = filteredEntries.slice(0, input.limit ?? 20);
-  const lines = [
-    "# Traceable Model Catalog",
-    "",
-    "- Scope: runtime-discoverable models from `selectChatModels({})`.",
-    "- Purpose: preflight exact model ids for `run_traceable_subagent` without waiting for model-selection failure.",
-    `- Total matching models: ${filteredEntries.length}`
-  ];
-  if (normalizedQuery) {
-    lines.push(`- Query: ${input.query?.trim()}`);
-  }
-  if (input.sendableOnly) {
-    lines.push("- Filter: sendable-only");
-  }
-  if (limitedEntries.length === 0) {
-    lines.push("", "No matching traceable models found in the current runtime surface.");
-    return `${lines.join("\n")}\n`;
-  }
-  lines.push("");
-  for (const entry of limitedEntries) {
-    lines.push(`- ${entry.id ?? "(missing id)"}`);
-    lines.push(`  - Vendor: ${entry.vendor ?? "-"}`);
-    lines.push(`  - Family: ${entry.family ?? "-"}`);
-    lines.push(`  - Version: ${entry.version ?? "-"}`);
-    lines.push(`  - Sendable: ${entry.sendable ? "yes" : "no"}`);
-  }
-  if (limitedEntries.length < filteredEntries.length) {
-    lines.push("", `Showing ${limitedEntries.length}/${filteredEntries.length} matching models.`);
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 function normalizeTraceableViewSurface(value: unknown): TraceableViewSurface | undefined {
@@ -2465,17 +2386,6 @@ export function registerLanguageModelTools(
   }
 
   context.subscriptions.push(
-    vscode.lm.registerTool(
-      "list_traceable_models",
-      new ReadOnlyTool<ListTraceableModelsInput>(
-        "List Traceable Models",
-        (input) => `List traceable models${input.query ? ` matching ${JSON.stringify(input.query)}` : ""}`,
-        async (input) => renderTraceableModelCatalogMarkdown(
-          await listTraceableModelCatalogEntries(context.languageModelAccessInformation),
-          input
-        )
-      )
-    ),
     vscode.lm.registerTool(
       "invoke_youtube_host_command",
       new LiveChatTool<InvokeYouTubeHostCommandInput>(
