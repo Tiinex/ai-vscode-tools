@@ -1,5 +1,6 @@
 .github/**
 .vscode/**
+.gitignore
 node_modules/**
 src/**
 tests/**
@@ -7,6 +8,7 @@ scripts/**
 tools/**
 tsconfig.json
 package-lock.json
+*.vsix
 **/*.ts
 **/*.map
 .copilot-*

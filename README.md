@@ -11,6 +11,23 @@ For everyday users, that means fast inspection and safer cleanup. For VS Code Co
 
 In practice, these tools are primarily used to support the companion `ai` repo at https://github.com/Tiinex/ai. You can still use them independently for Local chat inspection and recovery work, but if you want the broader project context, start there as well.
 
+## Quick Start
+
+After you install the extension in VS Code, a practical first pass is:
+
+1. open the Tiinex Sessions view or run `Tiinex: Survey Recent Sessions`
+2. open one bounded artifact view such as snapshot, transcript, or context estimate
+3. only use live-chat operations when you actually need exact reveal, send, create, close, or cleanup behavior
+
+If you use the chat tool surface, the operator-facing references usually appear after `#` with the prompt-reference names, not the raw internal ids. For example, expect `#surveyAgentSessions` or `#createLiveAgentChat` in chat rather than `survey_agent_sessions` or `create_live_agent_chat`.
+
+## What To Expect
+
+- Persisted-session inspection is the strongest, most mature lane.
+- Cleanup is exact-target and recovery-oriented rather than bulk-prune oriented.
+- Live Local chat tooling is intentionally bounded and more host-sensitive than the persisted inspection surfaces.
+- Command Palette entries and the Tiinex Sessions view are the easiest first touchpoints for most installed users.
+
 ## Current Status
 
 As of May 2026, the persisted inspection and cleanup lanes are in active use and the focused repo checks pass, but the live Local chat tooling is not yet fully end-to-end validated on the current runtime surface. Treat the live tooling as in progress rather than fully release-proven until that final runtime validation is complete.
@@ -84,6 +101,8 @@ Scoped VS Code session-view actions for manual operator use include:
 
 The canonical public live-chat workflow surface is the language-model tool family such as `create_live_agent_chat`, `send_message_to_live_agent_chat`, and `reveal_live_agent_chat`.
 
+In chat, these typically appear through prompt references such as `#createLiveAgentChat`, `#sendMessageToLiveAgentChat`, and `#revealLiveAgentChat`.
+
 The mirrored `tiinex.aiVscodeTools.*LiveChat*` commands are kept as Tiinex Sessions view UI affordances over the same internal service, not as peer public workflows beside the LM tools.
 
 For agent-facing same-session live-chat workflows, prefer the language-model tools rather than these mirrored extension commands.
@@ -96,6 +115,15 @@ Core settings:
 - `tiinex.aiVscodeTools.sessionDiscoveryScope`
 - `tiinex.aiVscodeTools.postCreateTimeoutMs` default `900000` (15 minutes)
 - `tiinex.aiVscodeTools.waitForPersistedDefault`
+
+## Local Development
+
+This section is for extension contributors rather than Marketplace-first users.
+
+1. Open `ai-vscode-tools` in a terminal.
+2. Run `npm install`.
+3. Run `npm test`.
+4. Run `npm run package:vsix` if you want a local installable VSIX.
 
 ## Release Flow
 
