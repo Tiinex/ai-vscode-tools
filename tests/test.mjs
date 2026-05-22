@@ -3513,6 +3513,18 @@ async function runOfflineLocalChatCleanupChecks() {
   assert(spec.options.detached === true && spec.options.stdio === "ignore", "Offline cleanup launch test did not configure detached background execution.");
   assert(spec.options.env?.ELECTRON_RUN_AS_NODE === "1", "Offline cleanup launch test did not force the scheduled runtime into Node mode.");
 
+  const relaunchRequest = cleanupModule.buildOfflineLocalChatCleanupRelaunchRequest({
+    executable: 'C:/Program Files/Microsoft VS Code/Code.exe',
+    workspaceFolderPaths: ['C:/repo/a', 'C:/repo/b'],
+    reuseWindow: true
+  });
+  assert(relaunchRequest?.args[0] === '--reuse-window', 'Offline cleanup relaunch request test did not preserve reuse-window intent.');
+  assert(JSON.stringify(relaunchRequest?.args.slice(1)) === JSON.stringify(['C:/repo/a', 'C:/repo/b']), 'Offline cleanup relaunch request test did not preserve multi-root folder targets.');
+  const relaunchPath = await cleanupModule.writeOfflineLocalChatCleanupRelaunchRequest(globalStorageDir, relaunchRequest);
+  const rereadRelaunchRequest = await cleanupModule.readAndDeleteOfflineLocalChatCleanupRelaunchRequest(globalStorageDir);
+  assert(rereadRelaunchRequest?.executable === relaunchRequest.executable, 'Offline cleanup relaunch request test did not read back the queued executable.');
+  await assertMissing(relaunchPath, 'Offline cleanup relaunch request test did not consume the queued relaunch file.');
+
   await fs.mkdir(globalStorageDir, { recursive: true });
   const firstQueuedRequest = cleanupModule.buildWorkspaceStorageOfflineLocalChatCleanupRequest("C:/tmp/workspaceStorage/example", "session-drop-1");
   firstQueuedRequest.targetSessionIds.push("session-drop-1", "session-drop-2");
@@ -3533,6 +3545,12 @@ async function runOfflineLocalChatCleanupChecks() {
     Array.isArray(queuedLines[0].artifactPaths)
       && queuedLines[0].artifactPaths.some((value) => value.replace(/\\/g, "/").endsWith("chatSessions/session-drop-1.jsonl")),
     "Offline cleanup queue test did not persist exact artifact paths for the target session."
+  );
+  const queuedSummary = await cleanupModule.readQueuedOfflineLocalChatCleanupRequests(globalStorageDir);
+  assert(queuedSummary?.requestCount === 2, "Offline queued cleanup summary test did not count both queued request rows.");
+  assert(
+    JSON.stringify(queuedSummary?.targetSessionIds) === JSON.stringify(['session-drop-1', 'session-drop-2', 'session-drop-3']),
+    "Offline queued cleanup summary test did not de-duplicate queued target session ids."
   );
 
   await fs.mkdir(reportsDir, { recursive: true });
@@ -3849,6 +3867,113 @@ async function runOfflineLocalChatCleanupChecks() {
     assert(visibleTabs.some((tab) => tab.label === 'Deleted Session Tab') === false, 'Offline cleanup UX reconcile test left the exact deleted-session tab visible.');
     assert(visibleTabs.some((tab) => tab.label === 'Keep Session Tab') === true, 'Offline cleanup UX reconcile test incorrectly closed an unrelated editor chat tab.');
     assert(visibleTabs.some((tab) => tab.label === 'Title Only Session Drop') === true, 'Offline cleanup UX reconcile test incorrectly closed a title-only editor chat tab.');
+
+    await fs.rm(cleanupModule.getOfflineLocalChatCleanupRequestsPath(globalStorageDir), { force: true });
+
+    await cleanupModule.queueOfflineLocalChatCleanupRequest(globalStorageDir, {
+      workspaceStorageDir: 'C:/tmp/workspaceStorage/example',
+      targetSessionIds: ['session-drop-1', 'session-drop-1'],
+      artifactPaths: ['C:/tmp/workspaceStorage/example/chatSessions/session-drop-1.jsonl']
+    });
+
+    let launchedRequest;
+    const warningMessages = [];
+    const executedCommands = [];
+    let queuedRelaunchWrite;
+    const queuedReconcileResult = await extensionModule.reconcileQueuedOfflineLocalChatCleanupUx({
+      globalStorageUri: { fsPath: globalStorageDir },
+      extensionPath: 'C:/tmp/extension-root'
+    }, {
+      launchCleanup: (request) => {
+        launchedRequest = request;
+        return request.globalStorageDir;
+      },
+      buildRelaunchRequest: () => ({
+        executable: 'C:/Program Files/Microsoft VS Code/Code.exe',
+        args: ['--reuse-window', 'C:/tmp/workspace.code-workspace'],
+        requestedAt: '2026-05-22T16:30:00.000Z'
+      }),
+      writeRelaunchRequest: async (globalStorageDir, request) => {
+        queuedRelaunchWrite = { globalStorageDir, request };
+        return path.join(globalStorageDir, 'offline-local-chat-cleanup-relaunch.json');
+      },
+      showWarningMessage: async (message, ...items) => {
+        warningMessages.push({ message, items });
+        return 'Quit And Reopen';
+      },
+      executeCommand: async (command) => {
+        executedCommands.push(command);
+      },
+      waitForPid: 4321
+    });
+    assert(queuedReconcileResult?.requestCount === 1, 'Queued offline cleanup UX reconcile test did not report the queued request count.');
+    assert(queuedReconcileResult?.closedCount === 0, 'Queued offline cleanup UX reconcile test unexpectedly closed tabs after the earlier exact tab was already removed.');
+    assert(queuedReconcileResult?.rearmed === true, 'Queued offline cleanup UX reconcile test did not relaunch the cleanup helper on Windows.');
+    assert(queuedReconcileResult?.prompted === true, 'Queued offline cleanup UX reconcile test did not prompt about ghost-chat cleanup risk.');
+    assert(queuedReconcileResult?.quitRequested === true, 'Queued offline cleanup UX reconcile test did not quit VS Code after the user chose the restart path.');
+    assert(queuedReconcileResult?.relaunchQueued === true, 'Queued offline cleanup UX reconcile test did not queue the relaunch request before quitting.');
+    assert(warningMessages.length === 1 && warningMessages[0].message.includes('ghost chats'), 'Queued offline cleanup UX reconcile test did not show the ghost-chat warning message.');
+    assert(JSON.stringify(warningMessages[0].items) === JSON.stringify(['Quit And Reopen', 'Later']), 'Queued offline cleanup UX reconcile test did not offer the expected restart choices.');
+    assert(JSON.stringify(executedCommands) === JSON.stringify(['workbench.action.quit']), 'Queued offline cleanup UX reconcile test did not execute the expected quit command.');
+    assert(queuedRelaunchWrite?.globalStorageDir === globalStorageDir, 'Queued offline cleanup UX reconcile test wrote the relaunch request to the wrong global storage directory.');
+    assert(queuedRelaunchWrite?.request?.args?.[1] === 'C:/tmp/workspace.code-workspace', 'Queued offline cleanup UX reconcile test did not preserve the exact reopen target.');
+    assert(launchedRequest?.globalStorageDir === globalStorageDir, 'Queued offline cleanup UX reconcile test launched the helper against the wrong global storage path.');
+    assert(launchedRequest?.waitForPid === 4321, 'Queued offline cleanup UX reconcile test did not forward the requested wait pid.');
+
+    const orphanWorkspaceStorageDir = path.join(workspaceRoot, '.tmp-orphaned-session-workspace');
+    const orphanStateDbPath = path.join(orphanWorkspaceStorageDir, 'state.vscdb');
+    await fs.mkdir(path.join(orphanWorkspaceStorageDir, 'chatSessions'), { recursive: true });
+    await writeWorkspaceStateValue(orphanStateDbPath, 'chat.ChatSessionStore.index', JSON.stringify({
+      version: 1,
+      entries: {
+        'session-orphan-1': {
+          sessionId: 'session-orphan-1',
+          title: 'Live feedback loop anchor',
+          lastMessageDate: 1775930005000,
+          isEmpty: false,
+          isExternal: false
+        },
+        'session-keep': {
+          sessionId: 'session-keep',
+          title: 'CO-DESIGNER',
+          lastMessageDate: 1775930006000,
+          isEmpty: false,
+          isExternal: false
+        }
+      }
+    }));
+    await fs.writeFile(path.join(orphanWorkspaceStorageDir, 'chatSessions', 'session-keep.jsonl'), '{"kind":0}\n', 'utf8');
+
+    await fs.rm(cleanupModule.getOfflineLocalChatCleanupRequestsPath(globalStorageDir), { force: true });
+
+    const queuedGhostCleanupRequests = [];
+    const ghostWarningMessages = [];
+    const ghostExecutedCommands = [];
+    const orphanStartupResult = await extensionModule.detectOrphanedIndexedGhostChatsOnStartup({
+      globalStorageUri: { fsPath: globalStorageDir },
+      extensionPath: 'C:/tmp/extension-root',
+      storageUri: { fsPath: orphanWorkspaceStorageDir }
+    }, {
+      writeRelaunchRequest: async () => path.join(globalStorageDir, 'offline-local-chat-cleanup-relaunch.json'),
+      buildRelaunchRequest: () => ({
+        executable: 'C:/Program Files/Microsoft VS Code/Code.exe',
+        args: ['--reuse-window', 'C:/tmp/workspace.code-workspace'],
+        requestedAt: '2026-05-22T16:35:00.000Z'
+      }),
+      showWarningMessage: async (message, ...items) => {
+        ghostWarningMessages.push({ message, items });
+        return 'Quit And Reopen';
+      },
+      executeCommand: async (command) => {
+        ghostExecutedCommands.push(command);
+      }
+    });
+    const ghostQueuedSummary = await cleanupModule.readQueuedOfflineLocalChatCleanupRequests(globalStorageDir);
+    queuedGhostCleanupRequests.push(...(ghostQueuedSummary?.targetSessionIds ?? []));
+    assert(JSON.stringify(orphanStartupResult?.orphanedSessionIds) === JSON.stringify(['session-orphan-1']), 'Orphaned ghost-chat startup test did not isolate the missing session-file entry.');
+    assert(queuedGhostCleanupRequests.includes('session-orphan-1'), 'Orphaned ghost-chat startup test did not queue exact cleanup for the orphaned session id.');
+    assert(ghostWarningMessages.length === 1 && ghostWarningMessages[0].message.includes('ghost chat'), 'Orphaned ghost-chat startup test did not show the ghost cleanup warning.');
+    assert(JSON.stringify(ghostExecutedCommands) === JSON.stringify(['workbench.action.quit']), 'Orphaned ghost-chat startup test did not request quit after confirmation.');
   } finally {
     if (originalTabGroupsDescriptor) {
       Object.defineProperty(vscodeModule.window, 'tabGroups', originalTabGroupsDescriptor);

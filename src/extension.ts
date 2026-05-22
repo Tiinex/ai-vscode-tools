@@ -16,16 +16,19 @@ import {
 } from "./firstSlice";
 import { registerLanguageModelTools } from "./languageModelTools";
 import {
+  buildOfflineLocalChatCleanupRelaunchRequest,
   collectRemovedTargetSessionIds,
   buildWorkspaceStorageOfflineLocalChatCleanupRequest,
   formatOfflineLocalChatCleanupSummary,
   launchOfflineLocalChatCleanup,
+  writeOfflineLocalChatCleanupRelaunchRequest,
   queueOfflineLocalChatCleanupRequest,
+  readQueuedOfflineLocalChatCleanupRequests,
   readAndDeleteOfflineLocalChatCleanupReports,
   type OfflineLocalChatCleanupSummary
 } from "./offlineLocalChatCleanup";
 import { cleanupGlobalStorageArtifacts } from "./runtimeFileHygiene";
-import { loadWorkspaceSessionIndex } from "./sessionIndex";
+import { findOrphanedWorkspaceSessionIndexEntries, loadWorkspaceSessionIndex } from "./sessionIndex";
 import { SessionInspectorTreeDataProvider } from "./sessionInspectorTree";
 import { closeVisibleEditorChatTabsForSession } from "./chatInterop/editorTabLifecycle";
 import type { TraceableSubagentInput, TraceableSubagentRequestSummaryItem } from "./traceableSubagent";
@@ -532,6 +535,193 @@ async function maybeReportOfflineLocalChatCleanup(context: vscode.ExtensionConte
   }
 
   await reconcileOfflineLocalChatCleanupUx(summary);
+}
+
+export interface QueuedOfflineLocalChatCleanupUxReconcileResult extends OfflineLocalChatCleanupUxReconcileResult {
+  requestsPath: string;
+  requestCount: number;
+  rearmed: boolean;
+  prompted: boolean;
+  quitRequested: boolean;
+  relaunchQueued: boolean;
+}
+
+export interface OrphanedIndexedChatCleanupResult {
+  workspaceStorageDir: string;
+  orphanedSessionIds: string[];
+  prompted: boolean;
+  quitRequested: boolean;
+  relaunchQueued: boolean;
+}
+
+async function promptForQuitAndReopenGhostChatCleanup(
+  context: Pick<vscode.ExtensionContext, "globalStorageUri" | "extensionPath">,
+  sessionIds: string[],
+  workspaceStorageDir: string,
+  options: {
+    buildRelaunchRequest?: typeof buildOfflineLocalChatCleanupRelaunchRequest;
+    writeRelaunchRequest?: typeof writeOfflineLocalChatCleanupRelaunchRequest;
+    showWarningMessage?: (message: string, ...items: string[]) => Thenable<string | undefined>;
+    executeCommand?: (command: string) => Thenable<unknown>;
+  } = {}
+): Promise<{ prompted: boolean; quitRequested: boolean; relaunchQueued: boolean }> {
+  if (process.platform !== "win32" || sessionIds.length === 0) {
+    return { prompted: false, quitRequested: false, relaunchQueued: false };
+  }
+
+  const showWarningMessage = options.showWarningMessage ?? ((message: string, ...items: string[]) => vscode.window.showWarningMessage(message, ...items));
+  const executeCommand = options.executeCommand ?? ((command: string) => vscode.commands.executeCommand(command));
+  const buildRelaunchRequest = options.buildRelaunchRequest ?? ((requestOptions) => buildOfflineLocalChatCleanupRelaunchRequest(requestOptions));
+  const writeRelaunchRequest = options.writeRelaunchRequest ?? ((globalStorageDir, request) => writeOfflineLocalChatCleanupRelaunchRequest(globalStorageDir, request));
+  const sessionLabel = sessionIds.length === 1 ? "1 ghost chat" : `${sessionIds.length} ghost chats`;
+  const choice = await showWarningMessage(
+    `Local chat session state looks inconsistent. ${sessionLabel} still appear in the UI but no longer have persisted session files. Quit and reopen this VS Code workspace now so exact cleanup can prune the ghost chat state?`,
+    "Quit And Reopen",
+    "Later"
+  );
+
+  if (choice !== "Quit And Reopen") {
+    return { prompted: true, quitRequested: false, relaunchQueued: false };
+  }
+
+  for (const sessionId of sessionIds) {
+    await queueOfflineLocalChatCleanupRequest(
+      context.globalStorageUri.fsPath,
+      buildWorkspaceStorageOfflineLocalChatCleanupRequest(workspaceStorageDir, sessionId)
+    );
+  }
+
+  const relaunchRequest = buildRelaunchRequest({
+    executable: process.execPath,
+    workspaceFilePath: vscode.workspace.workspaceFile?.fsPath,
+    workspaceFolderPaths: (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+    reuseWindow: true
+  });
+  let relaunchQueued = false;
+  if (relaunchRequest) {
+    await writeRelaunchRequest(context.globalStorageUri.fsPath, relaunchRequest);
+    relaunchQueued = true;
+  }
+
+  launchOfflineLocalChatCleanup({
+    extensionRoot: context.extensionPath,
+    globalStorageDir: context.globalStorageUri.fsPath,
+    waitForPid: process.pid
+  });
+  await executeCommand("workbench.action.quit");
+  return { prompted: true, quitRequested: true, relaunchQueued };
+}
+
+export async function detectOrphanedIndexedGhostChatsOnStartup(
+  context: Pick<vscode.ExtensionContext, "globalStorageUri" | "extensionPath" | "storageUri">,
+  options: {
+    buildRelaunchRequest?: typeof buildOfflineLocalChatCleanupRelaunchRequest;
+    writeRelaunchRequest?: typeof writeOfflineLocalChatCleanupRelaunchRequest;
+    showWarningMessage?: (message: string, ...items: string[]) => Thenable<string | undefined>;
+    executeCommand?: (command: string) => Thenable<unknown>;
+  } = {}
+): Promise<OrphanedIndexedChatCleanupResult | undefined> {
+  if (!context.storageUri) {
+    return undefined;
+  }
+
+  const workspaceStorageRoots = [...new Set([
+    ...(currentWorkspaceStorageRoots(context as vscode.ExtensionContext) ?? []),
+    path.resolve(context.storageUri.fsPath)
+  ])];
+
+  for (const workspaceStorageDir of workspaceStorageRoots) {
+    const orphanedEntries = await findOrphanedWorkspaceSessionIndexEntries(workspaceStorageDir);
+    if (orphanedEntries.length === 0) {
+      continue;
+    }
+
+    const orphanedSessionIds = [...new Set(orphanedEntries.map((entry) => entry.sessionId).filter(Boolean))];
+    const decision = await promptForQuitAndReopenGhostChatCleanup(context, orphanedSessionIds, workspaceStorageDir, options);
+    return {
+      workspaceStorageDir,
+      orphanedSessionIds,
+      prompted: decision.prompted,
+      quitRequested: decision.quitRequested,
+      relaunchQueued: decision.relaunchQueued
+    };
+  }
+
+  return undefined;
+}
+
+export async function reconcileQueuedOfflineLocalChatCleanupUx(
+  context: Pick<vscode.ExtensionContext, "globalStorageUri" | "extensionPath">,
+  options: {
+    launchCleanup?: typeof launchOfflineLocalChatCleanup;
+    buildRelaunchRequest?: typeof buildOfflineLocalChatCleanupRelaunchRequest;
+    writeRelaunchRequest?: typeof writeOfflineLocalChatCleanupRelaunchRequest;
+    showWarningMessage?: (message: string, ...items: string[]) => Thenable<string | undefined>;
+    executeCommand?: (command: string) => Thenable<unknown>;
+    waitForPid?: number;
+  } = {}
+): Promise<QueuedOfflineLocalChatCleanupUxReconcileResult | undefined> {
+  const queued = await readQueuedOfflineLocalChatCleanupRequests(context.globalStorageUri.fsPath);
+  if (!queued) {
+    return undefined;
+  }
+
+  const reconciled = await reconcileOfflineLocalChatCleanupUx({
+    reportFilePaths: [],
+    reports: [{ removedTargetSessionIds: queued.targetSessionIds }]
+  });
+
+  let rearmed = false;
+  if (process.platform === "win32") {
+    (options.launchCleanup ?? launchOfflineLocalChatCleanup)({
+      extensionRoot: context.extensionPath,
+      globalStorageDir: context.globalStorageUri.fsPath,
+      waitForPid: options.waitForPid ?? process.pid
+    });
+    rearmed = true;
+  }
+
+  let prompted = false;
+  let quitRequested = false;
+  let relaunchQueued = false;
+  if (process.platform === "win32") {
+    const showWarningMessage = options.showWarningMessage ?? ((message: string, ...items: string[]) => vscode.window.showWarningMessage(message, ...items));
+    const executeCommand = options.executeCommand ?? ((command: string) => vscode.commands.executeCommand(command));
+    const buildRelaunchRequest = options.buildRelaunchRequest ?? ((requestOptions) => buildOfflineLocalChatCleanupRelaunchRequest(requestOptions));
+    const writeRelaunchRequest = options.writeRelaunchRequest ?? ((globalStorageDir, request) => writeOfflineLocalChatCleanupRelaunchRequest(globalStorageDir, request));
+    const sessionLabel = queued.targetSessionIds.length === 1 ? "1 exact chat session" : `${queued.targetSessionIds.length} exact chat sessions`;
+    const requestLabel = queued.requestCount === 1 ? "1 queued cleanup request" : `${queued.requestCount} queued cleanup requests`;
+    const choice = await showWarningMessage(
+      `Pending Local chat cleanup may leave ghost chats visible in the UI. ${requestLabel} still targets ${sessionLabel}. Quit and reopen this VS Code workspace now so cleanup can finish on shutdown?`,
+      "Quit And Reopen",
+      "Later"
+    );
+    prompted = true;
+    if (choice === "Quit And Reopen") {
+      const relaunchRequest = buildRelaunchRequest({
+        executable: process.execPath,
+        workspaceFilePath: vscode.workspace.workspaceFile?.fsPath,
+        workspaceFolderPaths: (vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+        reuseWindow: true
+      });
+      if (relaunchRequest) {
+        await writeRelaunchRequest(context.globalStorageUri.fsPath, relaunchRequest);
+        relaunchQueued = true;
+      }
+      await executeCommand("workbench.action.quit");
+      quitRequested = true;
+    }
+  }
+
+  return {
+    ...reconciled,
+    requestsPath: queued.requestsPath,
+    requestCount: queued.requestCount,
+    rearmed,
+    prompted,
+    quitRequested,
+    relaunchQueued
+  };
 }
 
 async function queueExactOfflineLocalChatCleanup(
@@ -1150,6 +1340,10 @@ async function syncLiveChatInteropContext(chatInterop: ChatInteropApi): Promise<
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await maybeReportOfflineLocalChatCleanup(context);
   await cleanupGlobalStorageArtifacts(context.globalStorageUri.fsPath);
+  const queuedCleanup = await reconcileQueuedOfflineLocalChatCleanupUx(context);
+  if (!queuedCleanup?.prompted) {
+    await detectOrphanedIndexedGhostChatsOnStartup(context);
+  }
   await vscode.commands.executeCommand("setContext", TRACEABLE_PANEL_VISIBLE_CONTEXT, false);
   const adapter = new SessionToolsAdapter();
   let traceablePanelRestoreCommand: string | undefined;

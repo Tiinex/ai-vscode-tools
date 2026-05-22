@@ -7,10 +7,12 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import initSqlJs from "sql.js";
 import {
+  launchOfflineLocalChatCleanupRelaunch,
   buildWorkspaceStorageOfflineLocalChatCleanupRequest,
   createOfflineLocalChatCleanupReportPath,
   getOfflineLocalChatCleanupLockPath,
   getOfflineLocalChatCleanupRequestsPath,
+  readAndDeleteOfflineLocalChatCleanupRelaunchRequest,
   type OfflineLocalChatCleanupReport
 } from "../offlineLocalChatCleanup";
 
@@ -441,11 +443,16 @@ async function runSchedule(globalStorageDir: string, pollIntervalMs: number, wai
 
   try {
     const { jobs, requestsPath } = await loadQueueJobs(globalStorageDir);
-    return await runCleanupJobs(jobs, {
+    const reports = await runCleanupJobs(jobs, {
       dryRun: false,
       globalStorageDir,
       requestsPath
     });
+    const relaunchRequest = await readAndDeleteOfflineLocalChatCleanupRelaunchRequest(globalStorageDir);
+    if (relaunchRequest) {
+      launchOfflineLocalChatCleanupRelaunch(relaunchRequest);
+    }
+    return reports;
   } finally {
     await lockHandle.close();
     await fs.rm(lockPath, { force: true });

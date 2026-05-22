@@ -46,10 +46,24 @@ export interface OfflineLocalChatCleanupSummary {
   reports: OfflineLocalChatCleanupReport[];
 }
 
+export interface OfflineLocalChatCleanupRelaunchRequest {
+  executable: string;
+  args: string[];
+  requestedAt: string;
+}
+
+export interface QueuedOfflineLocalChatCleanupSummary {
+  requestsPath: string;
+  requestCount: number;
+  targetSessionIds: string[];
+  workspaceStorageDirs: string[];
+}
+
 const OFFLINE_LOCAL_CHAT_CLEANUP_REQUESTS_FILE = "offline-local-chat-cleanup-requests.jsonl";
 const OFFLINE_LOCAL_CHAT_CLEANUP_REPORTS_DIR = "offline-local-chat-cleanup-reports";
 const OFFLINE_LOCAL_CHAT_CLEANUP_REPORT_PREFIX = "offline-local-chat-cleanup-report-";
 const OFFLINE_LOCAL_CHAT_CLEANUP_LOCK_FILE = "offline-local-chat-cleanup.lock";
+const OFFLINE_LOCAL_CHAT_CLEANUP_RELAUNCH_FILE = "offline-local-chat-cleanup-relaunch.json";
 
 function normalizeSessionIds(sessionIds: string[]): string[] {
   return [...new Set(sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean))];
@@ -99,6 +113,41 @@ export function createOfflineLocalChatCleanupReportPath(globalStorageDir: string
   );
 }
 
+export function getOfflineLocalChatCleanupRelaunchPath(globalStorageDir: string): string {
+  return path.join(globalStorageDir, OFFLINE_LOCAL_CHAT_CLEANUP_RELAUNCH_FILE);
+}
+
+export function buildOfflineLocalChatCleanupRelaunchRequest(options: {
+  executable?: string;
+  workspaceFilePath?: string;
+  workspaceFolderPaths?: string[];
+  reuseWindow?: boolean;
+}): OfflineLocalChatCleanupRelaunchRequest | undefined {
+  const executable = typeof options.executable === "string" && options.executable.trim()
+    ? options.executable.trim()
+    : process.execPath;
+  const workspaceFilePath = typeof options.workspaceFilePath === "string" && options.workspaceFilePath.trim()
+    ? options.workspaceFilePath.trim()
+    : undefined;
+  const workspaceFolderPaths = [...new Set((options.workspaceFolderPaths ?? []).map((value) => value.trim()).filter(Boolean))];
+  if (!workspaceFilePath && workspaceFolderPaths.length === 0) {
+    return undefined;
+  }
+
+  const args = options.reuseWindow === false ? [] : ["--reuse-window"];
+  if (workspaceFilePath) {
+    args.push(workspaceFilePath);
+  } else {
+    args.push(...workspaceFolderPaths);
+  }
+
+  return {
+    executable,
+    args,
+    requestedAt: new Date().toISOString()
+  };
+}
+
 export async function queueOfflineLocalChatCleanupRequest(
   globalStorageDir: string,
   request: OfflineLocalChatCleanupRequest
@@ -127,6 +176,113 @@ export async function queueOfflineLocalChatCleanupRequest(
   );
 
   return requestsPath;
+}
+
+export async function writeOfflineLocalChatCleanupRelaunchRequest(
+  globalStorageDir: string,
+  request: OfflineLocalChatCleanupRelaunchRequest
+): Promise<string> {
+  const relaunchPath = getOfflineLocalChatCleanupRelaunchPath(globalStorageDir);
+  await fs.mkdir(globalStorageDir, { recursive: true });
+  await fs.writeFile(relaunchPath, `${JSON.stringify(request, null, 2)}\n`, "utf8");
+  return relaunchPath;
+}
+
+export async function readAndDeleteOfflineLocalChatCleanupRelaunchRequest(
+  globalStorageDir: string
+): Promise<OfflineLocalChatCleanupRelaunchRequest | undefined> {
+  const relaunchPath = getOfflineLocalChatCleanupRelaunchPath(globalStorageDir);
+  try {
+    const raw = (await fs.readFile(relaunchPath, "utf8")).replace(/^\uFEFF/, "");
+    const parsed = JSON.parse(raw) as Partial<OfflineLocalChatCleanupRelaunchRequest>;
+    if (!parsed || typeof parsed !== "object") {
+      return undefined;
+    }
+
+    const executable = typeof parsed.executable === "string" && parsed.executable.trim() ? parsed.executable.trim() : undefined;
+    const args = Array.isArray(parsed.args) ? parsed.args.filter((value): value is string => typeof value === "string" && value.trim().length > 0) : [];
+    if (!executable || args.length === 0) {
+      return undefined;
+    }
+
+    return {
+      executable,
+      args,
+      requestedAt: typeof parsed.requestedAt === "string" ? parsed.requestedAt : new Date().toISOString()
+    };
+  } catch {
+    return undefined;
+  } finally {
+    await fs.rm(relaunchPath, { force: true }).catch(() => undefined);
+  }
+}
+
+export function launchOfflineLocalChatCleanupRelaunch(request: OfflineLocalChatCleanupRelaunchRequest): string {
+  const child = spawn(request.executable, request.args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.unref();
+  return request.executable;
+}
+
+export async function readQueuedOfflineLocalChatCleanupRequests(
+  globalStorageDir: string
+): Promise<QueuedOfflineLocalChatCleanupSummary | undefined> {
+  const requestsPath = getOfflineLocalChatCleanupRequestsPath(globalStorageDir);
+  try {
+    const raw = (await fs.readFile(requestsPath, "utf8")).replace(/^\uFEFF/, "");
+    const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const targetSessionIds = new Set<string>();
+    const workspaceStorageDirs = new Set<string>();
+    let requestCount = 0;
+
+    for (const line of lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      if (!parsed || typeof parsed !== "object") {
+        continue;
+      }
+
+      const workspaceStorageDir = typeof (parsed as { workspaceStorageDir?: unknown }).workspaceStorageDir === "string"
+        ? (parsed as { workspaceStorageDir: string }).workspaceStorageDir.trim()
+        : "";
+      const normalizedSessionIds = normalizeSessionIds(
+        Array.isArray((parsed as { targetSessionIds?: unknown }).targetSessionIds)
+          ? (parsed as { targetSessionIds: unknown[] }).targetSessionIds.filter((value): value is string => typeof value === "string")
+          : []
+      );
+
+      if (!workspaceStorageDir || normalizedSessionIds.length === 0) {
+        continue;
+      }
+
+      requestCount += 1;
+      workspaceStorageDirs.add(workspaceStorageDir);
+      for (const sessionId of normalizedSessionIds) {
+        targetSessionIds.add(sessionId);
+      }
+    }
+
+    if (requestCount === 0 || targetSessionIds.size === 0) {
+      return undefined;
+    }
+
+    return {
+      requestsPath,
+      requestCount,
+      targetSessionIds: [...targetSessionIds],
+      workspaceStorageDirs: [...workspaceStorageDirs]
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export function buildOfflineLocalChatCleanupLaunchSpec(

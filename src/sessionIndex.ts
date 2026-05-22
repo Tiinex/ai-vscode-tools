@@ -97,6 +97,30 @@ export async function loadWorkspaceSessionIndex(workspaceStorageDir: string): Pr
   }
 }
 
+export async function findOrphanedWorkspaceSessionIndexEntries(
+  workspaceStorageDir: string
+): Promise<WorkspaceSessionIndexEntry[]> {
+  const indexedEntries = await loadWorkspaceSessionIndex(workspaceStorageDir);
+  if (!indexedEntries || indexedEntries.size === 0) {
+    return [];
+  }
+
+  const orphans: WorkspaceSessionIndexEntry[] = [];
+  for (const entry of indexedEntries.values()) {
+    const sessionPath = path.join(workspaceStorageDir, "chatSessions", `${entry.sessionId}.jsonl`);
+    try {
+      const stat = await fs.stat(sessionPath);
+      if (!stat.isFile()) {
+        orphans.push(entry);
+      }
+    } catch {
+      orphans.push(entry);
+    }
+  }
+
+  return orphans;
+}
+
 export async function loadWorkspaceTerminalBoundChatSessionIds(workspaceStorageDir: string): Promise<string[] | undefined> {
   const dbPath = path.join(workspaceStorageDir, "state.vscdb");
   try {
