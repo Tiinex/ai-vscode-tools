@@ -420,6 +420,32 @@
 				"traceable-subagent"
 			],
 			"isBackground": false
+		},
+		{
+			"label": "traceable native surface audit",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"scripts/audit-traceable-native-surface.mjs"
+			],
+			"isBackground": false,
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
+		},
+		{
+			"label": "traceable continuation readiness audit",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"scripts/audit-traceable-continuation-readiness.mjs"
+			],
+			"isBackground": false,
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated"
+			}
 		}
 	]
 }
