@@ -38,16 +38,6 @@ For bounded preflight on the current traceable surface, use provenance-side `lis
 
 Compatibility notes for future agent-source broadening now live in `.github/validation/TRACEABLE_AGENT_COMPATIBILITY_NOTES.md` so that candidate parity work stays separate from the current bounded runtime claim.
 
-For `run_traceable_subagent`, prefer non-leading parent input. Treat `userInput` as source material or the original user wording to inspect, not as the desired answer shape, and do not let raw user wording outweigh the child lane's bounded investigative contract carried by `parentTask`.
-
-As of the latest Windows host validation, `run_traceable_subagent` is now considered reliable for bounded read-only analysis work on the current Windows host. The traceable lane has repo-test coverage plus repeated live validation for role/model grounding, fail-closed tool selection, task-file anchoring, synthesis-slot reservation, a tool-less final recovery turn, recovery-output format discipline, anchored multi-file read-budget coverage, a bounded same-lane follow-up pair on the same file, and a four-anchor code-inspection probe that now completes after repeated-read deferral and bounded retry-credit logic stopped sterile reread turns from consuming the regular iteration budget.
-
-What is not yet claimed for `run_traceable_subagent` is native `runSubagent` UX parity inside Copilot Chat, or that the current repo files alone provide fully independent proof of every claimed manual Windows-host validation step without relying on the maintained status surfaces. Treat those as still-open or still-bounded claims rather than already-proven guarantees. The maintained scaffold for future repo-visible host-validation artifacts now lives in `.github/validation/TRACEABLE_SUBAGENT_HOST_VALIDATION.md`.
-
-The collapsed running row for `run_traceable_subagent` is still not considered meaningfully solved. Current code can shape the initial task-facing invocation label, including neutral lane-style variants such as `Trace lane: 5 files`, and the completed result can carry stronger observability, but recent Windows-host reruns still did not justify claiming native-like live-row clarity or progress feel for the third-party tool surface because the label remains static while only the host-owned phase row changes.
-
-Milestone 2 status for TRACEABLE evidence export is now functionally complete enough to treat the evidence artifact lifecycle as real product behavior on the current Windows host: exported `.trace.md` artifacts are created and updated during the run, while the reconstructed TRACEABLE evidence viewer UX and its source/preview reopen actions now live on the provenance side instead of remaining a first-class `ai-vscode-tools` surface.
-
 ## Why Install It
 
 - It makes stored Local chat state inspectable instead of opaque.
@@ -171,7 +161,7 @@ This repo is not an agent-authoring framework and it does not claim a broad auto
 
 The shipped surface is intentionally Local-first. Persisted-session inspection is the strongest supported lane. Live Local chat actions are bounded operational tools, not a claim of perfect live-chat control.
 
-The TRACEABLE runtime lane no longer ships from this extension. Use `ai-provenance` for `run_traceable_subagent`, the reconstructed `.trace.md` evidence viewer, and the live TRACEABLE panel/status runtime. This repo only keeps the bounded traceable catalog helpers that are still useful alongside the VS Code-specific Local-chat/store tooling.
+The TRACEABLE runtime lane no longer ships from this extension. Use `ai-provenance` for `run_traceable_subagent`, the reconstructed `.trace.md` evidence viewer, the traceable catalog helpers, and the live TRACEABLE panel/status runtime. This repo stays focused on VS Code-specific Local-chat/store tooling.
 
 ## Provenance Boundary
 
@@ -412,7 +402,7 @@ Each platform lane below is tracked as a checklist.
 ## Traceable Boundary Note
 
 - TRACEABLE runtime validation, UX notes, and host-facing ownership now belong with `ai-provenance`, not in this README.
-- This repo may still carry low-level traceable helper code or catalog tests temporarily, but that does not make `ai-vscode-tools` the public TRACEABLE runtime owner.
+- This repo is not a TRACEABLE runtime or catalog home anymore; keep those claims and artifacts on the provenance side.
 
 ## Validation Protocol
 

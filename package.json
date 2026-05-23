@@ -45,7 +45,6 @@
   "keywords": [
     "copilot",
     "local-chat",
-    "traceable",
     "session-store",
     "recovery"
   ],
