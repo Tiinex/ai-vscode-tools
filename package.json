@@ -203,6 +203,11 @@
         "default": "Kodax (GPT-5 mini)",
         "description": "Default agent name used when dispatching handoff prompts to native chat."
       },
+      "tiinex.aiVscodeTools.courier.defaultAgentFileStem": {
+        "type": "string",
+        "default": "kodax",
+        "description": "Workspace .github/agents/<stem>.agent.md file stem to use for courier native-chat dispatch. Used to avoid display-name vs file-name ambiguity."
+      },
       "tiinex.aiVscodeTools.courier.defaultModelId": {
         "type": "string",
         "default": "",

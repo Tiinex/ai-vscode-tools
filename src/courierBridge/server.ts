@@ -105,7 +105,7 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
           // If single markdown handoff, prefer direct downloaded-path handoff without repo staging
           const lower = filename.toLowerCase();
           if (lower.endsWith('.md') || lower.endsWith('.trace.md')) {
-            const handoffContent = buildHandoffPrompt({ handoffPath: undefined, receiptPath: null, originalPath: source });
+            const handoffContent = buildDownloadedPathHandoffPrompt(source);
 
             // M0: path-reference-only default. Do not perform attach as a semantic action.
             // Implement session continuity: map chatKey/pageUrl -> sessionId so subsequent calls continue the same chat.
@@ -118,13 +118,77 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
 
             try {
               if (chatKey && sessionMap[chatKey] && sessionMap[chatKey].sessionId) {
-                // try to continue existing session
-                const sessionId = sessionMap[chatKey].sessionId;
-                if (chatInterop && typeof chatInterop.sendMessage === 'function') {
-                  dispatchResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId, blockOnResponse: false, waitForPersisted: false });
-                  route = { mode: 'continued', chatKey, sessionId };
+                // try to verify existing session first
+                const prevSessionId = sessionMap[chatKey].sessionId;
+                let sessionExists = true;
+                try {
+                  if (chatInterop && typeof chatInterop.getSessionById === 'function') {
+                    const sess = await chatInterop.getSessionById(prevSessionId);
+                    sessionExists = Boolean(sess);
+                  }
+                } catch (_) {
+                  sessionExists = true; // conservative: assume exists if check fails
+                }
+
+                if (!sessionExists) {
+                  // session stale: recreate
+                  if (chatInterop && typeof chatInterop.createChat === 'function') {
+                    const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
+                    const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
+                    const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
+                    const createResult = await chatInterop.createChat({
+                      prompt: handoffContent,
+                      agentName: dispatchAgentName,
+                      modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
+                      blockOnResponse: false,
+                      waitForPersisted: false,
+                      requireSelectionEvidence: false
+                    });
+                    dispatchResult = createResult;
+                    const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
+                    if (chatKey && sessionId) {
+                      sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
+                      try { await context.globalState.update(stateKey, sessionMap); } catch {}
+                    }
+                    route = { mode: 'recreated', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
+                  } else {
+                    route = { mode: 'none', chatKey, sessionId: null };
+                  }
                 } else {
-                  route = { mode: 'none', chatKey, sessionId };
+                  // session appears to exist; attempt to send and only mark continued on success
+                  if (chatInterop && typeof chatInterop.sendMessage === 'function') {
+                    const sendResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId: prevSessionId, blockOnResponse: false, waitForPersisted: false });
+                    dispatchResult = sendResult;
+                    if (sendResult && (sendResult.ok === true)) {
+                      route = { mode: 'continued', chatKey, sessionId: prevSessionId };
+                    } else {
+                      // send failed - attempt recreate
+                      if (chatInterop && typeof chatInterop.createChat === 'function') {
+                        const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
+                        const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
+                        const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
+                        const createResult = await chatInterop.createChat({
+                          prompt: handoffContent,
+                          agentName: dispatchAgentName,
+                          modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
+                          blockOnResponse: false,
+                          waitForPersisted: false,
+                          requireSelectionEvidence: false
+                        });
+                        dispatchResult = createResult;
+                        const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
+                        if (chatKey && sessionId) {
+                          sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
+                          try { await context.globalState.update(stateKey, sessionMap); } catch {}
+                        }
+                        route = { mode: 'recreated', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
+                      } else {
+                        route = { mode: 'none', chatKey, sessionId: null };
+                      }
+                    }
+                  } else {
+                    route = { mode: 'none', chatKey, sessionId: prevSessionId };
+                  }
                 }
               } else {
                 // create a new chat and record mapping if possible
@@ -132,10 +196,11 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                   const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
                   const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', '') : cfg.courier?.defaultAgentFileStem || '';
                   const agentFileStem = configuredAgentFileStem || (typeof configuredAgentName === 'string' ? configuredAgentName.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'kodax');
+                  const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
 
                   const createResult = await chatInterop.createChat({
                     prompt: handoffContent,
-                    agentName: configuredAgentName,
+                    agentName: dispatchAgentName,
                     modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
                     blockOnResponse: false,
                     waitForPersisted: false,
@@ -328,5 +393,25 @@ function buildHandoffPrompt(opts: { handoffPath?: string; receiptPath?: string |
   lines.push('- Use the above artifact references and the epistemic policy when deciding whether to act.');
   lines.push('- If the leaf is clear, perform the bounded action non-blocking and record results.');
   lines.push('');
+  return lines.join('\n');
+}
+
+function buildDownloadedPathHandoffPrompt(originalPath: string) {
+  const lines: string[] = [];
+  lines.push('# Tiinex Courier Downloaded-Path Handoff', '');
+  lines.push('This artifact was supplied as a local browser-downloaded file.');
+  lines.push('Read the file at the absolute path below before taking action.');
+  lines.push('If the file cannot be read, queue a postback explaining the error and do not proceed.');
+  lines.push('', `- original path: ${originalPath}`, '');
+  lines.push('Epistemic policy:');
+  lines.push('- Treat the file at the given path as the single source of truth for this handoff.');
+  lines.push('- Do not assume any repo-staged copy exists for single-file M0 handoffs.');
+  lines.push('- If the leaf is clear and bounded, act non-blocking and record results.');
+  lines.push('- If blocked, ambiguous, or unsafe, queue a postback with details and stop.');
+  lines.push('', 'Handoff instructions:');
+  lines.push('- Open and read the file at the path above.');
+  lines.push('- If readable, use its contents as the artifact to act upon.');
+  lines.push('- If attachments were previously attempted, ignore them unless pre-submit attach semantics were used.');
+  lines.push('- Record any decisions or actions in a receipt and queue a postback when appropriate.');
   return lines.join('\n');
 }
