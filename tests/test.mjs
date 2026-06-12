@@ -6535,15 +6535,29 @@ async function runCourierIntakeChecks() {
       req.end();
     });
 
-    // packet-content staging
+    // packet-content staging (small)
     const payload = { filename: 'note.md', contentBase64: Buffer.from('# hello').toString('base64'), sourcePageUrl: 'https://example' };
     const resp = await postJson('/tiinex-courier/packet-content', payload);
     const obj = JSON.parse(resp.body);
     if (!obj.ok) throw new Error('packet-content failed: ' + JSON.stringify(obj));
-    // receipt should exist
+    // receipt should exist and dispatch should have been attempted
     const receiptText = await fs.readFile(obj.receipt, 'utf-8');
     if (!receiptText.includes('Tiinex Courier Receipt')) throw new Error('receipt content missing');
     if (!createChatCalled) throw new Error('native-chat dispatch was not invoked');
+    if (!obj.handoffPath) throw new Error('handoffPath not returned');
+    const handoffContent = await fs.readFile(obj.handoffPath, 'utf-8');
+    if (!handoffContent.includes('classify as')) throw new Error('handoff prompt missing epistemic classification policy');
+
+    // packet-content staging (medium >64KB but below maxPacketBytes)
+    const mediumBuf = Buffer.alloc(150 * 1024, 65);
+    const mediumPayload = { filename: 'medium.bin', contentBase64: mediumBuf.toString('base64') };
+    const midResp = await postJson('/tiinex-courier/packet-content', mediumPayload);
+    if (midResp.status !== 200) throw new Error('medium packet-content failed');
+    const midObj = JSON.parse(midResp.body);
+    if (!midObj.ok) throw new Error('medium packet-content not ok');
+    if (!midObj.handoffPath) throw new Error('medium handoffPath missing');
+    const midReceipt = await fs.readFile(midObj.receipt, 'utf-8');
+    if (!midReceipt.includes('dispatchResult')) throw new Error('receipt missing dispatchResult for medium packet');
 
     // oversize rejection
     const largeBuf = Buffer.alloc(10485760 + 10, 0);

@@ -8,8 +8,7 @@ export async function dispatchToNativeChat(chatInterop: any, handoffPrompt: stri
     return { dispatched: false, reason: 'chatInterop unavailable' };
   }
   try {
-    // fire-and-forget createChat
-    void chatInterop.createChat({
+    const result = await chatInterop.createChat({
       prompt: handoffPrompt,
       agentName: cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName,
       modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
@@ -17,7 +16,7 @@ export async function dispatchToNativeChat(chatInterop: any, handoffPrompt: stri
       waitForPersisted: false,
       requireSelectionEvidence: false
     });
-    return { dispatched: true };
+    return { dispatched: result?.ok !== false, result };
   } catch (err) {
     return { dispatched: false, reason: String(err) };
   }

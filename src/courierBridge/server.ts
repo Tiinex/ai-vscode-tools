@@ -102,6 +102,14 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
           const fromDownloaded = true;
           const allowed = staging.extensionAllowed(filename, fromDownloaded);
           const staged = await staging.copyDownloaded(incomingRoot, source, filename);
+
+          // build handoff prompt file
+          const handoffFile = path.join(staged.handoffDir, 'intake-prompt.md');
+          const handoffContent = buildHandoffPrompt({ receiptDir: staged.receiptDir, receiptPath: null, originalPath: staged.originalPath });
+          await fs.writeFile(handoffFile, handoffContent, 'utf-8');
+
+          const dispatchResult = await dispatchToNativeChat(chatInterop, handoffContent, cfg);
+
           const receiptPath = await writeReceipt(staged.receiptDir, {
             receivedAt: new Date().toISOString(),
             endpoint: 'downloaded',
@@ -113,11 +121,11 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             bytes: staged.bytes,
             mime: parsed.mime,
             warnings: allowed ? [] : ['extension not allowlisted'],
-            runtimeTarget: cfg.get('courier.runtimeTarget', 'native-chat')
+            runtimeTarget: cfg.get('courier.runtimeTarget', 'native-chat'),
+            dispatchResult
           });
-          const handoffPrompt = `Artifact staged:\n- receipt: ${receiptPath}\n- original: ${staged.originalPath}`;
-          const dispatchResult = await dispatchToNativeChat(chatInterop, handoffPrompt, cfg);
-          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, dispatchResult });
+
+          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, handoffPath: handoffFile, dispatchResult });
         } catch (err) {
           return jsonResponse(res, { ok: false, error: String(err) }, 400);
         }
@@ -125,21 +133,32 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
 
       // /packet-content: receive base64 content for staging
       if (req.method === "POST" && url.pathname === "/tiinex-courier/packet-content") {
-        const bodyRes = await readJsonBody(req, 64 * 1024);
+        const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
+        const maxPacket = cfg.get ? cfg.get('courier.maxPacketBytes', 10485760) : (cfg.courier?.maxPacketBytes || 10485760);
+        const maxPacketJsonBytes = Math.ceil(maxPacket * 1.40) + 16 * 1024;
+        const bodyRes = await readJsonBody(req, maxPacketJsonBytes);
         if (!bodyRes.ok) {
           if (bodyRes.status === 413) return jsonResponse(res, { ok: false, error: bodyRes.reason }, 413);
           return jsonResponse(res, { ok: false, error: bodyRes.reason }, 400);
         }
         const parsed = bodyRes.value as any || {};
-        const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
         try {
           const incomingRoot = await staging.resolveIncomingRoot(vscode, cfg);
           if (!parsed.filename || !parsed.contentBase64) return jsonResponse(res, { ok: false, error: "missing filename or contentBase64" }, 400);
-          const maxPacket = cfg.get ? cfg.get('courier.maxPacketBytes', 10485760) : (cfg.courier?.maxPacketBytes || 10485760);
           const buf = Buffer.from(parsed.contentBase64, 'base64');
           if (buf.length > maxPacket) return jsonResponse(res, { ok: false, error: 'packet too large' }, 413);
           const allowed = staging.extensionAllowed(parsed.filename, false);
           const staged = await staging.stagePacket(incomingRoot, parsed.filename, parsed.contentBase64);
+
+          // build handoff prompt file
+          const handoffFile = path.join(staged.handoffDir, 'intake-prompt.md');
+          const handoffContent = buildHandoffPrompt({ receiptDir: staged.receiptDir, receiptPath: null, originalPath: staged.originalPath });
+          await fs.writeFile(handoffFile, handoffContent, 'utf-8');
+
+          // dispatch to native chat and await acceptance
+          const dispatchResult = await dispatchToNativeChat(chatInterop, handoffContent, cfg);
+
+          // write receipt including dispatchResult
           const receiptPath = await writeReceipt(staged.receiptDir, {
             receivedAt: new Date().toISOString(),
             endpoint: 'packet-content',
@@ -151,11 +170,11 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             bytes: staged.bytes,
             mime: parsed.mime,
             warnings: allowed ? [] : ['extension not allowlisted'],
-            runtimeTarget: cfg.get('courier.runtimeTarget', 'native-chat')
+            runtimeTarget: cfg.get('courier.runtimeTarget', 'native-chat'),
+            dispatchResult
           });
-          const handoffPrompt = `Artifact staged:\n- receipt: ${receiptPath}\n- original: ${staged.originalPath}`;
-          const dispatchResult = await dispatchToNativeChat(chatInterop, handoffPrompt, cfg);
-          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, dispatchResult });
+
+          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, handoffPath: handoffFile, dispatchResult });
         } catch (err) {
           return jsonResponse(res, { ok: false, error: String(err) }, 400);
         }
@@ -222,4 +241,24 @@ async function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promis
     });
     req.on('error', (err) => resolve({ ok: false, status: 400, reason: `request error: ${String(err)}` }));
   });
+}
+
+function buildHandoffPrompt(opts: { receiptDir: string; receiptPath: string | null; originalPath: string }) {
+  const lines: string[] = [];
+  lines.push('# Tiinex Courier Handoff Prompt', '');
+  lines.push('classify as: clear / ambiguous / unsafe / too broad', '');
+  lines.push('Artifact information:');
+  if (opts.receiptPath) lines.push(`- receipt: ${opts.receiptPath}`);
+  lines.push(`- original: ${opts.originalPath}`, '');
+  lines.push('Epistemic policy:');
+  lines.push('- classify as: clear / ambiguous / unsafe / too broad');
+  lines.push('- proceed without asking permission when the leaf is clear and bounded');
+  lines.push('- queue a postback when blocked, complete, rejected, or clarification is needed');
+  lines.push('- do not ask "should I start?" for a bounded leaf');
+  lines.push('- do not commit or push unless repository changes are verified and no blocker exists', '');
+  lines.push('Handoff instructions:');
+  lines.push('- Use the above artifact references and the epistemic policy when deciding whether to act.');
+  lines.push('- If the leaf is clear, perform the bounded action non-blocking and record results.');
+  lines.push('');
+  return lines.join('\n');
 }
