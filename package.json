@@ -220,8 +220,8 @@
       },
       "tiinex.aiVscodeTools.courier.postbackPrefix": {
         "type": "string",
-        "default": "Kodax",
-        "description": "Default prefix used for queued postback commands when omitted by the caller."
+        "default": "",
+        "description": "Optional override for queued postback role prefix. When empty, courier.defaultAgentName is used."
       }
       }
     },

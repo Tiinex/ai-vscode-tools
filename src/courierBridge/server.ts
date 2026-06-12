@@ -138,7 +138,8 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                     const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
                     const createResult = await chatInterop.createChat({
                       prompt: handoffContent,
-                      agentName: dispatchAgentName,
+                      agentName: configuredAgentName,
+                      agentFileStem: configuredAgentFileStem,
                       modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
                       blockOnResponse: false,
                       waitForPersisted: false,
@@ -169,7 +170,8 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                         const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
                         const createResult = await chatInterop.createChat({
                           prompt: handoffContent,
-                          agentName: dispatchAgentName,
+                          agentName: configuredAgentName,
+                          agentFileStem: configuredAgentFileStem,
                           modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
                           blockOnResponse: false,
                           waitForPersisted: false,
@@ -200,7 +202,8 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
 
                   const createResult = await chatInterop.createChat({
                     prompt: handoffContent,
-                    agentName: dispatchAgentName,
+                    agentName: configuredAgentName,
+                    agentFileStem: configuredAgentFileStem,
                     modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
                     blockOnResponse: false,
                     waitForPersisted: false,

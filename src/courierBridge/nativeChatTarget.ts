@@ -81,6 +81,7 @@ export async function dispatchToNativeChat(chatInterop: any, handoffPrompt: stri
     const result = await chatInterop.createChat({
       prompt: handoffPrompt,
       agentName: cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName,
+      agentFileStem: cfg.get ? cfg.get('courier.defaultAgentFileStem', '') : cfg.courier?.defaultAgentFileStem || '',
       modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
       blockOnResponse: false,
       waitForPersisted: false,

@@ -844,7 +844,7 @@ export class ChatInteropService implements ChatInteropApi {
     request: CreateChatRequest
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup: () => Promise<void> }> {
     const promptsDirectory = getDefaultUserPromptsDirectory();
-    const promptAgentName = await this.resolvePromptFileAgentName(request.agentName);
+    const promptAgentName = await this.resolvePromptFileAgentName(request.agentName, request.agentFileStem);
     const artifact = buildPromptFileDispatchArtifact(
       request,
       promptsDirectory,
@@ -913,31 +913,37 @@ export class ChatInteropService implements ChatInteropApi {
     };
   }
 
-  private async resolvePromptFileAgentName(agentName: string | undefined): Promise<string | undefined> {
-    const normalized = agentName?.trim().replace(/^#+/, "");
-    if (!normalized) {
-      return undefined;
+  private async resolvePromptFileAgentName(agentName: string | undefined, agentFileStem: string | undefined): Promise<string | undefined> {
+    const normalizedAgentName = agentName?.trim().replace(/^#+/, "");
+    const tryCandidates: string[] = [];
+
+    if (agentFileStem && agentFileStem.trim()) {
+      tryCandidates.push(agentFileStem.trim());
+    }
+    if (normalizedAgentName) {
+      tryCandidates.push(normalizedAgentName);
     }
 
-    const workspaceAgentFile = await this.findWorkspaceAgentFile(normalized);
-    if (!workspaceAgentFile) {
-      return normalized;
+    for (const candidate of tryCandidates) {
+      const workspaceAgentFile = await this.findWorkspaceAgentFile(candidate);
+      if (!workspaceAgentFile) continue;
+
+      try {
+        const raw = await fs.readFile(workspaceAgentFile, "utf8");
+        const frontmatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u);
+        const nameLine = frontmatterMatch?.[1]
+          .split(/\r?\n/u)
+          .map((line) => line.match(/^name\s*:\s*(.+)\s*$/u))
+          .find((match): match is RegExpMatchArray => Boolean(match?.[1]));
+        const resolvedName = nameLine?.[1]?.trim().replace(/^['\"]|['\"]$/g, "");
+        return resolvedName || candidate;
+      } catch {
+        // If file read fails, continue to next candidate
+        continue;
+      }
     }
 
-    let raw: string;
-    try {
-      raw = await fs.readFile(workspaceAgentFile, "utf8");
-    } catch {
-      return normalized;
-    }
-
-    const frontmatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u);
-    const nameLine = frontmatterMatch?.[1]
-      .split(/\r?\n/u)
-      .map((line) => line.match(/^name\s*:\s*(.+)\s*$/u))
-      .find((match): match is RegExpMatchArray => Boolean(match?.[1]));
-    const resolvedName = nameLine?.[1]?.trim().replace(/^['"]|['"]$/g, "");
-    return resolvedName || normalized;
+    return normalizedAgentName || undefined;
   }
 
   private async findWorkspaceAgentFile(agentName: string): Promise<string | undefined> {

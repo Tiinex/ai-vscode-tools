@@ -87,6 +87,10 @@ export interface ChatSessionSummary {
 export interface CreateChatRequest {
   prompt: string;
   agentName?: string;
+  /** Optional resolver-only hint to locate a workspace agent file ("kodax").
+   * Do not use as the visible agent identity; it's only used to find
+   * `.github/agents/<stem>.agent.md` when resolving prompt-file frontmatter. */
+  agentFileStem?: string;
   mode?: string;
   modelSelector?: ChatModelSelector;
   partialQuery?: boolean;
