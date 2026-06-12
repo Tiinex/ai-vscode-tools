@@ -81,7 +81,7 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         return;
       }
 
-      // /downloaded: staged copy of an existing local file
+      // /downloaded: handle a browser-downloaded local file path
       if (req.method === "POST" && url.pathname === "/tiinex-courier/downloaded") {
         const bodyRes = await readJsonBody(req, 64 * 1024);
         if (!bodyRes.ok) {
@@ -91,7 +91,6 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         const parsed = bodyRes.value as any || {};
         const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
         try {
-          const incomingRoot = await staging.resolveIncomingRoot(vscode, cfg);
           if (!parsed.filename) return jsonResponse(res, { ok: false, error: "missing filename" }, 400);
           const source = String(parsed.filename);
           try {
@@ -102,6 +101,21 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
           const filename = path.basename(source);
           const fromDownloaded = true;
           const allowed = staging.extensionAllowed(filename, fromDownloaded);
+
+          // If single markdown handoff, prefer direct downloaded-path handoff without repo staging
+          const lower = filename.toLowerCase();
+          if (lower.endsWith('.md') || lower.endsWith('.trace.md')) {
+            const handoffContent = buildHandoffPrompt({ handoffPath: undefined, receiptPath: null, originalPath: source });
+
+            // attempt to create native chat and attach the downloaded file when possible
+            const dispatchResult = await dispatchToNativeChat(chatInterop, handoffContent, cfg, source);
+
+            // Do not create repo staging by default for single markdown; return attachment attempt evidence
+            return jsonResponse(res, { ok: true, downloaded: { originalPath: source, originalFilename: filename }, allowed, dispatchResult });
+          }
+
+          // Fallback: for other files, preserve existing staging behavior
+          const incomingRoot = await staging.resolveIncomingRoot(vscode, cfg);
           const staged = await staging.copyDownloaded(incomingRoot, source, filename);
 
           // determine receipt path and build handoff prompt file
