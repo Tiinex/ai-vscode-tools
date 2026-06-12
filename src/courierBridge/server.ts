@@ -107,11 +107,61 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
           if (lower.endsWith('.md') || lower.endsWith('.trace.md')) {
             const handoffContent = buildHandoffPrompt({ handoffPath: undefined, receiptPath: null, originalPath: source });
 
-            // attempt to create native chat and attach the downloaded file when possible
-            const dispatchResult = await dispatchToNativeChat(chatInterop, handoffContent, cfg, source);
+            // M0: path-reference-only default. Do not perform attach as a semantic action.
+            // Implement session continuity: map chatKey/pageUrl -> sessionId so subsequent calls continue the same chat.
+            const chatKey = parsed.chatKey ?? parsed.sourcePageUrl ?? null;
+            const stateKey = 'tiinex.courier.sessionMap.v1';
+            const sessionMap = (context.globalState.get(stateKey) as Record<string, any> | undefined) || {};
 
-            // Do not create repo staging by default for single markdown; return attachment attempt evidence
-            return jsonResponse(res, { ok: true, downloaded: { originalPath: source, originalFilename: filename }, allowed, dispatchResult });
+            let route: { mode: 'created' | 'continued' | 'recreated' | 'none'; chatKey?: string | null; sessionId?: string | null } = { mode: 'none' };
+            let dispatchResult: any = undefined;
+
+            try {
+              if (chatKey && sessionMap[chatKey] && sessionMap[chatKey].sessionId) {
+                // try to continue existing session
+                const sessionId = sessionMap[chatKey].sessionId;
+                if (chatInterop && typeof chatInterop.sendMessage === 'function') {
+                  dispatchResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId, blockOnResponse: false, waitForPersisted: false });
+                  route = { mode: 'continued', chatKey, sessionId };
+                } else {
+                  route = { mode: 'none', chatKey, sessionId };
+                }
+              } else {
+                // create a new chat and record mapping if possible
+                if (chatInterop && typeof chatInterop.createChat === 'function') {
+                  const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
+                  const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', '') : cfg.courier?.defaultAgentFileStem || '';
+                  const agentFileStem = configuredAgentFileStem || (typeof configuredAgentName === 'string' ? configuredAgentName.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'kodax');
+
+                  const createResult = await chatInterop.createChat({
+                    prompt: handoffContent,
+                    agentName: configuredAgentName,
+                    modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
+                    blockOnResponse: false,
+                    waitForPersisted: false,
+                    requireSelectionEvidence: false
+                  });
+                  dispatchResult = createResult;
+                  const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
+                  if (chatKey && sessionId) {
+                    sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString(), agentFileStem };
+                    try { await context.globalState.update(stateKey, sessionMap); } catch {}
+                    route = { mode: 'created', chatKey, sessionId };
+                  } else {
+                    route = { mode: 'created', chatKey: chatKey ?? null, sessionId: sessionId ?? null };
+                  }
+                } else {
+                  route = { mode: 'none', chatKey: chatKey ?? null, sessionId: null };
+                }
+              }
+            } catch (err) {
+              // preserve dispatch error in result
+              dispatchResult = { ok: false, error: String(err) };
+            }
+
+            const attachmentAttempt = { ok: false, mode: 'disabled-diagnostic', reason: 'attachment ordering not proven' };
+
+            return jsonResponse(res, { ok: true, route, downloaded: { originalPath: source, originalFilename: filename }, allowed, dispatchResult, attachmentAttempt });
           }
 
           // Fallback: for other files, preserve existing staging behavior
