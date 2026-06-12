@@ -30,10 +30,8 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
       }
 
       if (req.method === "POST" && url.pathname === "/tiinex-courier/extension/poll") {
-        let body = "";
-        for await (const chunk of req) body += chunk;
-        let parsed: PollRequest | undefined = undefined;
-        try { parsed = body ? JSON.parse(body) : undefined; } catch {}
+        const body = await readJsonBody(req, 64 * 1024);
+        const parsed: PollRequest | undefined = body ?? undefined;
         const chatKey = parsed?.state?.chatKey as string | undefined;
         const cmd = pollCommand(chatKey ?? null);
         if (!cmd) {
@@ -44,18 +42,16 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         jsonResponse(res, { ok: true, command: cmd });
         return;
       }
-
       if (req.method === "POST" && url.pathname === "/tiinex-courier/extension/ack") {
-        let body = "";
-        for await (const chunk of req) body += chunk;
-        let parsed: AckRequest | undefined = undefined;
-        try { parsed = body ? JSON.parse(body) : undefined; } catch {}
+        const body = await readJsonBody(req, 64 * 1024);
+        const parsed: AckRequest | undefined = body ?? undefined;
         if (!parsed || !parsed.commandId) {
           jsonResponse(res, { ok: false, reason: "missing commandId" }, 400);
           return;
         }
-        const ok = ackCommand(parsed.commandId);
-        jsonResponse(res, { ok: true, acked: ok });
+        const okFlag = parsed.ok !== undefined ? Boolean(parsed.ok) : true;
+        const acked = ackCommand(parsed.commandId, okFlag, parsed.result);
+        jsonResponse(res, { ok: true, acked });
         return;
       }
 
@@ -86,4 +82,31 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
   };
 
   return disp;
+}
+
+async function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promise<any | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    req.on('data', (chunk: Buffer) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        // stop reading further
+        req.destroy();
+        resolve(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      try {
+        const txt = Buffer.concat(chunks).toString('utf8');
+        if (!txt) return resolve(undefined);
+        resolve(JSON.parse(txt));
+      } catch {
+        resolve(undefined);
+      }
+    });
+    req.on('error', () => resolve(undefined));
+  });
 }

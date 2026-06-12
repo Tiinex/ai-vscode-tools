@@ -80,6 +80,7 @@ const expectedLanguageModelToolNames = [
   "survey_agent_sessions",
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
+  "queue_tiinex_courier_postback",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",
@@ -111,6 +112,7 @@ const expectedExtensionCommandNames = [
 const liveToolManifestParityNames = new Set([
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
+  "queue_tiinex_courier_postback",
   "create_live_agent_chat",
   "close_visible_live_chat_tabs",
   "delete_live_agent_chat_artifacts",

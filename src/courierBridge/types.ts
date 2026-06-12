@@ -8,6 +8,12 @@ export interface PostbackCommand {
   chatKey?: string | null;
   acked?: boolean;
   ackedAt?: string | null;
+  // last ack metadata (ok may be false for failed delivery)
+  lastAck?: {
+    ok: boolean;
+    result?: Record<string, unknown>;
+    at: string;
+  } | null;
 }
 
 export interface PollRequest {

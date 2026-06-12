@@ -37,7 +37,10 @@ export function pollCommand(chatKey?: string | null): PostbackCommand | null {
   const now = new Date();
   for (const cmd of queue.values()) {
     if (cmd.acked) continue;
-    if (cmd.chatKey && chatKey && cmd.chatKey !== chatKey) continue;
+    // If the command is targeted at a specific chatKey, only return it
+    // when the poll provides the matching chatKey. This prevents leaking
+    // chat-specific commands to non-targeted polls.
+    if (cmd.chatKey && cmd.chatKey !== chatKey) continue;
     const expires = new Date(cmd.expiresAt);
     if (expires.getTime() <= now.getTime()) {
       // expired: remove
@@ -49,14 +52,20 @@ export function pollCommand(chatKey?: string | null): PostbackCommand | null {
   return null;
 }
 
-export function ackCommand(commandId: string): boolean {
+export function ackCommand(commandId: string, ok = true, result?: Record<string, unknown>): boolean {
   const cmd = queue.get(commandId);
   if (!cmd) return false;
-  cmd.acked = true;
-  cmd.ackedAt = new Date().toISOString();
-  queue.set(commandId, cmd);
-  // remove from active queue after ack
-  queue.delete(commandId);
+  const now = new Date().toISOString();
+  cmd.lastAck = { ok, result, at: now };
+  if (ok) {
+    cmd.acked = true;
+    cmd.ackedAt = now;
+    // remove from active queue after successful ack
+    queue.delete(commandId);
+  } else {
+    // persist failed ack metadata but keep command in queue for retry
+    queue.set(commandId, cmd);
+  }
   return true;
 }
 

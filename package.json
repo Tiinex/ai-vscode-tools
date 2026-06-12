@@ -1105,6 +1105,26 @@
           ]
         }
       }
+      ,
+      {
+        "name": "queue_tiinex_courier_postback",
+        "displayName": "Queue Tiinex Courier Postback",
+        "userDescription": "Queue a courier postback command for the Tiinex Chrome Courier loopback bridge.",
+        "modelDescription": "Queue a postback command that Chrome Courier can poll and acknowledge. Use for small operator messages with optional links.",
+        "canBeReferencedInPrompt": true,
+        "toolReferenceName": "queueTiinexCourierPostback",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prefix": { "type": "string", "description": "Optional command prefix" },
+            "message": { "type": "string" },
+            "links": { "type": "array", "items": { "type": "string" } },
+            "expiresInSeconds": { "type": "number" },
+            "chatKey": { "type": ["string", "null"] }
+          },
+          "required": ["message"]
+        }
+      }
     ]
   },
   "scripts": {
