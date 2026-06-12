@@ -6437,6 +6437,39 @@ async function runCourierPostbackChecks() {
     const pollObj3 = JSON.parse(pollResp3.body);
     if (!pollObj3.ok || pollObj3.command) throw new Error('expired command was returned');
 
+    // Oversize /poll should return 413
+    const large = 'a'.repeat(70 * 1024);
+    const postRaw = (pathName, raw, contentType = 'application/json') => new Promise((resolve, reject) => {
+      const req = http.request({ method: 'POST', hostname: '127.0.0.1', port, path: pathName, headers: { 'Content-Type': contentType } }, (res) => {
+        let data = '';
+        res.on('data', (c) => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+      req.on('error', reject);
+      req.write(raw);
+      req.end();
+    });
+
+    const oversizePollResp = await postRaw('/tiinex-courier/extension/poll', large);
+    if (oversizePollResp.status !== 413) throw new Error('oversize poll did not return 413');
+
+    // Oversize /ack should return 413
+    const oversizeAckResp = await postRaw('/tiinex-courier/extension/ack', large);
+    if (oversizeAckResp.status !== 413) throw new Error('oversize ack did not return 413');
+
+    // Invalid JSON to /ack should return 400
+    const invalidJsonResp = await postRaw('/tiinex-courier/extension/ack', '{ invalid json ');
+    if (invalidJsonResp.status !== 400) throw new Error('invalid ack JSON did not return 400');
+
+    // package.json schema must not expose chatKey for queue tool
+    const pkgText = await fs.readFile(packageJsonPath, 'utf-8');
+    const pkg = JSON.parse(pkgText);
+    const lm = pkg.contributes && pkg.contributes.languageModelTools;
+    const queueTool = Array.isArray(lm) && lm.find((t) => t && t.name === 'queue_tiinex_courier_postback');
+    if (!queueTool) throw new Error('queue_tiinex_courier_postback missing from package.json contributes');
+    const props = queueTool.inputSchema && queueTool.inputSchema.properties;
+    if (props && Object.prototype.hasOwnProperty.call(props, 'chatKey')) throw new Error('package.json schema still exposes chatKey');
+
   } finally {
     try {
       disp.dispose();

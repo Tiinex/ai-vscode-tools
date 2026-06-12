@@ -30,8 +30,19 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
       }
 
       if (req.method === "POST" && url.pathname === "/tiinex-courier/extension/poll") {
-        const body = await readJsonBody(req, 64 * 1024);
-        const parsed: PollRequest | undefined = body ?? undefined;
+        const bodyRes = await readJsonBody(req, 64 * 1024);
+        if (!bodyRes.ok) {
+          // For poll: empty body may be acceptable, but oversized/invalid must be rejected
+          if (bodyRes.status === 413) {
+            jsonResponse(res, { ok: false, error: bodyRes.reason }, 413);
+            return;
+          }
+          if (bodyRes.status === 400) {
+            jsonResponse(res, { ok: false, error: bodyRes.reason }, 400);
+            return;
+          }
+        }
+        const parsed: PollRequest | undefined = bodyRes.ok ? (bodyRes.value as PollRequest | undefined) : undefined;
         const chatKey = parsed?.state?.chatKey as string | undefined;
         const cmd = pollCommand(chatKey ?? null);
         if (!cmd) {
@@ -43,8 +54,18 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         return;
       }
       if (req.method === "POST" && url.pathname === "/tiinex-courier/extension/ack") {
-        const body = await readJsonBody(req, 64 * 1024);
-        const parsed: AckRequest | undefined = body ?? undefined;
+        const bodyRes = await readJsonBody(req, 64 * 1024);
+        if (!bodyRes.ok) {
+          if (bodyRes.status === 413) {
+            jsonResponse(res, { ok: false, error: bodyRes.reason }, 413);
+            return;
+          }
+          if (bodyRes.status === 400) {
+            jsonResponse(res, { ok: false, error: bodyRes.reason }, 400);
+            return;
+          }
+        }
+        const parsed: AckRequest | undefined = bodyRes.ok ? (bodyRes.value as AckRequest | undefined) : undefined;
         if (!parsed || !parsed.commandId) {
           jsonResponse(res, { ok: false, reason: "missing commandId" }, 400);
           return;
@@ -84,29 +105,42 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
   return disp;
 }
 
-async function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promise<any | null> {
+type JsonBodyResult =
+  | { ok: true; value: unknown | undefined }
+  | { ok: false; status: 400 | 413; reason: string };
+
+async function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promise<JsonBodyResult> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
     let received = 0;
-    req.on('data', (chunk: Buffer) => {
+    let tooLarge = false;
+    const onData = (chunk: Buffer) => {
+      if (tooLarge) return;
       received += chunk.length;
       if (received > maxBytes) {
-        // stop reading further
-        req.destroy();
-        resolve(null);
+        // mark too large and stop accumulating further chunks
+        tooLarge = true;
+        resolve({ ok: false, status: 413, reason: `request body exceeds ${maxBytes} bytes` });
         return;
       }
       chunks.push(chunk);
-    });
+    };
+    req.on('data', onData);
     req.on('end', () => {
+      if (tooLarge) return; // already resolved
       try {
         const txt = Buffer.concat(chunks).toString('utf8');
-        if (!txt) return resolve(undefined);
-        resolve(JSON.parse(txt));
-      } catch {
-        resolve(undefined);
+        if (!txt) return resolve({ ok: true, value: undefined });
+        try {
+          const parsed = JSON.parse(txt);
+          return resolve({ ok: true, value: parsed });
+        } catch (err) {
+          return resolve({ ok: false, status: 400, reason: `invalid JSON body: ${String(err)}` });
+        }
+      } catch (err) {
+        return resolve({ ok: false, status: 400, reason: `error reading body: ${String(err)}` });
       }
     });
-    req.on('error', () => resolve(undefined));
+    req.on('error', (err) => resolve({ ok: false, status: 400, reason: `request error: ${String(err)}` }));
   });
 }
