@@ -180,7 +180,7 @@
       },
       "tiinex.aiVscodeTools.courier.postbackPrefix": {
         "type": "string",
-        "default": "Sigma",
+        "default": "Kodax",
         "description": "Default prefix used for queued postback commands when omitted by the caller."
       }
       }
