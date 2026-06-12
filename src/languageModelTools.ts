@@ -898,6 +898,23 @@ const ALL_TOOL_CONTRIBUTIONS: ToolContribution[] = [
     }
   },
   {
+    name: "queue_tiinex_courier_postback",
+    displayName: "Queue Tiinex Courier Postback",
+    userDescription: "Queue a short postback message for the Tiinex courier bridge.",
+    modelDescription: "Queue a short postback message for the Tiinex courier bridge. Use this to enqueue a small text message and optional links that the extension will deliver to the postback queue for later polling by the Courier extension.",
+    toolReferenceName: "queueTiinexCourierPostback",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prefix: { type: "string", description: "Optional prefix for the queued postback (defaults to configured postbackPrefix)." },
+        message: { type: "string", description: "The message to enqueue." },
+        links: { type: "array", items: { type: "string" }, description: "Optional list of short links to include in the postback." },
+        expiresInSeconds: { type: "number", description: "Optional TTL for the queued postback in seconds." }
+      },
+      required: ["message"]
+    }
+  },
+  {
     name: "create_live_agent_chat",
     displayName: "Create Live Agent Chat",
     userDescription: "Preferred clean new-chat route. On this host, supply agentName explicitly when creating a fresh live chat.",
@@ -1056,7 +1073,8 @@ const LOCAL_CHAT_CONTROL_TOOL_NAMES = new Set([
   "list_live_agent_chats",
   "inspect_live_agent_chat_quiescence",
   "close_visible_live_chat_tabs",
-  "reveal_live_agent_chat"
+  "reveal_live_agent_chat",
+  "queue_tiinex_courier_postback"
 ]);
 
 const LOCAL_CHAT_MUTATION_TOOL_NAMES = new Set([
