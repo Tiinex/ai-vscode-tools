@@ -1780,6 +1780,25 @@ export function registerLanguageModelTools(
           )
         ),
         registerLiveTool(
+          "queue_tiinex_courier_postback",
+          new LocalChatTool<{ prefix?: string; message: string; links?: string[]; expiresInSeconds?: number }>(
+            (input) => `Queue Tiinex courier postback: ${input.message?.slice(0, 64)}`,
+            async (input) => {
+              const courier = await import("./courierBridge/postbackQueue.js");
+              const config = (await import("./courierBridge/config.js")).courierConfig();
+              if (!config.enabled) {
+                throw new Error("Courier bridge is disabled");
+              }
+              if (!input || !input.message || !input.message.trim()) {
+                throw new Error("message is required");
+              }
+              const prefix = input.prefix && input.prefix.trim() ? input.prefix.trim() : config.postbackPrefix;
+              const cmd = courier.queuePostback({ prefix, message: input.message.trim(), links: input.links, expiresInSeconds: input.expiresInSeconds ?? 300, chatKey: null });
+              return JSON.stringify({ commandId: cmd.commandId, expiresAt: cmd.expiresAt, queueDepth: courier.queueDepth() });
+            }
+          )
+        ),
+        registerLiveTool(
           "reveal_live_agent_chat",
           new LocalChatTool<LiveChatSelectionInput>(
             (input) => `Revealing live agent chat ${JSON.stringify(input.sessionId)}`,

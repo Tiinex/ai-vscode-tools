@@ -6355,6 +6355,93 @@ async function runLocalToCopilotCliHandoffChecks() {
   assert(executionPrompt.includes("## Exact Handoff Prompt") === false, "Local-to-CLI execution prompt must not recursively include the embedded handoff prompt section.");
 }
 
+async function runCourierPostbackChecks() {
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const path = await import('node:path');
+  const http = await import('node:http');
+  const { promises: fs } = await import('node:fs');
+
+  const vscodeModule = await import(`${pathToFileURL(vscodeStubModulePath).href}?courier=${Date.now()}`);
+  const vscode = vscodeModule.default ?? vscodeModule;
+  vscode.workspace ??= {};
+  vscode.window ??= {};
+  vscode.window.showInformationMessage ??= async () => undefined;
+  vscode.window.showErrorMessage ??= async () => undefined;
+
+  // Configure courier enabled with a random free-ish port
+  const port = 37200 + Math.floor(Math.random() * 1000);
+  vscode.workspace.getConfiguration = (section) => {
+    if (section !== 'tiinex.aiVscodeTools') return { get: () => undefined };
+    return {
+      get: (k, def) => {
+        if (k === 'courier.enabled') return true;
+        if (k === 'courier.port') return port;
+        if (k === 'courier.incomingDirectory') return '';
+        if (k === 'courier.postbackPrefix') return 'Sigma';
+        return def;
+      }
+    };
+  };
+
+  const distCourierServer = path.join(packageRoot, 'dist', 'courierBridge', 'server.js');
+  const distPostbackQueue = path.join(packageRoot, 'dist', 'courierBridge', 'postbackQueue.js');
+
+  const serverModule = await import(pathToFileURL(distCourierServer).href);
+  const queueModule = await import(pathToFileURL(distPostbackQueue).href);
+
+  const disp = serverModule.maybeStartCourierBridge({}, undefined);
+  if (!disp || typeof disp.dispose !== 'function') {
+    throw new Error('Courier bridge did not start');
+  }
+
+  try {
+    // Queue a command and poll
+    const cmd = queueModule.queuePostback({ message: 'hello', links: [], expiresInSeconds: 10 });
+
+    // helper to POST JSON
+    const postJson = (pathName, body) => new Promise((resolve, reject) => {
+      const req = http.request({ method: 'POST', hostname: '127.0.0.1', port, path: pathName, headers: { 'Content-Type': 'application/json' } }, (res) => {
+        let data = '';
+        res.on('data', (c) => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+      req.on('error', reject);
+      req.write(JSON.stringify(body));
+      req.end();
+    });
+
+    const statusResp = await postJson('/tiinex-courier/status', {});
+    const statusObj = JSON.parse(statusResp.body);
+    if (!statusObj.ok || !statusObj.enabled) throw new Error('status failed');
+
+    const pollResp = await postJson('/tiinex-courier/extension/poll', {});
+    const pollObj = JSON.parse(pollResp.body);
+    if (!pollObj.ok || !pollObj.command) throw new Error('poll did not return command');
+    if (pollObj.command.commandId !== cmd.commandId) throw new Error('polled commandId mismatch');
+
+    const ackResp = await postJson('/tiinex-courier/extension/ack', { commandId: cmd.commandId });
+    const ackObj = JSON.parse(ackResp.body);
+    if (!ackObj.ok || !ackObj.acked) throw new Error('ack failed');
+
+    // polling now should return null
+    const pollResp2 = await postJson('/tiinex-courier/extension/poll', {});
+    const pollObj2 = JSON.parse(pollResp2.body);
+    if (!pollObj2.ok || pollObj2.command) throw new Error('command still present after ack');
+
+    // expiry test: queue with short expiry and wait
+    const cmd2 = queueModule.queuePostback({ message: 'exp', links: [], expiresInSeconds: 1 });
+    await new Promise((r) => setTimeout(r, 1200));
+    const pollResp3 = await postJson('/tiinex-courier/extension/poll', {});
+    const pollObj3 = JSON.parse(pollResp3.body);
+    if (!pollObj3.ok || pollObj3.command) throw new Error('expired command was returned');
+
+  } finally {
+    try {
+      disp.dispose();
+    } catch { }
+  }
+}
+
 async function runPendingRequestHeuristicChecks() {
   const toolsModule = await import(pathToFileURL(distToolsCore).href);
   const {
@@ -7960,6 +8047,7 @@ const namedChecks = [
   ["live-tool-mutex", runLiveToolMutexChecks],
   ["live-chat-support-matrix", runLiveChatSupportMatrixChecks],
   ["local-to-copilot-cli-handoff", runLocalToCopilotCliHandoffChecks],
+  ["courier-postback", runCourierPostbackChecks],
   ["pending-request-heuristics", runPendingRequestHeuristicChecks],
   ["copilot-cli-inspection", runCopilotCliInspectionChecks],
   ["agent-architect-process-evidence", runAgentArchitectProcessEvidenceChecks],

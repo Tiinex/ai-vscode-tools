@@ -15,6 +15,7 @@ import {
   LOCAL_CHAT_RUNTIME_SURFACES_ENABLED
 } from "./firstSlice";
 import { registerLanguageModelTools } from "./languageModelTools";
+import { maybeStartCourierBridge } from "./courierBridge/server";
 import {
   buildOfflineLocalChatCleanupRelaunchRequest,
   collectRemovedTargetSessionIds,
@@ -907,6 +908,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   registerLanguageModelTools(context, adapter, chatInterop);
+  const courier = maybeStartCourierBridge(context, chatInterop);
+  if (courier) {
+    context.subscriptions.push(courier);
+  }
   registerCommands(context, adapter, tree, chatInterop);
 }
 

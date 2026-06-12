@@ -37,6 +37,7 @@
     "onLanguageModelTool:send_message_to_live_agent_chat",
     "onLanguageModelTool:reveal_live_agent_chat",
     "onLanguageModelTool:invoke_youtube_host_command"
+    ,"onLanguageModelTool:queue_tiinex_courier_postback"
   ],
   "categories": [
     "Chat",
@@ -161,6 +162,27 @@
           "default": true,
           "description": "When true, focused-send calls will wait for a persisted session mutation by default. Set to false to make focused-send non-blocking by default. Individual calls can override with the request flag `waitForPersisted`."
         }
+      ,
+      "tiinex.aiVscodeTools.courier.enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the Tiinex Chrome Courier loopback bridge server."
+      },
+      "tiinex.aiVscodeTools.courier.port": {
+        "type": "number",
+        "default": 37175,
+        "description": "Loopback port to bind the courier bridge (binds only to 127.0.0.1)."
+      },
+      "tiinex.aiVscodeTools.courier.incomingDirectory": {
+        "type": "string",
+        "default": "",
+        "description": "Optional incoming directory for staging courier artifacts. Required for full staging features."
+      },
+      "tiinex.aiVscodeTools.courier.postbackPrefix": {
+        "type": "string",
+        "default": "Sigma",
+        "description": "Default prefix used for queued postback commands when omitted by the caller."
+      }
       }
     },
     "menus": {
