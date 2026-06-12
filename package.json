@@ -178,6 +178,41 @@
         "default": "",
         "description": "Optional incoming directory for staging courier artifacts. Required for full staging features."
       },
+      "tiinex.aiVscodeTools.courier.artifactRootRelativePath": {
+        "type": "string",
+        "default": ".tiinex/courier",
+        "description": "Relative artifact root path inside a single-folder workspace to stage courier artifacts."
+      },
+      "tiinex.aiVscodeTools.courier.createTraceReceipt": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true, create a courier receipt file for each intake."
+      },
+      "tiinex.aiVscodeTools.courier.maxPacketBytes": {
+        "type": "number",
+        "default": 10485760,
+        "description": "Maximum allowed decoded packet size in bytes for /packet-content (default 10 MiB)."
+      },
+      "tiinex.aiVscodeTools.courier.runtimeTarget": {
+        "type": "string",
+        "default": "native-chat",
+        "description": "Runtime target for courier handoff (native-chat)."
+      },
+      "tiinex.aiVscodeTools.courier.defaultAgentName": {
+        "type": "string",
+        "default": "Kodax (GPT-5 mini)",
+        "description": "Default agent name used when dispatching handoff prompts to native chat."
+      },
+      "tiinex.aiVscodeTools.courier.defaultModelId": {
+        "type": "string",
+        "default": "",
+        "description": "Optional default model id to request for native-chat dispatch."
+      },
+      "tiinex.aiVscodeTools.courier.defaultModelVendor": {
+        "type": "string",
+        "default": "",
+        "description": "Optional default model vendor for native-chat dispatch."
+      },
       "tiinex.aiVscodeTools.courier.postbackPrefix": {
         "type": "string",
         "default": "Kodax",

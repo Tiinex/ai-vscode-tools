@@ -6547,6 +6547,8 @@ async function runCourierIntakeChecks() {
     if (!obj.handoffPath) throw new Error('handoffPath not returned');
     const handoffContent = await fs.readFile(obj.handoffPath, 'utf-8');
     if (!handoffContent.includes('classify as')) throw new Error('handoff prompt missing epistemic classification policy');
+    if (!handoffContent.includes('receipt:')) throw new Error('handoff prompt missing receipt path');
+    if (!handoffContent.includes('handoff:')) throw new Error('handoff prompt missing handoff path');
 
     // packet-content staging (medium >64KB but below maxPacketBytes)
     const mediumBuf = Buffer.alloc(150 * 1024, 65);
@@ -6558,6 +6560,24 @@ async function runCourierIntakeChecks() {
     if (!midObj.handoffPath) throw new Error('medium handoffPath missing');
     const midReceipt = await fs.readFile(midObj.receipt, 'utf-8');
     if (!midReceipt.includes('dispatchResult')) throw new Error('receipt missing dispatchResult for medium packet');
+    if (!midReceipt.includes('"created":true') && !midReceipt.includes('created')) throw new Error('receipt dispatchResult not rendered as readable JSON');
+
+    // package.json must include Etapp 2B courier settings
+    const pkgText2 = await fs.readFile(packageJsonPath, 'utf-8');
+    const pkg2 = JSON.parse(pkgText2);
+    const props2 = pkg2.contributes && pkg2.contributes.configuration && pkg2.contributes.configuration.properties;
+    const requiredKeys = [
+      'tiinex.aiVscodeTools.courier.runtimeTarget',
+      'tiinex.aiVscodeTools.courier.defaultAgentName',
+      'tiinex.aiVscodeTools.courier.defaultModelId',
+      'tiinex.aiVscodeTools.courier.defaultModelVendor',
+      'tiinex.aiVscodeTools.courier.artifactRootRelativePath',
+      'tiinex.aiVscodeTools.courier.createTraceReceipt',
+      'tiinex.aiVscodeTools.courier.maxPacketBytes'
+    ];
+    for (const k of requiredKeys) {
+      if (!props2 || !Object.prototype.hasOwnProperty.call(props2, k)) throw new Error('package.json missing courier setting: ' + k);
+    }
 
     // oversize rejection
     const largeBuf = Buffer.alloc(10485760 + 10, 0);

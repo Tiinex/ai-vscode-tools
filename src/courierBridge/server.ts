@@ -57,6 +57,7 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         jsonResponse(res, { ok: true, command: cmd });
         return;
       }
+
       if (req.method === "POST" && url.pathname === "/tiinex-courier/extension/ack") {
         const bodyRes = await readJsonBody(req, 64 * 1024);
         if (!bodyRes.ok) {
@@ -103,14 +104,15 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
           const allowed = staging.extensionAllowed(filename, fromDownloaded);
           const staged = await staging.copyDownloaded(incomingRoot, source, filename);
 
-          // build handoff prompt file
+          // determine receipt path and build handoff prompt file
+          const receiptPath = path.join(staged.receiptDir, 'courier-receipt.md');
           const handoffFile = path.join(staged.handoffDir, 'intake-prompt.md');
-          const handoffContent = buildHandoffPrompt({ receiptDir: staged.receiptDir, receiptPath: null, originalPath: staged.originalPath });
+          const handoffContent = buildHandoffPrompt({ handoffPath: handoffFile, receiptPath, originalPath: staged.originalPath });
           await fs.writeFile(handoffFile, handoffContent, 'utf-8');
 
           const dispatchResult = await dispatchToNativeChat(chatInterop, handoffContent, cfg);
 
-          const receiptPath = await writeReceipt(staged.receiptDir, {
+          const receiptPathWritten = await writeReceipt(staged.receiptDir, {
             receivedAt: new Date().toISOString(),
             endpoint: 'downloaded',
             sourcePageUrl: parsed.sourcePageUrl,
@@ -125,7 +127,7 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             dispatchResult
           });
 
-          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, handoffPath: handoffFile, dispatchResult });
+          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPathWritten, handoffPath: handoffFile, dispatchResult });
         } catch (err) {
           return jsonResponse(res, { ok: false, error: String(err) }, 400);
         }
@@ -150,16 +152,17 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
           const allowed = staging.extensionAllowed(parsed.filename, false);
           const staged = await staging.stagePacket(incomingRoot, parsed.filename, parsed.contentBase64);
 
-          // build handoff prompt file
+          // determine receipt path and build handoff prompt file
+          const receiptPath = path.join(staged.receiptDir, 'courier-receipt.md');
           const handoffFile = path.join(staged.handoffDir, 'intake-prompt.md');
-          const handoffContent = buildHandoffPrompt({ receiptDir: staged.receiptDir, receiptPath: null, originalPath: staged.originalPath });
+          const handoffContent = buildHandoffPrompt({ handoffPath: handoffFile, receiptPath, originalPath: staged.originalPath });
           await fs.writeFile(handoffFile, handoffContent, 'utf-8');
 
           // dispatch to native chat and await acceptance
           const dispatchResult = await dispatchToNativeChat(chatInterop, handoffContent, cfg);
 
           // write receipt including dispatchResult
-          const receiptPath = await writeReceipt(staged.receiptDir, {
+          const receiptPathWritten = await writeReceipt(staged.receiptDir, {
             receivedAt: new Date().toISOString(),
             endpoint: 'packet-content',
             sourcePageUrl: parsed.sourcePageUrl,
@@ -174,7 +177,7 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             dispatchResult
           });
 
-          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, handoffPath: handoffFile, dispatchResult });
+          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPathWritten, handoffPath: handoffFile, dispatchResult });
         } catch (err) {
           return jsonResponse(res, { ok: false, error: String(err) }, 400);
         }
@@ -243,11 +246,12 @@ async function readJsonBody(req: http.IncomingMessage, maxBytes: number): Promis
   });
 }
 
-function buildHandoffPrompt(opts: { receiptDir: string; receiptPath: string | null; originalPath: string }) {
+function buildHandoffPrompt(opts: { handoffPath?: string; receiptPath?: string | null; originalPath: string }) {
   const lines: string[] = [];
   lines.push('# Tiinex Courier Handoff Prompt', '');
   lines.push('classify as: clear / ambiguous / unsafe / too broad', '');
   lines.push('Artifact information:');
+  if (opts.handoffPath) lines.push(`- handoff: ${opts.handoffPath}`);
   if (opts.receiptPath) lines.push(`- receipt: ${opts.receiptPath}`);
   lines.push(`- original: ${opts.originalPath}`, '');
   lines.push('Epistemic policy:');
