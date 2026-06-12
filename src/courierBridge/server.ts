@@ -3,6 +3,10 @@ import { promises as fs } from "node:fs";
 import * as vscode from "vscode";
 import { queueDepth, pollCommand, ackCommand } from "./postbackQueue";
 import type { PollRequest, AckRequest } from "./types";
+import * as staging from "./staging";
+import { writeReceipt } from "./receipt";
+import { dispatchToNativeChat } from "./nativeChatTarget";
+import path from "node:path";
 
 function jsonResponse(res: http.ServerResponse, obj: unknown, status = 200) {
   const body = JSON.stringify(obj);
@@ -76,10 +80,85 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         return;
       }
 
-      // For other courier endpoints return 501 for now
-      if (req.method === "POST" && (url.pathname === "/tiinex-courier/downloaded" || url.pathname === "/tiinex-courier/packet-content")) {
-        jsonResponse(res, { ok: false, error: "Not implemented" }, 501);
-        return;
+      // /downloaded: staged copy of an existing local file
+      if (req.method === "POST" && url.pathname === "/tiinex-courier/downloaded") {
+        const bodyRes = await readJsonBody(req, 64 * 1024);
+        if (!bodyRes.ok) {
+          if (bodyRes.status === 413) return jsonResponse(res, { ok: false, error: bodyRes.reason }, 413);
+          return jsonResponse(res, { ok: false, error: bodyRes.reason }, 400);
+        }
+        const parsed = bodyRes.value as any || {};
+        const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
+        try {
+          const incomingRoot = await staging.resolveIncomingRoot(vscode, cfg);
+          if (!parsed.filename) return jsonResponse(res, { ok: false, error: "missing filename" }, 400);
+          const source = String(parsed.filename);
+          try {
+            await fs.access(source);
+          } catch {
+            return jsonResponse(res, { ok: false, error: "source file not found" }, 400);
+          }
+          const filename = path.basename(source);
+          const fromDownloaded = true;
+          const allowed = staging.extensionAllowed(filename, fromDownloaded);
+          const staged = await staging.copyDownloaded(incomingRoot, source, filename);
+          const receiptPath = await writeReceipt(staged.receiptDir, {
+            receivedAt: new Date().toISOString(),
+            endpoint: 'downloaded',
+            sourcePageUrl: parsed.sourcePageUrl,
+            chatKey: parsed.chatKey,
+            originalFilename: filename,
+            stagedOriginalPath: staged.originalPath,
+            sha256: staged.sha,
+            bytes: staged.bytes,
+            mime: parsed.mime,
+            warnings: allowed ? [] : ['extension not allowlisted'],
+            runtimeTarget: cfg.get('courier.runtimeTarget', 'native-chat')
+          });
+          const handoffPrompt = `Artifact staged:\n- receipt: ${receiptPath}\n- original: ${staged.originalPath}`;
+          const dispatchResult = await dispatchToNativeChat(chatInterop, handoffPrompt, cfg);
+          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, dispatchResult });
+        } catch (err) {
+          return jsonResponse(res, { ok: false, error: String(err) }, 400);
+        }
+      }
+
+      // /packet-content: receive base64 content for staging
+      if (req.method === "POST" && url.pathname === "/tiinex-courier/packet-content") {
+        const bodyRes = await readJsonBody(req, 64 * 1024);
+        if (!bodyRes.ok) {
+          if (bodyRes.status === 413) return jsonResponse(res, { ok: false, error: bodyRes.reason }, 413);
+          return jsonResponse(res, { ok: false, error: bodyRes.reason }, 400);
+        }
+        const parsed = bodyRes.value as any || {};
+        const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
+        try {
+          const incomingRoot = await staging.resolveIncomingRoot(vscode, cfg);
+          if (!parsed.filename || !parsed.contentBase64) return jsonResponse(res, { ok: false, error: "missing filename or contentBase64" }, 400);
+          const maxPacket = cfg.get ? cfg.get('courier.maxPacketBytes', 10485760) : (cfg.courier?.maxPacketBytes || 10485760);
+          const buf = Buffer.from(parsed.contentBase64, 'base64');
+          if (buf.length > maxPacket) return jsonResponse(res, { ok: false, error: 'packet too large' }, 413);
+          const allowed = staging.extensionAllowed(parsed.filename, false);
+          const staged = await staging.stagePacket(incomingRoot, parsed.filename, parsed.contentBase64);
+          const receiptPath = await writeReceipt(staged.receiptDir, {
+            receivedAt: new Date().toISOString(),
+            endpoint: 'packet-content',
+            sourcePageUrl: parsed.sourcePageUrl,
+            chatKey: parsed.chatKey,
+            originalFilename: parsed.filename,
+            stagedOriginalPath: staged.originalPath,
+            sha256: staged.sha,
+            bytes: staged.bytes,
+            mime: parsed.mime,
+            warnings: allowed ? [] : ['extension not allowlisted'],
+            runtimeTarget: cfg.get('courier.runtimeTarget', 'native-chat')
+          });
+          const handoffPrompt = `Artifact staged:\n- receipt: ${receiptPath}\n- original: ${staged.originalPath}`;
+          const dispatchResult = await dispatchToNativeChat(chatInterop, handoffPrompt, cfg);
+          return jsonResponse(res, { ok: true, staged: { base: staged.base, originalPath: staged.originalPath, sha256: staged.sha, bytes: staged.bytes }, receipt: receiptPath, dispatchResult });
+        } catch (err) {
+          return jsonResponse(res, { ok: false, error: String(err) }, 400);
+        }
       }
 
       jsonResponse(res, { ok: false, error: "unknown endpoint" }, 404);

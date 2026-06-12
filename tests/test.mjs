@@ -6477,6 +6477,110 @@ async function runCourierPostbackChecks() {
   }
 }
 
+async function runCourierIntakeChecks() {
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const path = await import('node:path');
+  const http = await import('node:http');
+  const { promises: fs } = await import('node:fs');
+
+  const vscodeModule = await import(`${pathToFileURL(vscodeStubModulePath).href}?courier=${Date.now()}`);
+  const vscode = vscodeModule.default ?? vscodeModule;
+  vscode.workspace ??= {};
+  vscode.window ??= {};
+  vscode.window.showInformationMessage ??= async () => undefined;
+  vscode.window.showErrorMessage ??= async () => undefined;
+
+  // Prepare workspace incoming directory
+  const tmpRoot = await fs.mkdtemp(path.join(packageRoot, 'tests', '.tmp-courier-intake-'));
+  const incomingDir = path.join(tmpRoot, 'incoming-root');
+  await fs.mkdir(incomingDir, { recursive: true });
+
+  const port = 37200 + Math.floor(Math.random() * 1000);
+  vscode.workspace.getConfiguration = (section) => {
+    if (section !== 'tiinex.aiVscodeTools') return { get: () => undefined };
+    return {
+      get: (k, def) => {
+        if (k === 'courier.enabled') return true;
+        if (k === 'courier.port') return port;
+        if (k === 'courier.incomingDirectory') return incomingDir;
+        if (k === 'courier.postbackPrefix') return 'Sigma';
+        if (k === 'courier.maxPacketBytes') return 10485760;
+        if (k === 'courier.runtimeTarget') return 'native-chat';
+        return def;
+      }
+    };
+  };
+
+  const distCourierServer = path.join(packageRoot, 'dist', 'courierBridge', 'server.js');
+
+  // mock chatInterop
+  let createChatCalled = false;
+  const chatInterop = {
+    createChat: async (opts) => { createChatCalled = true; return { created: true }; }
+  };
+
+  const serverModule = await import(pathToFileURL(distCourierServer).href);
+  const disp = serverModule.maybeStartCourierBridge({}, chatInterop);
+  if (!disp || typeof disp.dispose !== 'function') throw new Error('Courier bridge did not start');
+
+  try {
+    const postJson = (pathName, body) => new Promise((resolve, reject) => {
+      const req = http.request({ method: 'POST', hostname: '127.0.0.1', port, path: pathName, headers: { 'Content-Type': 'application/json' } }, (res) => {
+        let data = '';
+        res.on('data', (c) => data += c);
+        res.on('end', () => resolve({ status: res.statusCode, body: data }));
+      });
+      req.on('error', reject);
+      req.write(JSON.stringify(body));
+      req.end();
+    });
+
+    // packet-content staging
+    const payload = { filename: 'note.md', contentBase64: Buffer.from('# hello').toString('base64'), sourcePageUrl: 'https://example' };
+    const resp = await postJson('/tiinex-courier/packet-content', payload);
+    const obj = JSON.parse(resp.body);
+    if (!obj.ok) throw new Error('packet-content failed: ' + JSON.stringify(obj));
+    // receipt should exist
+    const receiptText = await fs.readFile(obj.receipt, 'utf-8');
+    if (!receiptText.includes('Tiinex Courier Receipt')) throw new Error('receipt content missing');
+    if (!createChatCalled) throw new Error('native-chat dispatch was not invoked');
+
+    // oversize rejection
+    const largeBuf = Buffer.alloc(10485760 + 10, 0);
+    const largePayload = { filename: 'big.bin', contentBase64: largeBuf.toString('base64') };
+    const overResp = await postJson('/tiinex-courier/packet-content', largePayload);
+    if (overResp.status !== 413) throw new Error('oversize packet not rejected');
+
+    // multi-root rejection: simulate workspaceFolders length >1 and empty incomingDirectory
+    const savedGetConfiguration = vscode.workspace.getConfiguration;
+    vscode.workspace.workspaceFolders = [{ uri: { fsPath: 'a' } }, { uri: { fsPath: 'b' } }];
+    vscode.workspace.getConfiguration = (section) => {
+      if (section !== 'tiinex.aiVscodeTools') return { get: () => undefined };
+      return { get: (k, def) => { if (k === 'courier.enabled') return true; if (k === 'courier.port') return port; if (k === 'courier.incomingDirectory') return ''; if (k === 'courier.artifactRootRelativePath') return '.tiinex/courier'; return def; } };
+    };
+    const mrResp = await postJson('/tiinex-courier/packet-content', payload);
+    const mrObj = JSON.parse(mrResp.body);
+    if (mrResp.status === 200 && mrObj.ok) throw new Error('multi-root should have been rejected');
+
+    // restore configuration so downloaded resolves to incomingDir
+    vscode.workspace.getConfiguration = savedGetConfiguration;
+
+    // downloaded: create a source file and post
+    const srcFile = path.join(tmpRoot, 'download-source.txt');
+    await fs.writeFile(srcFile, 'downloaded content', 'utf-8');
+    // reset workspaceFolders to undefined for resolveIncomingRoot to use incomingDir
+    delete vscode.workspace.workspaceFolders;
+    const dlResp = await postJson('/tiinex-courier/downloaded', { filename: srcFile, sourcePageUrl: 'https://x' });
+    const dlObj = JSON.parse(dlResp.body);
+    if (!dlObj.ok) throw new Error('downloaded endpoint failed');
+    const dlReceipt = await fs.readFile(dlObj.receipt, 'utf-8');
+    if (!dlReceipt.includes('endpoint: downloaded')) throw new Error('downloaded receipt not correct');
+
+  } finally {
+    try { disp.dispose(); } catch {}
+  }
+}
+
 async function runPendingRequestHeuristicChecks() {
   const toolsModule = await import(pathToFileURL(distToolsCore).href);
   const {
@@ -8083,6 +8187,7 @@ const namedChecks = [
   ["live-chat-support-matrix", runLiveChatSupportMatrixChecks],
   ["local-to-copilot-cli-handoff", runLocalToCopilotCliHandoffChecks],
   ["courier-postback", runCourierPostbackChecks],
+  ["courier-intake", runCourierIntakeChecks],
   ["pending-request-heuristics", runPendingRequestHeuristicChecks],
   ["copilot-cli-inspection", runCopilotCliInspectionChecks],
   ["agent-architect-process-evidence", runAgentArchitectProcessEvidenceChecks],
