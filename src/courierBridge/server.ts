@@ -9,6 +9,8 @@ import { dispatchToNativeChat } from "./nativeChatTarget";
 import { readLastAssistantResponseTextFromSessionFile } from "../chatInterop/storage";
 import path from "node:path";
 
+let lastCaptureAttempt: any = null;
+
 function jsonResponse(res: http.ServerResponse, obj: unknown, status = 200) {
   const body = JSON.stringify(obj);
   res.writeHead(status, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) });
@@ -30,7 +32,18 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
       const url = new URL(req.url ?? "", `http://${req.headers.host ?? `${host}:${port}`}`);
       if (req.method === "POST" && url.pathname === "/tiinex-courier/status") {
         const incomingConfigured = Boolean(config.get<string>("courier.incomingDirectory", ""));
-        jsonResponse(res, { ok: true, enabled: true, incomingDirectoryConfigured: incomingConfigured, runtimeTarget: "native-chat", queueDepth: queueDepth() });
+        const postbackMode = config.get ? config.get('courier.postbackMode', 'bridge-capture') : (config.courier?.postbackMode || 'bridge-capture');
+        const bridgeCaptureAvailable = Boolean(chatInterop && typeof chatInterop.getSessionById === 'function' && typeof queuePostback === 'function');
+        let versionHint = 'dev';
+        try {
+          const pkg = await fs.readFile(path.join(context.extensionPath || '.', 'package.json'), 'utf8');
+          const parsed = JSON.parse(pkg || '{}');
+          versionHint = parsed.version ?? versionHint;
+        } catch {
+          // ignore
+        }
+
+        jsonResponse(res, { ok: true, enabled: true, incomingDirectoryConfigured: incomingConfigured, runtimeTarget: "native-chat", postbackMode, bridgeCaptureAvailable, versionHint, queueDepth: queueDepth() });
         return;
       }
 
@@ -243,40 +256,53 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             try {
               const postbackMode = postbackInfo.mode;
               if (postbackMode === 'bridge-capture' && route && route.sessionId && chatInterop && typeof chatInterop.getSessionById === 'function') {
-                try {
-                  const sessionSummary = await chatInterop.getSessionById(route.sessionId as string);
-                  if (sessionSummary && sessionSummary.sessionFile) {
-                    const capture = await readLastAssistantResponseTextFromSessionFile(sessionSummary.sessionFile);
-                    postbackInfo.capture = capture;
-                    if (capture.ok && capture.text) {
-                      const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
-                      const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
-                      const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
-                      const cmd = queuePostback({ prefix, message: capture.text, links: [], chatKey: chatKey ?? null });
-                      postbackInfo.queued = true;
-                      postbackInfo.commandId = cmd.commandId;
-                      postbackInfo.source = 'captured-final-assistant-output';
-                    } else {
-                      // extraction failed: queue a natural blocker postback
-                      const blocker = `Bridge capture failed to extract final assistant output: ${capture.reason ?? 'unknown'}`;
-                      const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
-                      const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
-                      const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
-                      const cmd = queuePostback({ prefix, message: blocker, links: [], chatKey: chatKey ?? null });
-                      postbackInfo.queued = true;
-                      postbackInfo.commandId = cmd.commandId;
-                      postbackInfo.source = 'capture-failure-blocker';
+                    try {
+                      const sessionSummary = await chatInterop.getSessionById(route.sessionId as string);
+                      if (sessionSummary && sessionSummary.sessionFile) {
+                        const capture = await readLastAssistantResponseTextFromSessionFile(sessionSummary.sessionFile);
+                        postbackInfo.capture = capture;
+                        if (capture.ok && capture.text) {
+                          const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
+                          const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
+                          const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
+                          const cmd = queuePostback({ prefix, message: capture.text, links: [], chatKey: chatKey ?? null });
+                          postbackInfo.queued = true;
+                          postbackInfo.commandId = cmd.commandId;
+                          postbackInfo.source = 'captured-final-assistant-output';
+                        } else {
+                          // extraction failed: queue a natural blocker postback
+                          const blocker = `Bridge capture failed to extract final assistant output: ${capture.reason ?? 'unknown'}`;
+                          const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
+                          const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
+                          const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
+                          const cmd = queuePostback({ prefix, message: blocker, links: [], chatKey: chatKey ?? null });
+                          postbackInfo.queued = true;
+                          postbackInfo.commandId = cmd.commandId;
+                          postbackInfo.source = 'capture-failure-blocker';
+                        }
+                      } else {
+                        postbackInfo.capture = { ok: false, reason: 'session summary or sessionFile missing' };
+                      }
+                    } catch (err) {
+                      postbackInfo.capture = { ok: false, reason: String(err) };
                     }
-                  } else {
-                    postbackInfo.capture = { ok: false, reason: 'session summary or sessionFile missing' };
-                  }
-                } catch (err) {
-                  postbackInfo.capture = { ok: false, reason: String(err) };
-                }
               }
             } catch (err) {
               postbackInfo = { ok: false, reason: String(err) };
             }
+
+            // record last capture attempt for local diagnostics
+            try {
+              lastCaptureAttempt = {
+                at: new Date().toISOString(),
+                chatKey: chatKey ?? null,
+                route,
+                capture: postbackInfo.capture ?? null,
+                queued: Boolean(postbackInfo.queued),
+                commandId: postbackInfo.commandId ?? null,
+                reason: postbackInfo.reason ?? null
+              };
+            } catch { /* ignore */ }
 
             return jsonResponse(res, { ok: true, route, downloaded: { originalPath: source, originalFilename: filename }, allowed, dispatchResult, attachmentAttempt, postback: postbackInfo });
           }
@@ -362,6 +388,11 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         } catch (err) {
           return jsonResponse(res, { ok: false, error: String(err) }, 400);
         }
+      }
+
+      if (req.method === "POST" && url.pathname === "/tiinex-courier/debug/last-capture") {
+        jsonResponse(res, { ok: true, lastCapture: lastCaptureAttempt });
+        return;
       }
 
       jsonResponse(res, { ok: false, error: "unknown endpoint" }, 404);
