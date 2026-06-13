@@ -1,4 +1,5 @@
 import path from "node:path";
+import http from "node:http";
 import { createReadStream } from "node:fs";
 import { promises as fs } from "node:fs";
 import readline from "node:readline";
@@ -855,6 +856,81 @@ function registerCommands(
         }, resolved);
       })
     );
+
+    // Simulate a Chrome Courier invoke for local testing
+    context.subscriptions.push(vscode.commands.registerCommand("tiinex.aiVscodeTools.simulateCourierInvoke", async () => {
+      const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
+      const port = cfg.get<number>("courier.port", 37175);
+      const host = "127.0.0.1";
+
+      // helper to POST JSON to loopback courier bridge
+      async function postJson(endpoint: string, bodyObj: unknown): Promise<any> {
+        return new Promise((resolve, reject) => {
+          try {
+            const body = JSON.stringify(bodyObj);
+            const req = http.request({ hostname: host, port, path: endpoint, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+              const chunks: Buffer[] = [];
+              res.on('data', (c) => chunks.push(Buffer.from(c)));
+              res.on('end', () => {
+                try {
+                  const txt = Buffer.concat(chunks).toString('utf8');
+                  const parsed = txt ? JSON.parse(txt) : undefined;
+                  resolve(parsed);
+                } catch (err) {
+                  resolve({ ok: false, error: String(err), statusCode: res.statusCode });
+                }
+              });
+            });
+            req.on('error', (err) => reject(err));
+            req.write(body);
+            req.end();
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }
+
+      // Quick path: if a smoke-test.md exists in the user's Downloads, use it as the downloaded file
+      const defaultTestPath = path.join(process.env.USERPROFILE ?? '', 'Downloads', 'smoke-test.md');
+      try {
+        await fs.access(defaultTestPath);
+        // post as downloaded handoff automatically
+        const payload: any = { filename: defaultTestPath };
+        const res = await postJson('/tiinex-courier/downloaded', payload);
+        void vscode.window.showInformationMessage(`Courier simulated (downloaded): ${JSON.stringify(res ?? { ok: false })}`);
+        return;
+      } catch {
+        // fall through to interactive flow if default test file missing
+      }
+
+      const choice = await vscode.window.showQuickPick(["downloaded", "packet-content"], { placeHolder: "Choose courier endpoint to simulate" });
+      if (!choice) return;
+      try {
+        if (choice === 'downloaded') {
+          const uris = await vscode.window.showOpenDialog({ canSelectMany: false });
+          if (!uris || uris.length === 0) return;
+          const file = uris[0].fsPath;
+          const chatKey = await vscode.window.showInputBox({ prompt: 'Optional chatKey (press Enter to skip)' });
+          const payload: any = { filename: file };
+          if (chatKey && chatKey.trim()) payload.chatKey = chatKey.trim();
+          const res = await postJson('/tiinex-courier/downloaded', payload);
+          void vscode.window.showInformationMessage(`Courier simulated (downloaded): ${JSON.stringify(res ?? { ok: false })}`);
+        } else {
+          const uris = await vscode.window.showOpenDialog({ canSelectMany: false });
+          if (!uris || uris.length === 0) return;
+          const filePath = uris[0].fsPath;
+          const buf = await fs.readFile(filePath);
+          const contentBase64 = buf.toString('base64');
+          const chatKey = await vscode.window.showInputBox({ prompt: 'Optional chatKey (press Enter to skip)' });
+          const payload: any = { filename: path.basename(filePath), contentBase64 };
+          if (chatKey && chatKey.trim()) payload.chatKey = chatKey.trim();
+          const res = await postJson('/tiinex-courier/packet-content', payload);
+          void vscode.window.showInformationMessage(`Courier simulated (packet-content): ${JSON.stringify(res ?? { ok: false })}`);
+        }
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Failed to simulate courier invoke: ${String(err)}`);
+      }
+    }));
   }
 }
 

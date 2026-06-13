@@ -124,6 +124,11 @@
         "command": "tiinex.aiVscodeTools.sendMessageToLiveChat",
         "title": "Tiinex: Send Message To Local Chat"
       }
+      ,
+      {
+        "command": "tiinex.aiVscodeTools.simulateCourierInvoke",
+        "title": "Tiinex: Simulate Courier Invoke"
+      }
     ],
     "views": {
       "explorer": [
