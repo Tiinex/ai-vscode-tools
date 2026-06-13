@@ -223,6 +223,13 @@
         "default": "",
         "description": "Optional override for queued postback role prefix. When empty, courier.defaultAgentName is used."
       }
+      ,
+      "tiinex.aiVscodeTools.courier.postbackMode": {
+        "type": "string",
+        "enum": ["manual-tool", "bridge-capture"],
+        "default": "bridge-capture",
+        "description": "How courier postbacks are produced. bridge-capture waits for native chat completion and posts the final assistant response; manual-tool keeps queue_tiinex_courier_postback as fallback/debug."
+      }
       }
     },
     "menus": {

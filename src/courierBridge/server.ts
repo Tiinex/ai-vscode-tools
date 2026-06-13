@@ -1,11 +1,12 @@
 import http from "node:http";
 import { promises as fs } from "node:fs";
 import * as vscode from "vscode";
-import { queueDepth, pollCommand, ackCommand } from "./postbackQueue";
+import { queueDepth, pollCommand, ackCommand, queuePostback } from "./postbackQueue";
 import type { PollRequest, AckRequest } from "./types";
 import * as staging from "./staging";
 import { writeReceipt } from "./receipt";
 import { dispatchToNativeChat } from "./nativeChatTarget";
+import { readLastAssistantResponseTextFromSessionFile } from "../chatInterop/storage";
 import path from "node:path";
 
 function jsonResponse(res: http.ServerResponse, obj: unknown, status = 200) {
@@ -136,13 +137,15 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                     const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
                     const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
                     const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
+                    const postbackMode = cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture');
+                    const bridgeCapture = postbackMode === 'bridge-capture';
                     const createResult = await chatInterop.createChat({
                       prompt: handoffContent,
                       agentName: configuredAgentName,
                       agentFileStem: configuredAgentFileStem,
                       modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
-                      blockOnResponse: false,
-                      waitForPersisted: false,
+                      blockOnResponse: bridgeCapture,
+                      waitForPersisted: bridgeCapture,
                       requireSelectionEvidence: false
                     });
                     dispatchResult = createResult;
@@ -158,7 +161,9 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                 } else {
                   // session appears to exist; attempt to send and only mark continued on success
                   if (chatInterop && typeof chatInterop.sendMessage === 'function') {
-                    const sendResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId: prevSessionId, blockOnResponse: false, waitForPersisted: false });
+                    const postbackMode = cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture');
+                    const bridgeCapture = postbackMode === 'bridge-capture';
+                    const sendResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId: prevSessionId, blockOnResponse: bridgeCapture, waitForPersisted: bridgeCapture });
                     dispatchResult = sendResult;
                     if (sendResult && (sendResult.ok === true)) {
                       route = { mode: 'continued', chatKey, sessionId: prevSessionId };
@@ -168,13 +173,15 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                         const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
                         const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
                         const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
+                        const postbackMode = cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture');
+                        const bridgeCapture = postbackMode === 'bridge-capture';
                         const createResult = await chatInterop.createChat({
                           prompt: handoffContent,
                           agentName: configuredAgentName,
                           agentFileStem: configuredAgentFileStem,
                           modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
-                          blockOnResponse: false,
-                          waitForPersisted: false,
+                          blockOnResponse: bridgeCapture,
+                          waitForPersisted: bridgeCapture,
                           requireSelectionEvidence: false
                         });
                         dispatchResult = createResult;
@@ -200,13 +207,16 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                   const agentFileStem = configuredAgentFileStem || (typeof configuredAgentName === 'string' ? configuredAgentName.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'kodax');
                   const dispatchAgentName = configuredAgentFileStem || configuredAgentName;
 
+                  const postbackMode = cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture');
+                  const bridgeCapture = postbackMode === 'bridge-capture';
+
                   const createResult = await chatInterop.createChat({
                     prompt: handoffContent,
                     agentName: configuredAgentName,
                     agentFileStem: configuredAgentFileStem,
                     modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined,
-                    blockOnResponse: false,
-                    waitForPersisted: false,
+                    blockOnResponse: bridgeCapture,
+                    waitForPersisted: bridgeCapture,
                     requireSelectionEvidence: false
                   });
                   dispatchResult = createResult;
@@ -228,8 +238,47 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             }
 
             const attachmentAttempt = { ok: false, mode: 'disabled-diagnostic', reason: 'attachment ordering not proven' };
+            // If bridge-capture mode is enabled, attempt to capture final assistant output and queue a postback
+            let postbackInfo: any = { mode: cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture') };
+            try {
+              const postbackMode = postbackInfo.mode;
+              if (postbackMode === 'bridge-capture' && route && route.sessionId && chatInterop && typeof chatInterop.getSessionById === 'function') {
+                try {
+                  const sessionSummary = await chatInterop.getSessionById(route.sessionId as string);
+                  if (sessionSummary && sessionSummary.sessionFile) {
+                    const capture = await readLastAssistantResponseTextFromSessionFile(sessionSummary.sessionFile);
+                    postbackInfo.capture = capture;
+                    if (capture.ok && capture.text) {
+                      const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
+                      const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
+                      const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
+                      const cmd = queuePostback({ prefix, message: capture.text, links: [], chatKey: chatKey ?? null });
+                      postbackInfo.queued = true;
+                      postbackInfo.commandId = cmd.commandId;
+                      postbackInfo.source = 'captured-final-assistant-output';
+                    } else {
+                      // extraction failed: queue a natural blocker postback
+                      const blocker = `Bridge capture failed to extract final assistant output: ${capture.reason ?? 'unknown'}`;
+                      const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
+                      const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
+                      const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
+                      const cmd = queuePostback({ prefix, message: blocker, links: [], chatKey: chatKey ?? null });
+                      postbackInfo.queued = true;
+                      postbackInfo.commandId = cmd.commandId;
+                      postbackInfo.source = 'capture-failure-blocker';
+                    }
+                  } else {
+                    postbackInfo.capture = { ok: false, reason: 'session summary or sessionFile missing' };
+                  }
+                } catch (err) {
+                  postbackInfo.capture = { ok: false, reason: String(err) };
+                }
+              }
+            } catch (err) {
+              postbackInfo = { ok: false, reason: String(err) };
+            }
 
-            return jsonResponse(res, { ok: true, route, downloaded: { originalPath: source, originalFilename: filename }, allowed, dispatchResult, attachmentAttempt });
+            return jsonResponse(res, { ok: true, route, downloaded: { originalPath: source, originalFilename: filename }, allowed, dispatchResult, attachmentAttempt, postback: postbackInfo });
           }
 
           // Fallback: for other files, preserve existing staging behavior

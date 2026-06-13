@@ -334,6 +334,62 @@ export class ChatSessionStorage {
   }
 }
 
+export async function readLastAssistantResponseTextFromSessionFile(sessionFile: string): Promise<{ ok: boolean; text?: string; reason?: string }> {
+  try {
+    const raw = await fs.readFile(sessionFile, 'utf8');
+    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      try {
+        const parsed = JSON.parse(line);
+
+        // common shapes: parsed.request.response, parsed.result.response, parsed.response, parsed.v.requests[*].response
+        const candidates: any[] = [];
+        if (parsed?.request?.response) candidates.push(parsed.request.response);
+        if (parsed?.result?.response) candidates.push(parsed.result.response);
+        if (parsed?.response) candidates.push(parsed.response);
+        if (parsed?.v && Array.isArray(parsed.v?.requests)) {
+          const lastReq = parsed.v.requests.at(-1);
+          if (lastReq?.response) candidates.push(lastReq.response);
+          if (lastReq?.result?.response) candidates.push(lastReq.result.response);
+        }
+
+        for (const c of candidates) {
+          // try known message shapes
+          const msg = c?.message ?? c?.messages ?? c?.result?.message ?? c;
+          // message may be { parts: [{ text: '...' }, ...] } or { text: '...' }
+          if (msg) {
+            if (typeof msg === 'string' && msg.trim()) return { ok: true, text: msg };
+            if (Array.isArray(msg)) {
+              for (const part of msg) {
+                const t = part?.text ?? part?.content ?? part?.body;
+                if (typeof t === 'string' && t.trim()) return { ok: true, text: t };
+              }
+            }
+            if (typeof msg === 'object') {
+              const text = firstString(msg?.text, msg?.plaintext, msg?.content, msg?.body);
+              if (text) return { ok: true, text };
+              if (Array.isArray(msg?.parts)) {
+                for (const part of msg.parts) {
+                  const t = firstString(part?.text, part?.content, part?.body);
+                  if (t) return { ok: true, text: t };
+                }
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+
+    return { ok: false, reason: 'no assistant message found in session file' };
+  } catch (err) {
+    return { ok: false, reason: `error reading session file: ${String(err)}` };
+  }
+}
+
 function extractMetadata(fullState: any | undefined, requestRows: any[], deltaState: SessionDeltaState): ParsedMetadata {
   const requestCandidates: any[] = [];
 
