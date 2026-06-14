@@ -129,25 +129,36 @@ export class ChatInteropService implements ChatInteropApi {
     }
 
     try {
+      const operationId = `create-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+      const createStart = Date.now();
+      let prevStep = createStart;
       const before = await this.storage.listSessions();
-      await this.traceCreateDebug("create.before-open", { request });
+      await this.traceCreateDebug("create.before-open", { operationId, requestMeta: { agentName: request.agentName, agentFileStem: request.agentFileStem, partialQuery: request.partialQuery }, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
+      prevStep = Date.now();
       await vscode.commands.executeCommand(NEW_CHAT_EDITOR_COMMAND);
       await delay(this.openDelayMs);
-      await this.traceCreateDebug("create.after-open");
+      await this.traceCreateDebug("create.after-open", { operationId, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
+      prevStep = Date.now();
       await vscode.commands.executeCommand(FOCUS_ACTIVE_EDITOR_GROUP_COMMAND);
       await delay(this.openDelayMs);
-      await this.traceCreateDebug("create.after-focus-editor-group");
+      await this.traceCreateDebug("create.after-focus-editor-group", { operationId, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
+      prevStep = Date.now();
 
       const { dispatch, cleanup } = await this.dispatchCreateRequest(request);
-      await this.traceCreateDebug("create.after-dispatch", { dispatch });
+      await this.traceCreateDebug("create.after-dispatch", { operationId, dispatch: { surface: dispatch?.surface }, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
+      prevStep = Date.now();
       lease?.release();
       lease = undefined;
       const { session: created, selection, settled } = await this.waitForCreatedSession(before, request, dispatch);
       await this.traceCreateDebug("create.after-wait", {
+        operationId,
         createdSessionId: created?.id,
         settled,
-        selection
+        selection,
+        durationSinceCreateStartMs: Date.now() - createStart,
+        durationSincePreviousStepMs: Date.now() - prevStep
       });
+      prevStep = Date.now();
 
       await cleanup?.();
 

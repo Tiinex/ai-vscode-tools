@@ -365,6 +365,31 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
         return;
       }
 
+      if (req.method === "POST" && url.pathname === "/tiinex-courier/debug/last-invoke") {
+        let persisted: any = null;
+        try {
+          const got = await context.globalState.get('tiinex.courier.lastInvoke');
+          if (got) persisted = got;
+        } catch {
+          /* ignore */
+        }
+        // also try reading from globalStorage file if present
+        try {
+          const p = path.join(context.globalStorageUri.fsPath, 'courier-last-invoke.json');
+          try {
+            const txt = await fs.readFile(p, 'utf8');
+            const parsed = JSON.parse(txt);
+            persisted = parsed ?? persisted;
+          } catch {
+            // ignore file read errors
+          }
+        } catch {
+          // ignore
+        }
+        jsonResponse(res, { ok: true, lastInvoke: persisted });
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/tiinex-courier/debug/session-info") {
         const bodyRes = await readJsonBody(req, 8 * 1024);
         if (!bodyRes.ok) {

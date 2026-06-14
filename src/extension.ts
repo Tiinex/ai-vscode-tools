@@ -857,35 +857,87 @@ function registerCommands(
       })
     );
 
-    // Simulate a Chrome Courier invoke for local testing
+    // Simulate a Chrome Courier invoke for local testing (crash-safe)
     context.subscriptions.push(vscode.commands.registerCommand("tiinex.aiVscodeTools.simulateCourierInvoke", async () => {
       const cfg = vscode.workspace.getConfiguration("tiinex.aiVscodeTools");
       const port = cfg.get<number>("courier.port", 37175);
       const host = "127.0.0.1";
 
-      // helper to POST JSON to loopback courier bridge
-      async function postJson(endpoint: string, bodyObj: unknown): Promise<any> {
-        return new Promise((resolve, reject) => {
+      // persist minimal last-invoke diagnostics to globalState and a file
+      async function persistLastInvoke(stage: string, info: Record<string, unknown> = {}) {
+        try {
+          const obj = {
+            at: new Date().toISOString(),
+            stage,
+            endpoint: info.endpoint ?? '/tiinex-courier/downloaded',
+            filename: info.filename ?? null,
+            ok: info.ok ?? null,
+            error: info.error ?? null,
+            durationMs: info.durationMs ?? null
+          } as any;
+          await context.globalState.update('tiinex.courier.lastInvoke', obj);
+          try {
+            const dir = context.globalStorageUri.fsPath;
+            await fs.mkdir(dir, { recursive: true });
+            const p = path.join(dir, 'courier-last-invoke.json');
+            await fs.writeFile(p, JSON.stringify(obj, null, 2), 'utf8');
+          } catch {
+            // ignore file write errors
+          }
+        } catch {
+          // ignore persistence errors
+        }
+      }
+
+      // helper to POST JSON to loopback courier bridge — non-throwing, with timeout
+      async function postJson(endpoint: string, bodyObj: unknown, timeoutMs = 180_000): Promise<any> {
+        const start = Date.now();
+        await persistLastInvoke('post-downloaded-before', { endpoint, filename: (bodyObj as any)?.filename ?? null });
+        return new Promise((resolve) => {
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            const res = { ok: false, error: 'timeout', stage: 'timeout', durationMs: Date.now() - start };
+            void persistLastInvoke('error', { endpoint, filename: (bodyObj as any)?.filename ?? null, ok: false, error: 'timeout', durationMs: res.durationMs });
+            resolve(res);
+          }, timeoutMs);
+
           try {
             const body = JSON.stringify(bodyObj);
             const req = http.request({ hostname: host, port, path: endpoint, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
               const chunks: Buffer[] = [];
               res.on('data', (c) => chunks.push(Buffer.from(c)));
               res.on('end', () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
                 try {
                   const txt = Buffer.concat(chunks).toString('utf8');
                   const parsed = txt ? JSON.parse(txt) : undefined;
+                  void persistLastInvoke('post-downloaded-after', { endpoint, filename: (bodyObj as any)?.filename ?? null, ok: parsed?.ok ?? null, durationMs: Date.now() - start });
                   resolve(parsed);
                 } catch (err) {
-                  resolve({ ok: false, error: String(err), statusCode: res.statusCode });
+                  void persistLastInvoke('error', { endpoint, filename: (bodyObj as any)?.filename ?? null, ok: false, error: String(err), durationMs: Date.now() - start });
+                  resolve({ ok: false, error: String(err), statusCode: res.statusCode, durationMs: Date.now() - start });
                 }
               });
             });
-            req.on('error', (err) => reject(err));
+            req.on('error', (err) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              void persistLastInvoke('error', { endpoint, filename: (bodyObj as any)?.filename ?? null, ok: false, error: String(err), durationMs: Date.now() - start });
+              resolve({ ok: false, error: String(err), durationMs: Date.now() - start });
+            });
             req.write(body);
             req.end();
           } catch (err) {
-            reject(err);
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            void persistLastInvoke('error', { endpoint, filename: (bodyObj as any)?.filename ?? null, ok: false, error: String(err), durationMs: Date.now() - start });
+            resolve({ ok: false, error: String(err), durationMs: Date.now() - start });
           }
         });
       }
@@ -897,7 +949,8 @@ function registerCommands(
         // post as downloaded handoff automatically
         const payload: any = { filename: defaultTestPath };
         const res = await postJson('/tiinex-courier/downloaded', payload);
-        void vscode.window.showInformationMessage(`Courier simulated (downloaded): ${JSON.stringify(res ?? { ok: false })}`);
+        const short = (typeof res === 'string' || (res && res.ok === undefined)) ? JSON.stringify(String(res)).slice(0, 512) : JSON.stringify(res?.ok ? { ok: true } : { ok: false });
+        void vscode.window.showInformationMessage(`Courier simulated (downloaded): ${short}`);
         return;
       } catch {
         // fall through to interactive flow if default test file missing
@@ -914,7 +967,8 @@ function registerCommands(
           const payload: any = { filename: file };
           if (chatKey && chatKey.trim()) payload.chatKey = chatKey.trim();
           const res = await postJson('/tiinex-courier/downloaded', payload);
-          void vscode.window.showInformationMessage(`Courier simulated (downloaded): ${JSON.stringify(res ?? { ok: false })}`);
+          const short = JSON.stringify(res ?? { ok: false }).slice(0, 512);
+          void vscode.window.showInformationMessage(`Courier simulated (downloaded): ${short}`);
         } else {
           const uris = await vscode.window.showOpenDialog({ canSelectMany: false });
           if (!uris || uris.length === 0) return;
@@ -925,7 +979,8 @@ function registerCommands(
           const payload: any = { filename: path.basename(filePath), contentBase64 };
           if (chatKey && chatKey.trim()) payload.chatKey = chatKey.trim();
           const res = await postJson('/tiinex-courier/packet-content', payload);
-          void vscode.window.showInformationMessage(`Courier simulated (packet-content): ${JSON.stringify(res ?? { ok: false })}`);
+          const short = JSON.stringify(res ?? { ok: false }).slice(0, 512);
+          void vscode.window.showInformationMessage(`Courier simulated (packet-content): ${short}`);
         }
       } catch (err) {
         void vscode.window.showErrorMessage(`Failed to simulate courier invoke: ${String(err)}`);
