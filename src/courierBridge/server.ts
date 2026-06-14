@@ -138,20 +138,10 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             const stateKey = 'tiinex.courier.sessionMap.v1';
             const sessionMap = (context.globalState.get(stateKey) as Record<string, any> | undefined) || {};
 
-            // persist initial last-capture state and enqueue a placeholder postback
+            // persist initial last-capture state (no placeholder postback)
             try {
               const initialCapture = { at: new Date().toISOString(), chatKey: chatKey ?? null, stage: 'prepared', originalPath: source } as any;
               await persistLastCapture(initialCapture);
-              try {
-                const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
-                const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
-                const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
-                const placeholder = queuePostback({ prefix, message: 'Processing courier handoff...', links: [], chatKey: chatKey ?? null });
-                initialCapture.placeholderCommandId = placeholder.commandId;
-                await persistLastCapture(initialCapture);
-              } catch (e) {
-                // ignore placeholder enqueue errors
-              }
             } catch (e) {
               // ignore persistence errors
             }
@@ -175,32 +165,19 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
 
                 if (!sessionExists) {
                   // session stale: recreate - prefer createChat to avoid interfering with active editor
-                  if (chatInterop) {
+                  if (chatInterop && typeof chatInterop.createChat === 'function') {
                     const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
                     const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
                     const modelSelector = (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined;
                     try {
-                      if (typeof chatInterop.createChat === 'function') {
-                        const createResult = await chatInterop.createChat({ prompt: handoffContent, agentName: configuredAgentName, agentFileStem: configuredAgentFileStem, modelSelector, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
-                        dispatchResult = createResult;
-                        const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
-                        if (chatKey && sessionId) {
-                          sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
-                          try { await context.globalState.update(stateKey, sessionMap); } catch {}
-                        }
-                        route = { mode: 'recreated', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
-                      } else if (typeof chatInterop.sendFocusedMessage === 'function') {
-                        const focusedResult = await chatInterop.sendFocusedMessage({ prompt: handoffContent, agentName: configuredAgentName, modelSelector, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
-                        dispatchResult = focusedResult;
-                        const sessionId = focusedResult?.session?.id ?? focusedResult?.sessionId ?? undefined;
-                        if (chatKey && sessionId) {
-                          sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
-                          try { await context.globalState.update(stateKey, sessionMap); } catch {}
-                        }
-                        route = { mode: focusedResult && focusedResult.ok ? 'recreated' : 'none', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
-                      } else {
-                        route = { mode: 'none', chatKey, sessionId: null };
+                      const createResult = await chatInterop.createChat({ prompt: handoffContent, agentName: configuredAgentName, agentFileStem: configuredAgentFileStem, modelSelector, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
+                      dispatchResult = createResult;
+                      const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
+                      if (chatKey && sessionId) {
+                        sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
+                        try { await context.globalState.update(stateKey, sessionMap); } catch {}
                       }
+                      route = { mode: 'recreated', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
                     } catch (e) {
                       dispatchResult = { ok: false, error: String(e) };
                       route = { mode: 'none', chatKey, sessionId: null };
@@ -210,36 +187,23 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                   }
                 } else {
                   // session appears to exist; attempt to send and only mark continued on success
-                  if (chatInterop) {
+                  if (chatInterop && typeof chatInterop.sendMessage === 'function') {
                     try {
-                      if (typeof chatInterop.sendMessage === 'function') {
-                        const sendResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId: prevSessionId, blockOnResponse: false, waitForPersisted: false });
-                        dispatchResult = sendResult;
-                        if (sendResult && (sendResult.ok === true)) {
-                          route = { mode: 'continued', chatKey, sessionId: prevSessionId };
-                        } else if (typeof chatInterop.createChat === 'function') {
-                          const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
-                          const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
-                          const createResult = await chatInterop.createChat({ prompt: handoffContent, agentName: configuredAgentName, agentFileStem: configuredAgentFileStem, modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
-                          dispatchResult = createResult;
-                          const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
-                          if (chatKey && sessionId) {
-                            sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
-                            try { await context.globalState.update(stateKey, sessionMap); } catch {}
-                          }
-                          route = { mode: 'recreated', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
-                        } else if (typeof chatInterop.sendFocusedMessage === 'function') {
-                          const focusedResult = await chatInterop.sendFocusedMessage({ prompt: handoffContent, agentName: cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : undefined, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
-                          dispatchResult = focusedResult;
-                          const sessionId = focusedResult?.session?.id ?? focusedResult?.sessionId ?? undefined;
-                          if (chatKey && sessionId) {
-                            sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
-                            try { await context.globalState.update(stateKey, sessionMap); } catch {}
-                          }
-                          route = { mode: focusedResult && focusedResult.ok ? 'continued' : 'none', chatKey, sessionId: sessionId ?? prevSessionId } as any;
-                        } else {
-                          route = { mode: 'none', chatKey, sessionId: prevSessionId };
+                      const sendResult = await chatInterop.sendMessage({ prompt: handoffContent, sessionId: prevSessionId, blockOnResponse: false, waitForPersisted: false });
+                      dispatchResult = sendResult;
+                      if (sendResult && (sendResult.ok === true)) {
+                        route = { mode: 'continued', chatKey, sessionId: prevSessionId };
+                      } else if (typeof chatInterop.createChat === 'function') {
+                        const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
+                        const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', 'kodax') : cfg.courier?.defaultAgentFileStem || 'kodax';
+                        const createResult = await chatInterop.createChat({ prompt: handoffContent, agentName: configuredAgentName, agentFileStem: configuredAgentFileStem, modelSelector: (cfg.get && cfg.get('courier.defaultModelId')) ? { id: cfg.get('courier.defaultModelId'), vendor: cfg.get('courier.defaultModelVendor', undefined) } : undefined, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
+                        dispatchResult = createResult;
+                        const sessionId = createResult?.session?.id ?? createResult?.sessionId ?? createResult?.result?.session?.id ?? undefined;
+                        if (chatKey && sessionId) {
+                          sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString() };
+                          try { await context.globalState.update(stateKey, sessionMap); } catch {}
                         }
+                        route = { mode: 'recreated', chatKey, previousSessionId: prevSessionId, sessionId: sessionId ?? null } as any;
                       } else {
                         route = { mode: 'none', chatKey, sessionId: prevSessionId };
                       }
@@ -253,7 +217,7 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                 }
               } else {
                 // create a new chat and record mapping if possible
-                if (chatInterop) {
+                if (chatInterop && typeof chatInterop.createChat === 'function') {
                   const configuredAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : cfg.courier?.defaultAgentName;
                   const configuredAgentFileStem = cfg.get ? cfg.get('courier.defaultAgentFileStem', '') : cfg.courier?.defaultAgentFileStem || '';
                   const agentFileStem = configuredAgentFileStem || (typeof configuredAgentName === 'string' ? configuredAgentName.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'kodax');
@@ -269,17 +233,6 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                         route = { mode: 'created', chatKey, sessionId };
                       } else {
                         route = { mode: 'created', chatKey: chatKey ?? null, sessionId: sessionId ?? null };
-                      }
-                    } else if (typeof chatInterop.sendFocusedMessage === 'function') {
-                      const focusedResult = await chatInterop.sendFocusedMessage({ prompt: handoffContent, agentName: configuredAgentName, modelSelector, blockOnResponse: false, waitForPersisted: false, requireSelectionEvidence: false });
-                      dispatchResult = focusedResult;
-                      const sessionId = focusedResult?.session?.id ?? focusedResult?.sessionId ?? undefined;
-                      if (chatKey && sessionId) {
-                        sessionMap[chatKey] = { sessionId, pageUrl: parsed.sourcePageUrl, createdAt: new Date().toISOString(), agentFileStem };
-                        try { await context.globalState.update(stateKey, sessionMap); } catch {}
-                        route = { mode: 'created', chatKey, sessionId };
-                      } else {
-                        route = { mode: focusedResult && focusedResult.ok ? 'created' : 'none', chatKey: chatKey ?? null, sessionId: sessionId ?? null };
                       }
                     } else {
                       route = { mode: 'none', chatKey: chatKey ?? null, sessionId: null };
@@ -298,45 +251,8 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
             }
 
             const attachmentAttempt = { ok: false, mode: 'disabled-diagnostic', reason: 'attachment ordering not proven' };
-            // If bridge-capture mode is enabled, attempt to capture final assistant output and queue a postback
-            let postbackInfo: any = { mode: cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture') };
-            try {
-              const postbackMode = postbackInfo.mode;
-              if (postbackMode === 'bridge-capture' && route && route.sessionId && chatInterop && typeof chatInterop.getSessionById === 'function') {
-                    try {
-                      const sessionSummary = await chatInterop.getSessionById(route.sessionId as string);
-                      if (sessionSummary && sessionSummary.sessionFile) {
-                        const capture = await readLastAssistantResponseTextFromSessionFile(sessionSummary.sessionFile);
-                        postbackInfo.capture = capture;
-                        if (capture.ok && capture.text) {
-                          const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
-                          const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
-                          const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
-                          const cmd = queuePostback({ prefix, message: capture.text, links: [], chatKey: chatKey ?? null });
-                          postbackInfo.queued = true;
-                          postbackInfo.commandId = cmd.commandId;
-                          postbackInfo.source = 'captured-final-assistant-output';
-                        } else {
-                          // extraction failed: queue a natural blocker postback
-                          const blocker = `Bridge capture failed to extract final assistant output: ${capture.reason ?? 'unknown'}`;
-                          const prefixRaw = cfg.get ? cfg.get('courier.postbackPrefix', '') : (cfg.courier?.postbackPrefix || '');
-                          const defaultAgentName = cfg.get ? cfg.get('courier.defaultAgentName', 'Kodax (GPT-5 mini)') : (cfg.courier?.defaultAgentName || 'Kodax (GPT-5 mini)');
-                          const prefix = (typeof prefixRaw === 'string' && prefixRaw.trim()) ? prefixRaw : defaultAgentName;
-                          const cmd = queuePostback({ prefix, message: blocker, links: [], chatKey: chatKey ?? null });
-                          postbackInfo.queued = true;
-                          postbackInfo.commandId = cmd.commandId;
-                          postbackInfo.source = 'capture-failure-blocker';
-                        }
-                      } else {
-                        postbackInfo.capture = { ok: false, reason: 'session summary or sessionFile missing' };
-                      }
-                    } catch (err) {
-                      postbackInfo.capture = { ok: false, reason: String(err) };
-                    }
-              }
-            } catch (err) {
-              postbackInfo = { ok: false, reason: String(err) };
-            }
+            // For recovery leaf: disable bridge-capture postback queueing for non-blocking dispatch
+            const postbackInfo: any = { mode: cfg.get ? cfg.get('courier.postbackMode', 'bridge-capture') : (cfg.courier?.postbackMode || 'bridge-capture'), queued: false, reason: 'disabled during native-chat routing recovery; dispatch is non-blocking' };
 
             // record last capture attempt for local diagnostics
             try {
@@ -344,10 +260,10 @@ export function maybeStartCourierBridge(context: vscode.ExtensionContext, chatIn
                 at: new Date().toISOString(),
                 chatKey: chatKey ?? null,
                 route,
-                capture: postbackInfo.capture ?? null,
-                queued: Boolean(postbackInfo.queued),
-                commandId: postbackInfo.commandId ?? null,
-                reason: postbackInfo.reason ?? null
+                capture: null,
+                queued: false,
+                commandId: null,
+                reason: postbackInfo.reason
               };
             } catch { /* ignore */ }
 
