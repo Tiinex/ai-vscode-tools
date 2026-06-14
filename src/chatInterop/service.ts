@@ -64,6 +64,23 @@ type SessionMutationBaseline = {
   sessionFileSize?: number;
 };
 
+type ChatTimingContext = {
+  operationId: string;
+  operationStartMs: number;
+  previousStepMs: number;
+};
+
+function summarizeQuery(value: string | undefined) {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  const isSlash = trimmed.startsWith("/");
+  if (isSlash) {
+    const cmd = trimmed.split(/\s+/u)[0];
+    return { length: trimmed.length, preview: cmd, redacted: false };
+  }
+  return { length: trimmed.length, preview: trimmed.slice(0, 60), redacted: trimmed.length > 60 };
+}
+
 export class ChatInteropService implements ChatInteropApi {
   private readonly mutex = new RejectingMutex();
   private readonly storage: ChatSessionStorage;
@@ -132,6 +149,7 @@ export class ChatInteropService implements ChatInteropApi {
       const operationId = `create-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
       const createStart = Date.now();
       let prevStep = createStart;
+      const timingCtx: ChatTimingContext = { operationId, operationStartMs: createStart, previousStepMs: prevStep };
       const before = await this.storage.listSessions();
       await this.traceCreateDebug("create.before-open", { operationId, requestMeta: { agentName: request.agentName, agentFileStem: request.agentFileStem, partialQuery: request.partialQuery }, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
       prevStep = Date.now();
@@ -144,7 +162,7 @@ export class ChatInteropService implements ChatInteropApi {
       await this.traceCreateDebug("create.after-focus-editor-group", { operationId, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
       prevStep = Date.now();
 
-      const { dispatch, cleanup } = await this.dispatchCreateRequest(request);
+      const { dispatch, cleanup } = await this.dispatchCreateRequest(request, timingCtx);
       await this.traceCreateDebug("create.after-dispatch", { operationId, dispatch: { surface: dispatch?.surface }, durationSinceCreateStartMs: Date.now() - createStart, durationSincePreviousStepMs: Date.now() - prevStep });
       prevStep = Date.now();
       lease?.release();
@@ -233,7 +251,10 @@ export class ChatInteropService implements ChatInteropApi {
         };
       }
 
+      const sendOpId = `send-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+      const sendStart = Date.now();
       const command = await this.findExactSessionSendCommand();
+      await this.traceCreateDebug("sendMessage.lookup", { operationId: sendOpId, commandFound: command ?? null, durationSinceOperationStartMs: Date.now() - sendStart });
       if (!command) {
         return {
           ok: false,
@@ -242,11 +263,17 @@ export class ChatInteropService implements ChatInteropApi {
       }
 
       const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
+      await this.traceCreateDebug("sendMessage.before-openExactSessionWithPrompt", { operationId: sendOpId, sessionId: target.id, promptSummary: summarizeQuery(request.prompt) });
+      const openStart = Date.now();
       await this.openExactSessionWithPrompt(command, target.id, dispatchedPrompt, request.blockOnResponse ?? false);
+      await this.traceCreateDebug("sendMessage.after-openExactSessionWithPrompt", { operationId: sendOpId, sessionId: target.id, openDurationMs: Date.now() - openStart, durationSinceOperationStartMs: Date.now() - sendStart });
 
       let session = await this.storage.getSessionById(target.id);
       if (request.blockOnResponse) {
+        await this.traceCreateDebug("sendMessage.before-waitForExactSessionMutation", { operationId: sendOpId, sessionId: target.id });
+        const waitStart = Date.now();
         const waitResult = await this.waitForExactSessionMutation(target.id, undefined, true);
+        await this.traceCreateDebug("sendMessage.after-waitForExactSessionMutation", { operationId: sendOpId, sessionId: target.id, waitDurationMs: Date.now() - waitStart, observedMutation: waitResult.observedMutation, settled: waitResult.settled });
         session = waitResult.session;
         if (!waitResult.observedMutation) {
           return {
@@ -779,46 +806,71 @@ export class ChatInteropService implements ChatInteropApi {
 
   private async dispatchViaFocusedChatSubmit(
     request: CreateChatRequest,
-    query: string
+    query: string,
+    timingCtx?: ChatTimingContext
   ): Promise<boolean> {
     const commandSupport = await this.getFocusedChatInteropSupport();
     if (!commandSupport.canSubmitFocusedChatMessage || !commandSupport.focusInputCommand || !commandSupport.submitCommand) {
+      if (timingCtx) await this.traceCreateDebug("focused-submit.support.checked", { operationId: timingCtx.operationId, supported: false });
       return false;
     }
 
-    await this.traceCreateDebug("focused-submit.before-focus-input", { query });
+    await this.traceCreateDebug("focused-submit.support.checked", { operationId: timingCtx?.operationId, supported: true });
+
+    const focusStart = Date.now();
+    await this.traceCreateDebug("focused-submit.before-focus-input", { operationId: timingCtx?.operationId, query: summarizeQuery(query) });
+    const focusCmdStart = Date.now();
     await vscode.commands.executeCommand(commandSupport.focusInputCommand);
+    const focusCmdDuration = Date.now() - focusCmdStart;
     await delay(this.openDelayMs);
-    await this.traceCreateDebug("focused-submit.after-focus-input", { query });
+    await this.traceCreateDebug("focused-submit.after-focus-input", { operationId: timingCtx?.operationId, query: summarizeQuery(query), focusCmdDurationMs: focusCmdDuration, durationSinceOperationStartMs: Date.now() - (timingCtx?.operationStartMs ?? focusStart) });
+
     const isSlashCommandDispatch = query.trimStart().startsWith("/");
+    const prefillStart = Date.now();
     await this.prefillFocusedChat(request, query, !isSlashCommandDispatch);
-    await this.traceCreateDebug("focused-submit.after-prefill", { query });
+    const prefillDuration = Date.now() - prefillStart;
+    await this.traceCreateDebug("focused-submit.after-prefill", { operationId: timingCtx?.operationId, query: summarizeQuery(query), prefillDurationMs: prefillDuration, configuredDelayMs: this.openDelayMs });
+
     if (isSlashCommandDispatch) {
+      const beforeSlashDelay = Date.now();
       await delay(this.slashCommandSettleDelayMs);
+      await this.traceCreateDebug("focused-submit.slash-delay.after", { operationId: timingCtx?.operationId, configuredDelayMs: this.slashCommandSettleDelayMs, actualDelayMs: Date.now() - beforeSlashDelay });
+      const refocusCmdStart = Date.now();
       await vscode.commands.executeCommand(commandSupport.focusInputCommand);
+      const refocusCmdDuration = Date.now() - refocusCmdStart;
       await delay(this.openDelayMs);
-      await this.traceCreateDebug("focused-submit.after-slash-refocus", { query });
+      await this.traceCreateDebug("focused-submit.after-slash-refocus", { operationId: timingCtx?.operationId, query: summarizeQuery(query), refocusCmdDurationMs: refocusCmdDuration });
     } else {
+      const beforeOpenDelay = Date.now();
       await delay(this.openDelayMs);
+      await this.traceCreateDebug("focused-submit.open-delay.after", { operationId: timingCtx?.operationId, configuredDelayMs: this.openDelayMs, actualDelayMs: Date.now() - beforeOpenDelay });
     }
-    await this.traceCreateDebug("focused-submit.before-submit", { query });
+
+    await this.traceCreateDebug("focused-submit.before-submit", { operationId: timingCtx?.operationId, query: summarizeQuery(query) });
+    const submitCmdStart = Date.now();
     await vscode.commands.executeCommand(commandSupport.submitCommand);
-    await this.traceCreateDebug("focused-submit.after-submit", { query });
+    const submitCmdDuration = Date.now() - submitCmdStart;
+    await this.traceCreateDebug("focused-submit.after-submit", { operationId: timingCtx?.operationId, query: summarizeQuery(query), submitCmdDurationMs: submitCmdDuration, durationSinceOperationStartMs: Date.now() - (timingCtx?.operationStartMs ?? submitCmdStart) });
     return true;
   }
 
   private async dispatchCreateRequest(
-    request: CreateChatRequest
+    request: CreateChatRequest,
+    timingCtx?: ChatTimingContext
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup?: () => Promise<void> }> {
     const directAgentOpenCommand = await this.findDirectAgentOpenCommand(request.agentName);
     await this.traceCreateDebug("direct-agent-open.lookup", {
+      operationId: timingCtx?.operationId,
       agentName: request.agentName,
-      foundCommand: directAgentOpenCommand ?? null
+      foundCommand: directAgentOpenCommand ?? null,
+      durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined
     });
     if (directAgentOpenCommand) {
       await this.traceCreateDebug("direct-agent-open.before-dispatch", {
+        operationId: timingCtx?.operationId,
         agentName: request.agentName,
-        command: directAgentOpenCommand
+        command: directAgentOpenCommand,
+        durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined
       });
       await vscode.commands.executeCommand(directAgentOpenCommand);
       await delay(this.openDelayMs);
@@ -840,6 +892,7 @@ export class ChatInteropService implements ChatInteropApi {
     if (!shouldUsePromptFileDispatch(request)) {
       const dispatchedPrompt = buildPromptWithAgentSelector(request.prompt, request.agentName);
       await this.dispatchToActiveChat(request, dispatchedPrompt);
+      await this.traceCreateDebug("dispatchCreateRequest.selected", { operationId: timingCtx?.operationId, selected: 'chat-open', durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined });
       return {
         dispatch: {
           surface: "chat-open",
@@ -848,11 +901,13 @@ export class ChatInteropService implements ChatInteropApi {
       };
     }
 
-    return this.dispatchViaPromptFile(request);
+    await this.traceCreateDebug("dispatchCreateRequest.selected", { operationId: timingCtx?.operationId, selected: 'prompt-file-slash-command', durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined });
+    return this.dispatchViaPromptFile(request, timingCtx);
   }
 
   private async dispatchViaPromptFile(
-    request: CreateChatRequest
+    request: CreateChatRequest,
+    timingCtx?: ChatTimingContext
   ): Promise<{ dispatch: ChatDispatchInfo; cleanup: () => Promise<void> }> {
     const promptsDirectory = getDefaultUserPromptsDirectory();
     const promptAgentName = await this.resolvePromptFileAgentName(request.agentName, request.agentFileStem);
@@ -867,38 +922,59 @@ export class ChatInteropService implements ChatInteropApi {
       try {
         await fs.rm(artifact.filePath, { force: true });
         await this.traceCreateDebug("prompt-file.after-cleanup", {
+          operationId: timingCtx?.operationId,
           filePath: artifact.filePath,
-          slashCommand: artifact.slashCommand
+          slashCommand: artifact.slashCommand,
+          durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined
         });
       } catch (error) {
         await this.traceCreateDebug("prompt-file.cleanup-failed", {
+          operationId: timingCtx?.operationId,
           filePath: artifact.filePath,
           slashCommand: artifact.slashCommand,
-          error: error instanceof Error ? error.message : String(error)
+          error: error instanceof Error ? error.message : String(error),
+          durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined
         });
         throw error;
       }
     };
 
     try {
+      const mkdirStart = Date.now();
       await fs.mkdir(promptsDirectory, { recursive: true });
+      await this.traceCreateDebug("prompt-file.mkdir.after", { operationId: timingCtx?.operationId, filePath: promptsDirectory, actualDelayMs: Date.now() - mkdirStart });
+
+      const writeStart = Date.now();
       await fs.writeFile(artifact.filePath, artifact.content, "utf8");
       await this.traceCreateDebug("prompt-file.after-write", {
+        operationId: timingCtx?.operationId,
         filePath: artifact.filePath,
         slashCommand: artifact.slashCommand,
-        promptAgentName
+        promptAgentName,
+        contentLength: artifact.content?.length ?? null,
+        durationSinceOperationStartMs: timingCtx ? Date.now() - timingCtx.operationStartMs : undefined
       });
+
+      const regDelayStart = Date.now();
       await delay(this.promptRegistrationDelayMs);
+      await this.traceCreateDebug("prompt-file.registration-delay.after", { operationId: timingCtx?.operationId, configuredDelayMs: this.promptRegistrationDelayMs, actualDelayMs: Date.now() - regDelayStart });
+
+      const focusedSubmitStart = Date.now();
       const dispatched = await this.dispatchViaFocusedChatSubmit(
         {
           ...request,
           agentName: undefined
         },
-        `/${artifact.slashCommand}`
+        `/${artifact.slashCommand}`,
+        timingCtx
       );
+      const focusedSubmitDuration = Date.now() - focusedSubmitStart;
+
+      await this.traceCreateDebug("prompt-file.focused-submit.after", { operationId: timingCtx?.operationId, slashCommand: artifact.slashCommand, focusedSubmitDurationMs: focusedSubmitDuration });
 
       if (!dispatched) {
         await this.traceCreateDebug("prompt-file.focused-submit-unavailable", {
+          operationId: timingCtx?.operationId,
           slashCommand: artifact.slashCommand
         });
         await this.dispatchToActiveChat(
